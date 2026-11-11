@@ -1,10 +1,10 @@
-# WPTrace — START HERE (handoff do senior developera)
+# WPIncidentLens — START HERE (handoff do senior developera)
 
 **Pakiet dokumentacyjny; nie zawiera nowo tworzonej aplikacji ani uruchomionego serwisu.**
 
 ## Co przeczytać
-1. `WPTrace_Specyfikacja_Senior_PoC_2026-11-09.docx` — dokument główny, 22 strony, gotowy do przeglądu i redakcji.
-2. `WPTrace_Specyfikacja_Senior_PoC_2026-11-09.md` — wersja źródłowa Markdown dla repozytorium, PR i agentów kodujących.
+1. `WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.docx` — dokument główny, 22 strony, gotowy do przeglądu i redakcji.
+2. `WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.md` — wersja źródłowa Markdown dla repozytorium, PR i agentów kodujących.
 3. W dokumencie głównym rozdziały 0, 1, 3, 4, 10, 13, 14 i 19 — kontrakt projektu, bezpieczeństwo, kamienie milowe, testy i prompty.
 
 ## Zatwierdź przed jakimkolwiek generowaniem kodu

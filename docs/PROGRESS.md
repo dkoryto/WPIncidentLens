@@ -20,17 +20,18 @@ Status `IN REVIEW` oznacza otwarty PR, nie ukończone zadanie. `MERGED` oznacza 
 
 ## Przekazanie
 
-- 2026-11-11 — T-001: dodano `pyproject.toml`, CI i `docs/BASELINE.md`. Kod `wptrace/` i testy bez zmian.
+- 2026-11-11 — T-001: dodano `pyproject.toml`, CI i `docs/BASELINE.md`. Kod `wpincidentlens/` i testy bez zmian.
 - 2026-11-11 — T-002: dodano `docs/THREAT_MODEL.md`, `docs/REQUIREMENTS_TRACEABILITY.md` i `docs/adr/0001-granice-komponentow.md`.
 - 2026-11-11 — Bramka M0: właściciel delegował decyzje agentowi; rozstrzygnięcia B1–B11 i D1–D9 w `docs/adr/0002-decyzje-bramki-m0.md`.
 - 2026-11-11 — T-003: dodano `docs/TEST_MATRIX.md`, 104 testy syntetyczne i `pytest-cov`. 31 luk oznaczonych `xfail(strict)`; luki bez własnego Issue przeniesiono do #13 i #14.
 - 2026-11-11 — T-004 (#11): regex wiersza w `iter_insert_rows` zastąpiony skanerem liniowym; test S-08 przechodzi bez `xfail`.
 - 2026-11-11 — PR-y #8, #10, #12 i #9 scalone do `main` przez agenta na polecenie właściciela. Następny krok: przegląd i PR dla T-101, potem T-102.
-- 2026-11-11 — T-101 (#4): cały odczyt dowodów w `cli.py` idzie przez `wptrace/ingest.py` (deskryptory, `O_NOFOLLOW`, hardlinki, limity, ponowna weryfikacja, strażnik AST D4); schemat raportu 0.1.0 bez zmian; zdjęto 10 przypadków `xfail`. Następny krok: CaseManager i `case.json`, potem T-102.
+- 2026-11-11 — T-101 (#4): cały odczyt dowodów w `cli.py` idzie przez `wpincidentlens/ingest.py` (deskryptory, `O_NOFOLLOW`, hardlinki, limity, ponowna weryfikacja, strażnik AST D4); schemat raportu 0.1.0 bez zmian; zdjęto 10 przypadków `xfail`. Następny krok: CaseManager i `case.json`, potem T-102.
 - 2026-11-11 — PR #16 (T-101) scalony po niezależnym audycie agenta; ustalenia audytu poza zakresem przeniesione do #17 i #18.
 - 2026-11-11 — T-005 (#17): nagłówek INSERT parsowany liniowo; nazwy wylistowane na stosie katalogów liczą się do budżetu wpisów.
 - 2026-11-11 — T-102 (#5): raport `poc-1` z obserwacjami, pokryciem per źródło i `INCONCLUSIVE`; uruchomienie bez bazy lub logów kończy się kodem 3. Następny krok: CaseManager (#4), #18, potem T-201 i T-301.
 - 2026-11-11 — PR #20 (T-102) scalony. T-006 (#18), pierwszy PR: instrukcje INSERT/REPLACE wykrywane skanerem leksemów zamiast wzorca początku wiersza; wzorzec logu bez nawrotów na ciągu spacji. macOS: 604 passed, 2 skipped, 13 xfailed.
 - 2026-11-11 — T-006 (#18), drugi PR: komentarz wykonywalny ze słowem INSERT/REPLACE i dyrektywa DELIMITER obniżają pokrycie bazy.
 - 2026-11-11 — PR #26 i #27 scalone na polecenie właściciela bez wyniku GitHub Actions (kolejka nie ruszała); zamiast CI lokalny przebieg na Linuksie w kontenerze bez sieci.
-- 2026-11-11 — **Bramka M1:** raport w `docs/M1_GATE.md`. Werdykt agenta: K1 i K2 spełnione z zastrzeżeniami; K3 po poprawkach (nieanalizowane instrukcje SQL, stratne dekodowanie, `NO_TRUSTED_REFERENCE`) spełnione z zastrzeżeniami. Decyzja o przejściu bramki należy do właściciela; zakaz pracy na realnym materiale pozostaje. Następny krok: usunięcie starej nazwy `wptrace`, potem M2 (#6) i M3 (#7).
+- 2026-11-11 — **Bramka M1:** raport w `docs/M1_GATE.md`. Werdykt agenta: K1 i K2 spełnione z zastrzeżeniami; K3 po poprawkach (nieanalizowane instrukcje SQL, stratne dekodowanie, `NO_TRUSTED_REFERENCE`) spełnione z zastrzeżeniami. Decyzja o przejściu bramki należy do właściciela; zakaz pracy na realnym materiale pozostaje. Następny krok: usunięcie starej nazwy `wpincidentlens`, potem M2 (#6) i M3 (#7).
+- 2026-11-11 — Usunięto dawną nazwę WPTrace: pakiet i polecenie to `wpincidentlens`, pole `tool` w raporcie to `WPIncidentLens PoC`, pliki `docs/WPTrace_*` przemianowane (ADR 0004). Dawna nazwa zostaje tylko w materiałach historycznych.

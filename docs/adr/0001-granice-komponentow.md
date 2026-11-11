@@ -11,7 +11,7 @@ Numeracja `0001` dotyczy plików w `docs/adr/`. Katalog decyzji ADR-001–ADR-01
 
 ## Kontekst
 
-Cały PoC to jeden moduł `wptrace/cli.py` (386 linii):
+Cały PoC to jeden moduł `wpincidentlens/cli.py` (386 linii):
 
 | Funkcja | Linie | Co łączy |
 |---|---|---|
@@ -31,15 +31,15 @@ Skutki dla bezpieczeństwa:
 - Reguły są wpisane w pętle odczytu (`:79-101`, `:236-246`, `:276-280`), więc nie istnieje warstwa obserwacji, do której znalezisko mogłoby się odwołać.
 - Redakcja i escapowanie zależą od miejsca użycia, a nie od modelu danych.
 
-Ograniczenia: `python -m wptrace` i jego argumenty muszą działać bez zmian; testy importują `main`, `iter_insert_rows`, `compose_report` i `write_html` z `wptrace.cli` (`tests/test_cli.py:3`, `:46`); raport ma `schema_version` 0.1.0; silnik nie ma zależności runtime.
+Ograniczenia: `python -m wpincidentlens` i jego argumenty muszą działać bez zmian; testy importują `main`, `iter_insert_rows`, `compose_report` i `write_html` z `wpincidentlens.cli` (`tests/test_cli.py:3`, `:46`); raport ma `schema_version` 0.1.0; silnik nie ma zależności runtime.
 
 ## Rozważane opcje
 
 | Opcja | Opis | Zalety | Wady |
 |---|---|---|---|
 | A | Pozostawić monolit i utwardzać funkcje w miejscu | najmniejszy diff | pięć ścieżek odczytu zostaje; granic nie da się wymusić testem |
-| B | Moduły wewnątrz pakietu `wptrace/` z jednokierunkowymi zależnościami, wydzielane po jednym na PR | małe, odwracalne kroki; CLI i testy zachowane; granice sprawdzalne testem importów | okres przejściowy z kodem w dwóch miejscach; reeksporty w `cli.py` |
-| C | Od razu docelowe drzewo ze specyfikacji §12 (`src/wptrace/`, `adapters/`, `analyzers/`, Pydantic, Jinja2) | zgodność ze specyfikacją | faktyczny rewrite w jednym PR; nowe zależności przed threat model; sprzeczne z `AGENTS.md` |
+| B | Moduły wewnątrz pakietu `wpincidentlens/` z jednokierunkowymi zależnościami, wydzielane po jednym na PR | małe, odwracalne kroki; CLI i testy zachowane; granice sprawdzalne testem importów | okres przejściowy z kodem w dwóch miejscach; reeksporty w `cli.py` |
+| C | Od razu docelowe drzewo ze specyfikacji §12 (`src/wpincidentlens/`, `adapters/`, `analyzers/`, Pydantic, Jinja2) | zgodność ze specyfikacją | faktyczny rewrite w jednym PR; nowe zależności przed threat model; sprzeczne z `AGENTS.md` |
 | D | Parsery w osobnych procesach roboczych z limitami | najsilniejsza izolacja błędów parsera | złożoność i koszt zbyt wczesne; wymaga stabilnych kontraktów danych |
 
 ## Decyzja proponowana
@@ -61,17 +61,17 @@ Zależności wyłącznie w jedną stronę: `cli → case → ingest → parsers 
 
 ## Ścieżka migracji
 
-Każdy krok to osobny PR; po każdym `python -m wptrace`, sześć istniejących testów i raport 0.1.0 dla `fixtures/` pozostają bez zmian (poza `analyzed_at_utc`). `wptrace/cli.py` reeksportuje przeniesione nazwy do czasu migracji testów. Rollback każdego kroku = cofnięcie jednego PR.
+Każdy krok to osobny PR; po każdym `python -m wpincidentlens`, sześć istniejących testów i raport 0.1.0 dla `fixtures/` pozostają bez zmian (poza `analyzed_at_utc`). `wpincidentlens/cli.py` reeksportuje przeniesione nazwy do czasu migracji testów. Rollback każdego kroku = cofnięcie jednego PR.
 
 | Krok | Zakres | Zadanie | Warunek wstępny |
 |---|---|---|---|
 | 0 | Testy charakteryzujące: zamrożony raport dla `fixtures/`, testy negatywne | T-003 (#3) | — |
-| 1 | `wptrace/report.py`: przeniesienie `write_html` i zapisu JSON bez zmiany zachowania | T-102 (#5) | krok 0 |
-| 2 | `wptrace/models.py`: typy `Evidence`, `Observation`, `Finding`, `Coverage`; adapter do raportu 0.1.0 | T-102 (#5) | bramka M0 |
-| 3 | `wptrace/ingest.py`: enumeracja i skrót dla `--files`, potem ten sam odczyt dla `--database`, `--logs`, `--baseline` | T-101 (#4) | bramka M0 |
-| 4 | `wptrace/parsers/`: `iter_insert_rows`, parser logów, odczyt treści plików jako czyste funkcje | T-201 (#6), T-301 (#7), T-401 | krok 3 |
-| 5 | `wptrace/rules/`: reguły wyjęte z pętli odczytu, korelacja, assessment | T-201, T-301, T-501 | kroki 2 i 4 |
-| 6 | `wptrace/case.py`; `cli.py` zostaje cienką warstwą; ewentualne podkomendy z zachowaniem płaskiego wywołania | T-101 (#4) | krok 3 |
+| 1 | `wpincidentlens/report.py`: przeniesienie `write_html` i zapisu JSON bez zmiany zachowania | T-102 (#5) | krok 0 |
+| 2 | `wpincidentlens/models.py`: typy `Evidence`, `Observation`, `Finding`, `Coverage`; adapter do raportu 0.1.0 | T-102 (#5) | bramka M0 |
+| 3 | `wpincidentlens/ingest.py`: enumeracja i skrót dla `--files`, potem ten sam odczyt dla `--database`, `--logs`, `--baseline` | T-101 (#4) | bramka M0 |
+| 4 | `wpincidentlens/parsers/`: `iter_insert_rows`, parser logów, odczyt treści plików jako czyste funkcje | T-201 (#6), T-301 (#7), T-401 | krok 3 |
+| 5 | `wpincidentlens/rules/`: reguły wyjęte z pętli odczytu, korelacja, assessment | T-201, T-301, T-501 | kroki 2 i 4 |
+| 6 | `wpincidentlens/case.py`; `cli.py` zostaje cienką warstwą; ewentualne podkomendy z zachowaniem płaskiego wywołania | T-101 (#4) | krok 3 |
 
 Zmiana schematu raportu (np. `INCONCLUSIVE`, identyfikatory) nie jest częścią przenoszenia kodu — wymaga osobnego PR z wersją, migracją i testem kompatybilności.
 
@@ -100,7 +100,7 @@ Pytania rozstrzygnięte w `docs/adr/0002-decyzje-bramki-m0.md`:
 
 | ID | Pytanie / decyzja |
 |---|---|
-| D1 | Czy przyjąć opcję B (moduły w `wptrace/`), czy docelowy układ `src/wptrace/` ze specyfikacji §12 ma obowiązywać od razu? |
+| D1 | Czy przyjąć opcję B (moduły w `wpincidentlens/`), czy docelowy układ `src/wpincidentlens/` ze specyfikacji §12 ma obowiązywać od razu? |
 | D2 | Modele: Pydantic 2 (specyfikacja §3.3) czy `dataclasses` + JSON Schema (zero zależności runtime)? |
 | D3 | Raport: Jinja2 z autoescape czy stdlib z jedną funkcją renderującą? |
 | D4 | Czy zasada „dowody otwiera wyłącznie SecureIngest, wyniki pisze wyłącznie Reporter” jest wiążąca i ma być egzekwowana testem w CI? |

@@ -9,9 +9,9 @@ import json
 import pytest
 from conftest import LEGACY_REPORT_PATH, schema_errors
 
-from wptrace import cli
-from wptrace.migrate import LEGACY_KIND, MIGRATION_NOTE, MigrationError, migrate_0_1_0
-from wptrace.models import SOURCES, describe_location, validate_report
+from wpincidentlens import cli
+from wpincidentlens.migrate import LEGACY_KIND, MIGRATION_NOTE, MigrationError, migrate_0_1_0
+from wpincidentlens.models import SOURCES, describe_location, validate_report
 
 SHA = "c" * 64
 UPLOAD = "wp-content/uploads/2026/11/cache-view.php"

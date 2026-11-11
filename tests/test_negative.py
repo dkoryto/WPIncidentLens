@@ -5,7 +5,7 @@ import re
 import pytest
 from conftest import UPLOAD_PHP, access_line, admin_sql, option_sql, sha256, write
 
-from wptrace.cli import main
+from wpincidentlens.cli import main
 
 ANALYTICS = '<script async src="https://www.googletagmanager.com/gtag/js?id=G-SYNTHETIC0"></script>'
 FOREIGN_SQL = {

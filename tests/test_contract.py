@@ -1,4 +1,4 @@
-"""Raport ``poc-1`` pisany przez ``wptrace`` (T-102, ADR 0003): pokrycie per źródło, ``INCONCLUSIVE``, kody wyjścia, JSON Schema.
+"""Raport ``poc-1`` pisany przez ``wpincidentlens`` (T-102, ADR 0003): pokrycie per źródło, ``INCONCLUSIVE``, kody wyjścia, JSON Schema.
 
 Każdy raport zwrócony przez ``analyze`` przeszedł już ``validate_report`` i JSON Schema (``conftest.analyze``).
 """
@@ -30,8 +30,8 @@ from conftest import (
     write,
 )
 
-from wptrace import cli, models
-from wptrace.ingest import ReadStatus, Session
+from wpincidentlens import cli, models
+from wpincidentlens.ingest import ReadStatus, Session
 
 REPOSITORY = Path(__file__).parents[1]
 needs_permission_bits = pytest.mark.skipif(os.geteuid() == 0, reason="root ignoruje bity uprawnień")
@@ -469,7 +469,7 @@ def test_identifiers_do_not_depend_on_the_host_path_or_file_times(evidence, tmp_
 
 def _report_from_fresh_process(case: Path, out: Path, hash_seed: str) -> dict:
     """Osobny proces Pythona z zadanym ``PYTHONHASHSEED``; uruchamiane jest wyłącznie narzędzie, nigdy materiał."""
-    command = [sys.executable, "-m", "wptrace", "--files", str(case / "site"), "--database", str(case / "database.sql"),
+    command = [sys.executable, "-m", "wpincidentlens", "--files", str(case / "site"), "--database", str(case / "database.sql"),
                "--logs", str(case / "logs"), "--baseline", str(case / "baseline.json"), "--output", str(out)]
     done = subprocess.run(command, cwd=REPOSITORY, env={**os.environ, "PYTHONHASHSEED": hash_seed}, capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
@@ -553,7 +553,7 @@ def test_schema_rejects_a_deliberately_broken_report(site, evidence, tmp_path, a
 
 
 def test_schema_enumerations_match_the_model(schema):
-    """Schemat jest pisany ręcznie; ten test wykrywa rozjazd wyliczeń między plikiem a ``wptrace.models``."""
+    """Schemat jest pisany ręcznie; ten test wykrywa rozjazd wyliczeń między plikiem a ``wpincidentlens.models``."""
     defs, properties = schema["$defs"], schema["properties"]
 
     assert properties["assessment"]["enum"] == list(models.Assessment)

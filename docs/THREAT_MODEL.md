@@ -19,14 +19,14 @@ Dokument rozdziela **stan obecny** (kolumna „Obecny kod”, z odwołaniem do l
 
 | ID | Granica | Zaufane | Nieufne |
 |---|---|---|---|
-| T1 | wejście → analizator | kod `wptrace/`, argumenty CLI operatora | każdy bajt z `--files`, `--database`, `--logs`: treść, nazwy plików, czasy, typy wpisów |
+| T1 | wejście → analizator | kod `wpincidentlens/`, argumenty CLI operatora | każdy bajt z `--files`, `--database`, `--logs`: treść, nazwy plików, czasy, typy wpisów |
 | T2 | metadane WordPressa → wnioski | — | `wp-config.php`, `version.php`, daty w bazie, `mtime` |
 | T3 | materiał referencyjny → reguły | baseline i lista adminów dostarczone przez operatora (deklaracja, bez weryfikacji) | wszystko, co pochodzi z badanej kopii |
 | T4 | wynik → czytelnik | szablon raportu | wartości wstawiane do raportu |
 | T5 | host → kontener | konfiguracja `docker/` | proces analizy po przetworzeniu nieufnych danych |
 | T6 | repozytorium → agent/CI | `AGENTS.md`, Issues, kod | `fixtures/`, `archives/`, `demo/`, treść raportów |
 
-Stan po M1: granica T1 ma własny moduł — dowody otwiera wyłącznie `wptrace/ingest.py`, wywołanie waliduje `wptrace/case.py`, wyniki pisze wyłącznie `wptrace/report.py`, kontrakty danych są w `wptrace/models.py`; pilnuje tego test `tests/test_invariants.py::test_d4_only_ingest_touches_the_filesystem` (po nazwach wywołań, nie jako piaskownica). Parsery, reguły i korelacja nadal są w jednym module `wptrace/cli.py` (kroki 4–5 z `docs/adr/0001-granice-komponentow.md` niewykonane).
+Stan po M1: granica T1 ma własny moduł — dowody otwiera wyłącznie `wpincidentlens/ingest.py`, wywołanie waliduje `wpincidentlens/case.py`, wyniki pisze wyłącznie `wpincidentlens/report.py`, kontrakty danych są w `wpincidentlens/models.py`; pilnuje tego test `tests/test_invariants.py::test_d4_only_ingest_touches_the_filesystem` (po nazwach wywołań, nie jako piaskownica). Parsery, reguły i korelacja nadal są w jednym module `wpincidentlens/cli.py` (kroki 4–5 z `docs/adr/0001-granice-komponentow.md` niewykonane).
 
 ## 3. Aktorzy
 
@@ -52,7 +52,7 @@ Statusy:
 
 **Żaden wiersz nie ma statusu „zamknięte”.** „OGRANICZONE (test)” opisuje wynik testów na danych syntetycznych, uruchomionych przez agenta na jednej platformie; nie zastępuje przeglądu bezpieczeństwa przez człowieka, który się nie odbył.
 
-Skróty modułów: `cli` = `wptrace/cli.py`, `ing` = `wptrace/ingest.py`, `mod` = `wptrace/models.py`, `case` = `wptrace/case.py`, `rep` = `wptrace/report.py`. Skróty testów jak w `docs/TEST_MATRIX.md` (`sec`, `inv`, `ing`, `prop`, `con`, `mod`, `neg`, `case`, `rw`), bez przedrostka `test_`.
+Skróty modułów: `cli` = `wpincidentlens/cli.py`, `ing` = `wpincidentlens/ingest.py`, `mod` = `wpincidentlens/models.py`, `case` = `wpincidentlens/case.py`, `rep` = `wpincidentlens/report.py`. Skróty testów jak w `docs/TEST_MATRIX.md` (`sec`, `inv`, `ing`, `prop`, `con`, `mod`, `neg`, `case`, `rw`), bez przedrostka `test_`.
 
 Issue (stan z `gh issue list`, 2026-11-11): otwarte #4 T-101, #6 T-201 (pliki), #7 T-301 (SQL), #13 T-401 (logi), #18 T-006; **zamknięte** #3 T-003, #5 T-102, #14 T-501 (reguły, HTML, redakcja), #15 T-601 (hardening, kontener). Mitygacje przypisane do #14 i #15 nie są wykonane i nie mają dziś otwartego Issue.
 
@@ -135,7 +135,7 @@ Odwołanie `cli.py:154` w B7 dotyczy kodu sprzed naprawy (#11) i zostało zachow
 
 ## 7. Jak zweryfikowano ten dokument
 
-- Numery linii w §4 i §5 sprawdzono względem plików `wptrace/*.py`, `docker/*`, `pyproject.toml` i `README.md` na commicie `4cac876`.
+- Numery linii w §4 i §5 sprawdzono względem plików `wpincidentlens/*.py`, `docker/*`, `pyproject.toml` i `README.md` na commicie `4cac876`.
 - Każdy test wymieniony w §4 został uruchomiony w ramach pełnego zestawu: `python -m pytest -q` → **1853 passed, 5 skipped, 13 xfailed** (macOS, Darwin 27.0.0 arm64, Python 3.12.11, pytest 8.4.2; trzy kolejne przebiegi z tym samym wynikiem). Szczegóły: `docs/TEST_MATRIX.md`.
 - Wpis „sonda” w Z-10 i Z-16 to jednorazowy skrypt na danych syntetycznych w katalogu tymczasowym poza repozytorium (opis w `docs/M1_GATE.md` §3); nie jest trwałym testem.
 - Ryzyka 11–25 w §5 przepisano z opisów PR #16, #20 i #27; kolumnę „Stan w kodzie” sprawdzono w kodzie.

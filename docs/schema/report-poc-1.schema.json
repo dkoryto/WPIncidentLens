@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:wpincidentlens:schema:report:poc-1",
-  "title": "WPIncidentLens (WPTrace PoC) — raport poc-1",
-  "description": "Kształt pliku report.json w schemacie poc-1 (ADR 0003). Schemat opisuje typy, pola wymagane i wyliczenia. Nie sprawdza istnienia wskazywanych dowodów i obserwacji, unikalności identyfikatorów, zgodności identyfikatora z treścią ani zgodności assessment z regułą oceny: te niezmienniki egzekwuje wptrace.models.validate_report.",
+  "title": "WPIncidentLens — raport poc-1",
+  "description": "Kształt pliku report.json w schemacie poc-1 (ADR 0003). Schemat opisuje typy, pola wymagane i wyliczenia. Nie sprawdza istnienia wskazywanych dowodów i obserwacji, unikalności identyfikatorów, zgodności identyfikatora z treścią ani zgodności assessment z regułą oceny: te niezmienniki egzekwuje wpincidentlens.models.validate_report.",
   "type": "object",
   "additionalProperties": false,
   "required": [

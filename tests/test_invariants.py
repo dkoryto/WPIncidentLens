@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 from conftest import access_line, analyze_demo, open_fd_count, strip_time, tree_digest, write
 
-import wptrace
-from wptrace.cli import main
+import wpincidentlens
+from wpincidentlens.cli import main
 
-PACKAGE = Path(wptrace.__file__).parent
+PACKAGE = Path(wpincidentlens.__file__).parent
 
 
 def _sources(package: Path) -> list[Path]:
@@ -123,7 +123,7 @@ def test_report_has_the_poc_1_shape(demo_case, analyze):
     assert all(isinstance(gap, str) for gap in report["coverage_gaps"])
 
 
-# --- D4: dowody otwiera wyłącznie wptrace.ingest ---------------------------------------------------
+# --- D4: dowody otwiera wyłącznie wpincidentlens.ingest ---------------------------------------------------
 
 FILE_CALLS = {"open", "fdopen", "read_bytes", "read_text", "write_bytes", "write_text", "scandir", "listdir", "walk", "fwalk",
               "rglob", "glob", "iglob", "iterdir", "stat", "lstat", "fstat", "exists", "lexists", "is_file", "is_dir",
