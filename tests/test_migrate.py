@@ -187,6 +187,54 @@ def test_identical_old_findings_are_merged_and_the_merge_is_reported():
     assert "Migracja z 0.1.0: scalono 1 powtórzonych, identycznych ustaleń" in migrated["coverage_gaps"]
 
 
+CONFLICT_NOTE = ("Migracja z 0.1.0: {} ustaleń o tej samej regule, źródle i metadanych co wcześniejsze różniło się wagą, pewnością "
+                 "lub wyjaśnieniem; zachowano najwyższą wagę, najwyższą pewność i pierwsze wyjaśnienie")
+LOW_BUT_SURE = {**legacy_finding(), "severity": "low", "confidence": "high", "explanation": "pierwsze"}
+HIGH_BUT_UNSURE = {**legacy_finding(), "severity": "high", "confidence": "low", "explanation": "drugie"}
+
+
+@pytest.mark.parametrize("findings", [[LOW_BUT_SURE, HIGH_BUT_UNSURE], [HIGH_BUT_UNSURE, LOW_BUT_SURE]], ids=["weaker-first", "stronger-first"])
+def test_old_findings_differing_only_in_rating_keep_the_higher_severity_and_the_higher_confidence(findings):
+    migrated = migrate_0_1_0(legacy_report(findings))
+
+    assert [(item["severity"], item["confidence"]) for item in migrated["findings"]] == [("high", "high")]
+
+
+def test_conflicting_old_findings_are_reported_as_a_conflict_not_as_identical():
+    migrated = migrate_0_1_0(legacy_report([LOW_BUT_SURE, HIGH_BUT_UNSURE]))
+
+    assert CONFLICT_NOTE.format(1) in migrated["coverage_gaps"]
+    assert not any("identycznych" in gap for gap in migrated["coverage_gaps"])
+    assert schema_errors(migrated) == []
+
+
+def test_conflicting_old_findings_keep_the_first_explanation():
+    migrated = migrate_0_1_0(legacy_report([LOW_BUT_SURE, HIGH_BUT_UNSURE]))
+
+    assert [item["reason"] for item in migrated["findings"]] == ["pierwsze"]
+
+
+def test_old_findings_differing_only_in_explanation_are_a_conflict_too():
+    migrated = migrate_0_1_0(legacy_report([legacy_finding(), {**legacy_finding(), "explanation": "inne wyjaśnienie"}]))
+
+    assert [item["reason"] for item in migrated["findings"]] == ["ustalenie syntetyczne"]
+    assert CONFLICT_NOTE.format(1) in migrated["coverage_gaps"]
+
+
+def test_identical_and_conflicting_repeats_are_counted_separately():
+    migrated = migrate_0_1_0(legacy_report([LOW_BUT_SURE, LOW_BUT_SURE, HIGH_BUT_UNSURE]))
+
+    assert {CONFLICT_NOTE.format(1), "Migracja z 0.1.0: scalono 1 powtórzonych, identycznych ustaleń"} <= set(migrated["coverage_gaps"])
+
+
+def test_manifest_entry_repeated_without_any_difference_is_one_evidence():
+    entry = {"source": "files/index.php", "sha256": SHA, "size": 1, "mtime_ns": 5}
+
+    migrated = migrate_0_1_0(legacy_report(evidence_manifest=[entry, dict(entry)]))
+
+    assert [item["logical_path"] for item in migrated["evidence"]] == ["files/index.php"]
+
+
 def test_nested_metadata_is_kept_as_json_text():
     migrated = migrate_0_1_0(legacy_report([legacy_finding(details={"b": [1, 2], "a": None})]))
 
@@ -252,6 +300,13 @@ REFUSED = {
                                             r"evidence_manifest\[0\].source: nieznane źródło w ścieżce '/srv/www/index.php'"),
     "manifest-with-malformed-hash": (legacy_report(evidence_manifest=[{"source": "files/index.php", "sha256": "abc", "size": 1}]),
                                      r"evidence_manifest\[0\]: evidence.sha256"),
+    "manifest-path-with-two-hashes": (legacy_report(evidence_manifest=[{"source": "files/index.php", "sha256": SHA, "size": 1},
+                                                                       {"source": "files/index.php", "sha256": "d" * 64, "size": 1}]),
+                                      r"evidence_manifest\[1\].source: ścieżka 'files/index.php' powtórzona z innym skrótem sha256"),
+    "manifest-path-with-two-sizes": (legacy_report(evidence_manifest=[{"source": "files/index.php", "sha256": SHA, "size": 1},
+                                                                      {"source": "files/index.php", "sha256": SHA, "size": 2}]),
+                                     r"evidence_manifest\[1\].source: ścieżka 'files/index.php' powtórzona z innym rozmiarem lub mtime"),
+    "text-not-writable-as-utf8": (legacy_report(case_id="a\ud800"), "case_id: tekst nie daje się zapisać w UTF-8"),
     "gap-not-text": (legacy_report(coverage_gaps=[{"gap": 1}]), "coverage_gaps: oczekiwano tekstu, jest dict"),
     "case-id-not-text": (legacy_report(case_id=7), "case_id: oczekiwano tekstu, jest int"),
 }
