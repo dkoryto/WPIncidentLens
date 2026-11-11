@@ -31,3 +31,4 @@ Status `IN REVIEW` oznacza otwarty PR, nie ukończone zadanie. `MERGED` oznacza 
 - 2026-11-11 — T-005 (#17): nagłówek INSERT parsowany liniowo; nazwy wylistowane na stosie katalogów liczą się do budżetu wpisów.
 - 2026-11-11 — T-102 (#5): raport `poc-1` z obserwacjami, pokryciem per źródło i `INCONCLUSIVE`; uruchomienie bez bazy lub logów kończy się kodem 3. Następny krok: CaseManager (#4), #18, potem T-201 i T-301.
 - 2026-11-11 — PR #20 (T-102) scalony. T-006 (#18), pierwszy PR: instrukcje INSERT/REPLACE wykrywane skanerem leksemów zamiast wzorca początku wiersza; wzorzec logu bez nawrotów na ciągu spacji. macOS: 604 passed, 2 skipped, 13 xfailed.
+- 2026-11-11 — T-006 (#18), drugi PR: komentarz wykonywalny ze słowem INSERT/REPLACE i dyrektywa DELIMITER obniżają pokrycie bazy.
