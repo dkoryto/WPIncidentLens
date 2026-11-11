@@ -40,6 +40,15 @@ def _text(content: bytes) -> io.TextIOWrapper:
     return io.TextIOWrapper(io.BytesIO(content), encoding="utf-8", errors="replace")
 
 
+def _is_lossy(content: bytes) -> bool:
+    """Czy dekodowanie UTF-8 musiało podstawić znaki zastępcze (część treści mogła zmienić znaczenie)."""
+    try:
+        content.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
 @dataclass(frozen=True)
 class Detection:
     """Wykrycie parsera: fakt (``observation``) i ocena, jaką nadaje mu reguła PoC. Z niego powstaje ``Finding``."""
@@ -140,6 +149,11 @@ def scan_files(root: Path, baseline: dict | None,
             discoveries.append(Detection("REQUEST_TO_COMMAND_EXEC", "high", "medium", "file",
                 "Potencjalne powiązanie danych żądania z wykonaniem komendy; wymaga ręcznej weryfikacji.",
                 seen_in(item, "REQUEST_INPUT_NEAR_COMMAND_EXEC_PATTERN")))
+    if ref and (unreferenced := sorted(observed - ref.keys())):
+        # Plik bez wpisu w baseline nie jest porównywany: bez tej noty nowy plik znikałby z raportu bez śladu.
+        examples = ", ".join(unreferenced[:3]) + (", …" if len(unreferenced) > 3 else "")
+        cover.note(f"NO_TRUSTED_REFERENCE: {len(unreferenced)} odczytanych plików nie ma wpisu w baseline, "
+                   f"więc ich zmiany lub pojawienia się nie da się ocenić ({examples})")
     if baseline and ref and complete:  # po przerwanym przejściu nie wiadomo, czego w materiale brakuje
         reference = _baseline_record(session)  # dowodem braku pliku jest baseline, który ten plik wymienia
         for rel in sorted(ref.keys() - observed):
@@ -204,7 +218,12 @@ _WRITE_KEYWORD = re.compile(r"(?<![A-Za-z_])(?:INSERT|REPLACE)(?![A-Za-z0-9_])",
 _CORE_TABLE_CELLS = {"_users": 2, "_usermeta": 4, "_options": 3}
 
 
-def _write_statement_starts(sql: str):
+# Instrukcje, które zrzut może zawierać, a których pominięcie nie ukrywa danych: ustawienia sesji i definicje tabel.
+_INERT_STATEMENTS = frozenset({"SET", "USE", "LOCK", "UNLOCK", "START", "COMMIT", "BEGIN"})
+_INERT_OBJECTS = frozenset({"TABLE", "DATABASE", "SCHEMA"})  # po CREATE / DROP / ALTER
+
+
+def _write_statement_starts(sql: str, unanalysed: Counter | None = None):
     """Pozycje instrukcji INSERT/REPLACE: słowo kluczowe jako pierwszy leksem instrukcji, poza łańcuchami i komentarzami.
 
     Zgłasza też miejsca, których podział na instrukcje nie obejmuje wiarygodnie: komentarz wykonywalny ze słowem
@@ -212,8 +231,12 @@ def _write_statement_starts(sql: str):
 
     Używa podziału na instrukcje po średniku, więc instrukcja w tym samym wierszu co poprzednia albo po
     komentarzu też jest widziana; słowo INSERT w treści wartości nie jest liczone.
+
+    Każda inna instrukcja, która nie jest obojętnym ustawieniem ani definicją tabeli (np. UPDATE, DELETE,
+    CREATE TRIGGER, CALL), jest liczona w ``unanalysed`` pod swoim początkowym słowem kluczowym: parser jej nie
+    interpretuje, więc nie może zniknąć bez śladu.
     """
-    at_start = True
+    at_start, definer = True, None  # definer: CREATE / DROP / ALTER czekające na nazwę rodzaju obiektu
     for token in _SQL_TOKEN.finditer(sql):
         if token["comment"]:
             # Komentarz wykonywalny (/*!NNNNN ... */, /*M! ... */) serwer traktuje jak kod.
@@ -223,8 +246,18 @@ def _write_statement_starts(sql: str):
         if token["space"]:
             continue
         if token["end"]:
-            at_start = True
+            at_start, definer = True, None
             continue
+        word = (token["word"] or "").upper()
+        if unanalysed is not None:
+            if definer:
+                if word not in _INERT_OBJECTS:
+                    unanalysed[f"{definer} {word}"[:40] if word else definer] += 1
+                definer = None
+            elif at_start and word in ("CREATE", "DROP", "ALTER"):
+                definer = word
+            elif at_start and word not in _INERT_STATEMENTS and word not in ("INSERT", "REPLACE", "DELIMITER"):
+                unanalysed[word[:40] or "(nie słowo kluczowe)"] += 1
         # DELIMITER zmienia znak końca instrukcji: dalszego podziału po średniku nie można uznać za wiarygodny.
         # Ukośnik wsteczny poza łańcuchem i komentarzem to polecenie klienta (\d, \g, \G): może zakończyć
         # instrukcję albo zmienić jej terminator w dowolnym miejscu, a poprawny zrzut go tam nie zawiera.
@@ -333,6 +366,8 @@ def scan_database(path: Path, known_admins: set[str],
     if item.content is None:
         cover.fail("Treść eksportu SQL niedostępna po odczycie (plik zmienił się w trakcie): analiza DB pominięta")
         return findings, cover
+    if _is_lossy(item.content):
+        cover.degrade("Eksport SQL nie jest poprawnym UTF-8: zdekodowano ze znakami zastępczymi, wartości mogą być zniekształcone")
     sql = _text(item.content).read()
     users, admins, count = {}, {}, 0  # admins: identyfikator użytkownika → miejsce pierwszego wiersza z rolą
     tables = set()
@@ -391,7 +426,11 @@ def scan_database(path: Path, known_admins: set[str],
     if malformed:
         cover.degrade(f"Pominięto {malformed} wierszy tabel użytkowników lub opcji o nieoczekiwanej liczbie pól "
                       "(np. wyrażenie SQL zamiast literału)")
-    unsupported = sum(1 for start in _write_statement_starts(sql) if _INSERT_HEAD.match(sql, start) is None)
+    unanalysed: Counter = Counter()
+    unsupported = sum(1 for start in _write_statement_starts(sql, unanalysed) if _INSERT_HEAD.match(sql, start) is None)
+    if unanalysed:
+        listed = ", ".join(f"{keyword} ×{number}" for keyword, number in sorted(unanalysed.items(), key=lambda pair: (-pair[1], pair[0]))[:8])
+        cover.degrade(f"Zrzut zawiera {sum(unanalysed.values())} instrukcji, których parser PoC nie analizuje: {listed}")
     if unsupported:
         cover.degrade(f"Pominięto {unsupported} instrukcji INSERT/REPLACE w nieobsługiwanej składni "
                       "(np. REPLACE INTO, INSERT IGNORE, nazwa z bazą, INSERT ... SET, komentarz wykonywalny, DELIMITER)")
@@ -439,6 +478,8 @@ def scan_logs(root: Path, session: ingest.Session | None = None) -> tuple[list[D
         if item.content is None:
             cover.degrade(f"Treść logu niedostępna po odczycie (plik zmienił się w trakcie): {name}")
             continue
+        if _is_lossy(item.content):
+            cover.degrade(f"Log nie jest poprawnym UTF-8: zdekodowano ze znakami zastępczymi: {name}")
         for ln, line in enumerate(_text(item.content), start=1):
             observed += 1
             m = LOG_PATTERN.match(line)
