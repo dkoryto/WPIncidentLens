@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **PROPOSED** — propozycja agenta; architekturę zatwierdza człowiek |
+| **Status** | **ACCEPTED** 2026-11-11 (opcja B) — decyzje D1–D9 w `docs/adr/0002-decyzje-bramki-m0.md`; bez niezależnego przeglądu AppSec |
 | **Data** | 2026-11-11 |
 | **Zadanie** | T-002 (#2); blokuje T-101 (#4) i T-102 (#5) |
 | **Powiązane** | `docs/THREAT_MODEL.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, specyfikacja Senior PoC §3.2 i §12 |
@@ -96,7 +96,7 @@ Zmiana schematu raportu (np. `INCONCLUSIVE`, identyfikatory) nie jest częścią
 
 ## Bramka przeglądu człowieka
 
-Do zatwierdzenia przed rozpoczęciem T-101/T-102:
+Pytania rozstrzygnięte w `docs/adr/0002-decyzje-bramki-m0.md`:
 
 | ID | Pytanie / decyzja |
 |---|---|
