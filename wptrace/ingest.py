@@ -32,6 +32,7 @@ _OPEN_ENTRY = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBL
                | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOCTTY", 0))
 _OPEN_DIR = _OPEN_ENTRY | getattr(os, "O_DIRECTORY", 0)
 _SPECIAL_KINDS = ((stat.S_ISFIFO, "FIFO"), (stat.S_ISSOCK, "SOCKET"), (stat.S_ISCHR, "CHAR_DEVICE"), (stat.S_ISBLK, "BLOCK_DEVICE"))
+_HEX_DIGITS = "0123456789abcdef"  # cyfry, którymi ``backslashreplace`` zapisuje bajt spoza UTF-8 jako ``\xNN``
 
 
 class ReadStatus(StrEnum):
@@ -133,8 +134,20 @@ def _identity(info: os.stat_result) -> tuple[int, int]:
 
 
 def _printable(name: str) -> str:
-    """Nazwa spoza UTF-8 dostaje postać ``\\xNN`` zamiast surogatów, których nie da się zapisać w raporcie."""
-    return os.fsencode(name).decode("utf-8", "backslashreplace")
+    """Nazwa spoza UTF-8 dostaje postać ``\\xNN`` zamiast surogatów, których nie da się zapisać w raporcie.
+
+    Odwzorowanie jest różnowartościowe: dwie różne nazwy bajtowe nigdy nie dają tej samej postaci. Nazwa poprawna
+    w UTF-8 zostaje bez zmian, chyba że sama zawiera dosłowną sekwencję ``\\xNN`` (ukośnik, ``x``, dwie małe cyfry
+    szesnastkowe) — wtedy, tak jak w nazwie z bajtami spoza UTF-8, każdy jej ukośnik wsteczny jest podwajany.
+    Postać z sekwencją ``\\xNN`` jest więc zawsze zakodowana (``\\\\`` to ukośnik, ``\\xNN`` to bajt), a bez niej dosłowna.
+    """
+    raw = os.fsencode(name)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.replace(b"\\", b"\\\\").decode("utf-8", "backslashreplace")
+    spelled_out = any(len(rest) >= 2 and rest[0] in _HEX_DIGITS and rest[1] in _HEX_DIGITS for rest in text.split("\\x")[1:])
+    return text.replace("\\", "\\\\") if spelled_out else text
 
 
 def _where(source: str, rel: str) -> str:
@@ -394,7 +407,9 @@ class Session:
         changed = got != info.st_size or (_identity(after), after.st_size, after.st_mtime_ns) != (
             _identity(info), info.st_size, info.st_mtime_ns)
         gaps = [f"{CHANGED_GAP}: {_where(root.source, shown)} (zmiana w trakcie odczytu)"] if changed else []
-        if shown != rel:
+        if shown == rel.replace("\\", "\\\\") != rel:  # nazwa poprawna w UTF-8, tylko z dosłowną sekwencją \xNN
+            gaps.append(f"Nazwa z dosłowną sekwencją \\xNN zapisana z podwojonymi ukośnikami wstecznymi: {_where(root.source, shown)}")
+        elif shown != rel:
             gaps.append(f"Nazwa spoza UTF-8 zapisana w postaci zastępczej: {_where(root.source, shown)}")
         record = Evidence(root.source, shown, ReadStatus.CHANGED if changed else ReadStatus.READ, "DURING_READ" if changed else "",
                           sha, got, info.st_mtime_ns, hardlinked, content, tuple(gaps))

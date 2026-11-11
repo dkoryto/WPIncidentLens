@@ -63,6 +63,8 @@ Konsekwencje: identyfikator nie zależy od kolejności przejścia, `PYTHONHASHSE
 ## 4. Walidacja: model i schemat
 
 - `wptrace/models.py`: zamrożone `dataclasses` z jawną walidacją (D2), bez zależności. `validate_report(dict)` sprawdza typy, wyliczenia, nieznane i brakujące pola, unikalność identyfikatorów, istnienie wskazywanych dowodów i obserwacji, zgodność identyfikatorów z treścią, spójność liczników ze statusem pokrycia oraz zgodność `assessment` i `scope_complete` z regułą. Błąd to `ModelError` z nazwą pola.
+- **Liczniki a dowody (T-006, #18).** W raporcie bez `migrated_from` liczniki `coverage[źródło].entries` muszą mieć pokrycie w `evidence[]` tego źródła: (1) dowodów o danym `read_status` jest najwyżej tyle, ile wynosi licznik tego statusu; (2) licznik niezerowy ma co najmniej jeden dowód, przy czym `READ` i `CHANGED` są liczone łącznie, bo ten sam plik ma w obu statusach jeden identyfikator (§2). Raport z `coverage.database = ANALYZED` i `READ: 1`, ale bez dowodu bazy, jest więc odrzucany, tak samo jak dowód źródła `NOT_PROVIDED` albo dowód pominięty przy liczniku zerowym. Równości nie wymagamy celowo: liczniki liczą wpisy rejestru odczytu, a `evidence[]` scala wpisy o identycznej tożsamości. Po uczynieniu nazw zastępczych różnowartościowymi (`ingest._printable`) taki przypadek nie powstaje w zwykłym przebiegu — w każdym raporcie pisanym w testach liczniki są równe liczbie dowodów — ale pozostaje możliwy, gdy katalog zmieniany w trakcie listowania zwróci tę samą nazwę dwukrotnie albo gdy jedna sesja odczyta to samo źródło dwa razy; odrzucenie własnego raportu po zakończonej analizie byłoby wtedy gorsze niż słabsza reguła. Skutek uboczny: usunięcie z ręcznie zmienionego raportu jednego z kilku dowodów o tym samym statusie nie jest wykrywane. Raport przeniesiony z 0.1.0 nie podlega regule (stary manifest nie zawierał wpisów pominiętych).
+- **Tekst zapisywalny w UTF-8 (T-006, #18).** Każde pole tekstowe, także nazwa i wartość atrybutu obserwacji, jest odrzucane, gdy zawiera samotny surogat (U+D800–U+DFFF): „poprawny” raport musi dać się zapisać jako JSON w UTF-8. Obie reguły zawężają zbiór akceptowanych dokumentów bez zmiany `schema_version`: raport, który je łamie, był wewnętrznie sprzeczny albo niezapisywalny, a narzędzie takiego nie pisało.
 - `docs/schema/report-poc-1.schema.json` (draft 2020-12) opisuje kształt. Nie wyraża referencji ani reguły oceny — to ograniczenie JSON Schema, opisane w samym pliku. `jsonschema` jest zależnością wyłącznie testową (`pyproject.toml`, extras `dev` i `test`); test pilnuje, by wyliczenia w pliku i w modelu były identyczne.
 
 ## 5. Pokrycie i pełność zakresu
@@ -78,7 +80,7 @@ Status źródła wynika z faktów, nie z samej obecności tekstu luki:
 
 Status inny niż `ANALYZED` ma zawsze co najmniej jeden powód. Dotychczasowe teksty `coverage_gaps` zostały zachowane jako powody.
 
-Teksty, które **nie** obniżają statusu (informacja o zakresie): stałe ograniczenie parsera SQL, brak listy zaufanych administratorów, baseline bez skrótów plików, nazwa spoza UTF-8 zapisana w postaci zastępczej, czas logu nie do znormalizowania, duży plik bez reguł treści (np. obraz), liczba plików odczytanych z `--allow-hardlinks`, `--no-reverify`.
+Teksty, które **nie** obniżają statusu (informacja o zakresie): stałe ograniczenie parsera SQL, brak listy zaufanych administratorów, baseline bez skrótów plików, nazwa spoza UTF-8 zapisana w postaci zastępczej, nazwa z dosłowną sekwencją `\xNN` zapisana z podwojonymi ukośnikami wstecznymi, czas logu nie do znormalizowania, duży plik bez reguł treści (np. obraz), liczba plików odczytanych z `--allow-hardlinks`, `--no-reverify`.
 
 `scope_complete` jest prawdą, gdy `files`, `database` i `logs` mają status `ANALYZED`, a `baseline` — `ANALYZED` albo `NOT_PROVIDED`.
 
@@ -128,6 +130,8 @@ Skutek: `INCONCLUSIVE` nigdy nie kończy się kodem `0`; `SUSPICIOUS` i `STRONG_
 | `counts` | pomijane (wyliczalne) |
 
 `UNKNOWN_LEGACY` jest dozwolone wyłącznie w raporcie z polem `migrated_from`; raport pisany przez narzędzie nigdy go nie zawiera (pilnuje tego model i schemat). Wejście niespójne (np. `INDICATORS_FOUND` bez ustaleń, nieznana waga, ścieżka manifestu spoza znanych źródeł) jest odrzucane błędem `MigrationError`, bez zgadywania.
+
+Wpisy powtórzone (T-006, #18): dwa wpisy `evidence_manifest` o tej samej ścieżce i różnym `sha256` (albo rozmiarze lub `mtime_ns`) to `MigrationError` — nie wiadomo, który plik widziały reguły; wpis powtórzony bez różnic jest jednym dowodem. Dwa stare ustalenia o tej samej regule, źródle i metadanych mają w `poc-1` ten sam identyfikator: identyczne są scalane z notą, a różniące się wagą, pewnością lub wyjaśnieniem dają jedno ustalenie z najwyższą wagą i najwyższą pewnością (wybieranymi niezależnie), pierwszym wyjaśnieniem i osobną notą o konflikcie w `coverage_gaps`. Wybrano scalenie zamiast odmowy, bo powtórzony wpis nie czyni reszty starego raportu nieczytelną, a wynik nie zaniża żadnej z ocen; ocena całości i tak jest po migracji najwyżej `SUSPICIOUS`.
 
 Testy kompatybilności: `tests/test_migrate.py` na `tests/data/report-0.1.0.json` (dawny `demo/report.json`, dane syntetyczne) oraz na raportach 0.1.0 budowanych w teście.
 
