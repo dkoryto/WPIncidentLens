@@ -245,6 +245,8 @@ class Session:
         self.allow_hardlinks = allow_hardlinks
         self.reverify = reverify
         self.ledger: list[Evidence] = []
+        # Rozbieżności z ponownej weryfikacji jako (źródło, tekst luki); źródło None = cała sesja (weryfikacja przerwana).
+        self.integrity_notes: list[tuple[str | None, str]] = []
         self._clock = clock or time.monotonic  # zegar monotoniczny: zmiana czasu systemowego nie wydłuża budżetu
         self._deadline = self._clock() + self.limits.max_seconds
         self._roots: list[_Root] = []
@@ -433,6 +435,11 @@ class Session:
 
     def _reverify(self) -> list[str]:
         gaps: list[str] = []
+
+        def note(source: str | None, text: str) -> None:
+            self.integrity_notes.append((source, text))
+            gaps.append(text)
+
         total, done = sum(len(root.seen) for root in self._roots), 0
         for root in self._roots:
             if not root.seen:
@@ -440,18 +447,18 @@ class Session:
             try:
                 root_fd, info = _open_root(root.path, "dir" if root.is_dir else "file")
             except IngestRefusal as refusal:
-                gaps.append(f"{CHANGED_GAP}: źródło {root.source} niedostępne przy ponownej weryfikacji ({refusal.reason})")
+                note(root.source, f"{CHANGED_GAP}: źródło {root.source} niedostępne przy ponownej weryfikacji ({refusal.reason})")
                 for seen in root.seen:
                     self._mark_changed(seen, refusal.reason)
                 continue
             if _identity(info) != root.identity and root.is_dir:
-                gaps.append(f"{CHANGED_GAP}: źródło {root.source} zostało podmienione po odczycie")
+                note(root.source, f"{CHANGED_GAP}: źródło {root.source} zostało podmienione po odczycie")
             dir_parts, dir_fd = (), root_fd  # katalog ostatnio sprawdzanego pliku: sąsiednie wpisy dzielą jedno otwarcie
             try:
                 for seen in root.seen:
                     if self._expired():
-                        gaps.append(f"Ponowna weryfikacja przerwana limitem czasu {self.limits.max_seconds:g} s: "
-                                    f"sprawdzono {done}/{total} dowodów")
+                        note(None, f"Ponowna weryfikacja przerwana limitem czasu {self.limits.max_seconds:g} s: "
+                                   f"sprawdzono {done}/{total} dowodów")
                         return gaps
                     done += 1
                     try:
@@ -464,7 +471,7 @@ class Session:
                     except OSError as exc:  # m.in. ELOOP, gdy wpis lub katalog nadrzędny stał się dowiązaniem
                         difference = _error_name(exc)
                     if difference:
-                        gaps.append(self._mark_changed(seen, difference))
+                        note(root.source, self._mark_changed(seen, difference))
             finally:
                 if dir_fd != root_fd:
                     os.close(dir_fd)

@@ -16,7 +16,7 @@ python -m pytest -q
 python -m wptrace --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output results --case-id DEMO-001
 ```
 
-Otwórz `results/report.html`.
+Otwórz `results/report.html`. Kod wyjścia opisuje pełność analizy, nie wynik: `0` — zakres pełny, `3` — analiza częściowa (np. brak bazy lub logów), `4` — podane źródło nieprzetworzone, `2` — błąd wywołania. Ocenę podaje pole `assessment` w `report.json`.
 
 ## Bezpieczny odczyt dowodów (T-101)
 
@@ -24,7 +24,7 @@ Materiał dowodowy otwiera wyłącznie moduł `wptrace/ingest.py`: względem des
 
 - Ścieżka `--files`, `--database`, `--logs` lub `--baseline` będąca dowiązaniem symbolicznym jest **odrzucana** (kod wyjścia 2) — podaj ścieżkę rzeczywistą. Symlinki wewnątrz drzewa są nadal pomijane z luką.
 - Pliki z wieloma dowiązaniami twardymi (`st_nlink > 1`) są domyślnie **pomijane** z luką `SKIPPED_HARDLINK`. Kopie z deduplikacją (np. `rsync --link-dest`) wymagają `--allow-hardlinks`.
-- `--output` nie może leżeć w żadnym źródle dowodów ani go zawierać; niepoprawny lub nieczytelny `--baseline` to błąd wywołania (kod 2). Baseline trafia do `evidence_manifest`.
+- `--output` nie może leżeć w żadnym źródle dowodów ani go zawierać; niepoprawny lub nieczytelny `--baseline` to błąd wywołania (kod 2). Baseline jest wpisem w `evidence`.
 - Limity dotyczą wszystkich źródeł łącznie; po przekroczeniu analiza jest częściowa i powstaje nazwana luka w `coverage_gaps`. Komunikaty luk zawierają tylko ścieżki względne do źródła i nazwę błędu (np. `EACCES`).
 
 | Flaga | Domyślnie | Znaczenie |
@@ -55,7 +55,7 @@ Tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability, non-r
 - Wykrywa tylko kilka heurystyk PHP, nie zawiera produkcyjnych reguł YARA-X ani weryfikacji oficjalnych checksumów. Integracje przewidziano w pełnej specyfikacji.
 - Parsowanie SQL jest celowo ograniczone do wybranych składni `INSERT INTO`; nie interpretuje złożonych dumpów, `BLOB`, triggerów, procedur, multisite ani całej składni MySQL. Brak informacji jest jawnie zgłaszany.
 - Brak parsera PHP serialization, więc nie rozpoznaje ukrytych zmian w serializowanych opcjach.
-- Nie analizuje logów poza formatem Apache/Nginx combined. Czas w logach zachowany dosłownie, **nie jest normalizowany ani ustalany wektor ataku**.
+- Nie analizuje logów poza formatem Apache/Nginx combined. Czas z logu jest zapisywany dosłownie i, gdy ma strefę, także w UTC; zegar serwera nie jest weryfikowany, a **wektor ataku nie jest ustalany**.
 - Symlinki, pliki specjalne i (domyślnie) pliki z wieloma dowiązaniami twardymi są pomijane z luką; pliki powyżej 4 MiB są haszowane, ale ich zawartość nie jest skanowana. Brak uczenia maszynowego i nie ma wykonywania PHP.
 - Testowe detekcje są heurystykami i mogą mieć false positive / false negative.
 - Nie wdraża pełnej chain of custody, sygnowania dowodów ani modeli uprawnień. Nie uruchamiaj na poufnych realnych danych bez przeglądu bezpieczeństwa.
@@ -63,7 +63,30 @@ Tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability, non-r
 
 ## Schemat JSON
 
-`assessment`: `INDICATORS_FOUND` lub `NO_INDICATORS_IN_ANALYZED_SCOPE` (nigdy „clean”); `timeline`: orientacyjne znaczniki czasu z logów i mtime, nie dowód przyczynowości; `findings`: reguła, waga, pewność, źródło i wyjaśnienie; `evidence_manifest`: SHA-256, rozmiar, ścieżka; `coverage_gaps`: wyłączenia i nieobsługiwane dane.
+`report.json` ma schemat **`poc-1`**: kontrakt w `wptrace/models.py`, opublikowany JSON Schema w [docs/schema/report-poc-1.schema.json](docs/schema/report-poc-1.schema.json), decyzje w [ADR 0003](docs/adr/0003-schemat-poc-1-i-migracja.md). Przykład: [demo/report.json](demo/report.json).
+
+| Pole | Zawartość |
+|---|---|
+| `evidence` | każdy wpis materiału wejściowego, także pominięty: ścieżka względna do źródła, `read_status` (`READ`, `SKIPPED_SYMLINK`, `SKIPPED_HARDLINK`, `SKIPPED_SPECIAL`, `SKIPPED_LIMIT`, `ERROR`, `CHANGED`), SHA-256 i rozmiar, jeśli bajty przeczytano |
+| `observations` | fakty odczytane przez parsery (np. plik PHP w uploads, żądanie HTTP), bez oceny; każda wskazuje dowód i miejsce: ścieżkę, wiersz logu albo tabelę |
+| `findings` | interpretacje: reguła, `severity` i `confidence` jako niezależne skale, wyjaśnienie oraz lista obserwacji, na których ustalenie się opiera |
+| `coverage` | dla `files`, `database`, `logs` i `baseline`: status (`ANALYZED`, `PARTIAL`, `NOT_PROVIDED`, `FAILED`), liczniki wpisów według statusu odczytu i powody |
+| `coverage_gaps` | wszystkie ograniczenia analizy jako teksty |
+| `timeline` | orientacyjne znaczniki czasu w UTC ze źródłem (`log`, `mtime`); nie dowód kolejności ani przyczynowości |
+| `scope_complete` | `true`, gdy pliki, baza i logi zostały przeanalizowane w całości |
+
+Identyfikatory (`ev_…`, `obs_…`, `fnd_…`) są skrótami treści: ten sam materiał daje te same identyfikatory w każdym uruchomieniu.
+
+`assessment` to etykieta triage, nigdy „clean”:
+
+| Wartość | Kiedy |
+|---|---|
+| `STRONG_INDICATORS` | istnieje ustalenie o wadze `high` lub `critical` i pewności `high`. Obecne heurystyki PoC nie osiągają tego progu |
+| `SUSPICIOUS` | istnieje jakiekolwiek inne ustalenie |
+| `NO_INDICATORS_IN_ANALYZED_SCOPE` | brak ustaleń przy pełnym zakresie (`scope_complete`) |
+| `INCONCLUSIVE` | brak ustaleń przy niepełnym zakresie: brak bazy lub logów, pominięte lub zmienione wpisy, przekroczony limit, nieobsługiwany format |
+
+Raporty w starszym schemacie 0.1.0 przenosi czysta funkcja `wptrace.migrate.migrate_0_1_0(report: dict) -> dict`. Stary raport nie niósł pokrycia ani statusów odczytu, więc wynik oznacza je jako `UNKNOWN_LEGACY`, ustalenia opiera na obserwacjach syntetycznych `LEGACY_FINDING`, a ocenę przenosi ostrożnie: `INDICATORS_FOUND` → `SUSPICIOUS`, `NO_INDICATORS_IN_ANALYZED_SCOPE` → `INCONCLUSIVE`. Migracja nie ma wejścia w CLI; narzędzie zapisuje wyłącznie `poc-1`.
 
 ## Dokumentacja projektu
 
