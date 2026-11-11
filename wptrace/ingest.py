@@ -528,5 +528,7 @@ class Session:
 
     def _mark_changed(self, seen: _Seen, difference: str) -> str:
         entry = self.ledger[seen.entry]
-        self.ledger[seen.entry] = replace(entry, status=ReadStatus.CHANGED, reason=f"REVERIFY_{difference}")
-        return f"{CHANGED_GAP}: {_where(entry.source, entry.rel)} (rozbieżność przy ponownej weryfikacji: {difference})"
+        gap = f"{CHANGED_GAP}: {_where(entry.source, entry.rel)} (rozbieżność przy ponownej weryfikacji: {difference})"
+        # Wpis niesie własną lukę: każdy status inny niż READ ma w rejestrze swoje uzasadnienie.
+        self.ledger[seen.entry] = replace(entry, status=ReadStatus.CHANGED, reason=f"REVERIFY_{difference}", gaps=(*entry.gaps, gap))
+        return gap
