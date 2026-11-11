@@ -190,7 +190,10 @@ def iter_insert_rows(sql: str):
     Supports quoted identifiers, optional column list, multi-row VALUES, MySQL
     backslash quotes, numeric and NULL literals. Unsupported INSERTs are ignored.
     """
-    pat = re.compile(r"INSERT\s+INTO\s+`?([A-Za-z0-9_]+)`?\s*(\([^;]*?\))?\s+VALUES\s*", re.I)
+    # Lista kolumn nie zawiera nawiasów: [^;()]* kończy się na pierwszym nawiasie, więc nagłówek bez
+    # zamknięcia nie jest skanowany do końca pliku przy każdym wystąpieniu (czas kwadratowy, #17).
+    # Biały znak przed VALUES dopasowuje dokładnie jeden kwantyfikator, więc długi ciąg spacji nie daje nawrotów.
+    pat = re.compile(r"INSERT\s+INTO\s+`?([A-Za-z0-9_]+)(?![A-Za-z0-9_])`?\s*(?:(\([^;()]*\))\s*)?VALUES\s*", re.I)
     pos = 0
     while (m := pat.search(sql, pos)) is not None:
         table = m.group(1)

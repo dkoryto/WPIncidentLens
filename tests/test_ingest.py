@@ -846,3 +846,20 @@ def test_entry_limit_spans_all_sources_of_a_session(tmp_path):
 
     assert rels(records) == ["f0.php"]
     assert any(record.reason == "MAX_ENTRIES" for record in records)
+
+
+def test_names_listed_in_parent_directories_count_against_the_entry_budget(tmp_path, monkeypatch):
+    root = tmp_path / "nested"
+    (root / "a" / "b").mkdir(parents=True)
+    for directory in (root, root / "a", root / "a" / "b"):
+        for number in range(3):
+            write(directory / f"z{number}.php")
+    requested = []
+    real = ingest._sorted_names
+    monkeypatch.setattr(ingest, "_sorted_names", lambda dir_fd, limit: requested.append(limit) or real(dir_fd, limit))
+    session = Session(Limits(max_entries=20))
+
+    read(root, session)
+
+    assert requested == [20, 16, 12]
+    assert session._pending == 0
