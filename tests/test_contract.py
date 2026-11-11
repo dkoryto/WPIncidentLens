@@ -583,6 +583,10 @@ def test_schema_fields_match_the_fields_the_model_writes(schema, demo_case, anal
 
 MARKUP = "<script src=//example.invalid/x.js></script>"
 SKIPPED_SQL = {
+    "second-statement-on-the-same-line": (f"INSERT INTO `wp_options` VALUES (1,'a','b'); REPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}');\n",
+                                          "PARTIAL", "nieobsługiwanej składni"),
+    "statement-after-a-comment": (f"/* note */ REPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}');\n", "PARTIAL", "nieobsługiwanej składni"),
+    "statement-after-a-line-comment": (f"-- note\n\tReplace INTO `wp_options` VALUES (2,'c','{MARKUP}');\n", "PARTIAL", "nieobsługiwanej składni"),
     "truncated-statement": (f"INSERT INTO `wp_options` VALUES (1,'siteurl','{MARKUP}'),(2,'x','tru", "PARTIAL", "niedomkniętych instrukcji"),
     "replace-into": (f"REPLACE INTO `wp_options` VALUES (1,'a','{MARKUP}');\n", "PARTIAL", "nieobsługiwanej składni"),
     "insert-ignore": (f"INSERT IGNORE INTO `wp_options` VALUES (1,'a','{MARKUP}');\n", "PARTIAL", "nieobsługiwanej składni"),
@@ -618,7 +622,11 @@ def test_dump_without_wordpress_tables_is_not_an_analyzed_database(complete_case
     "INSERT INTO `wp_options` VALUES (5,'note','please insert the key\\ninto the lock');\n",
     "INSERT INTO `wp_options` VALUES (5,'note','x'), (6,'other','y');\n",
     "insert into `wp_options` values (5,'note','x');\n",
-], ids=["keyword-inside-a-value", "multi-row", "lower-case"])
+    "INSERT INTO `wp_options` VALUES (5,'note','a; REPLACE INTO x VALUES (1)');\n",
+    "-- REPLACE INTO `wp_options` VALUES (1,'a','b');\nINSERT INTO `wp_options` VALUES (5,'note','x');\n",
+    "/* INSERT IGNORE INTO t VALUES (1); */ INSERT INTO `wp_options` VALUES (5,'note','x');\n",
+], ids=["keyword-inside-a-value", "multi-row", "lower-case", "statement-text-inside-a-value", "statement-in-a-line-comment",
+        "statement-in-a-block-comment"])
 def test_supported_inserts_keep_database_coverage_complete(complete_case, evidence, analyze, prose):
     database = write(evidence / "plain.sql", admin_sql("siteadmin") + prose)
 

@@ -677,7 +677,22 @@ def test_report_never_contains_an_absolute_host_path(evidence, tmp_path, analyze
     '192.0.2.10 - - [x] "GET ' + "\t" * 20_000,
     '192.0.2.10 - - [x] "GET ' + "/a " * 20_000,
     "192.0.2.10 " + "- " * 20_000,
-], ids=["tabs-after-method", "many-tokens", "many-dashes"])
+    '192.0.2.10 - - [x] "GET /a' + " " * 20_000,
+    '192.0.2.10 - - [x] "GET /a ' + "x " * 20_000,
+], ids=["tabs-after-method", "many-tokens", "many-dashes", "spaces-after-uri", "no-closing-quote"])
 def test_s08_crafted_log_line_does_not_stall_the_log_pattern(line):
     with time_limit(2):
         assert cli.LOG_PATTERN.match(line) is None
+
+
+
+@pytest.mark.parametrize("crafted", [
+    "'" + "\\'" * 100_000,
+    "/*" * 100_000,
+    "`" * 100_001,
+    "INSERT " * 50_000,
+    "-- x\n" * 50_000,
+], ids=["unterminated-string", "unterminated-comments", "odd-backticks", "keywords-without-terminator", "comment-lines"])
+def test_s08_statement_scanner_is_linear_on_crafted_sql(crafted):
+    with time_limit(3):
+        list(cli._write_statement_starts(crafted))
