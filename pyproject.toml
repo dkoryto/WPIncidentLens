@@ -25,6 +25,9 @@ packages = ["wptrace"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "race: prawdziwy wyścig z osobnym procesem podmieniającym wpisy (kilka sekund); wyłączenie: -m \"not race\"",
+]
 
 [tool.ruff]
 target-version = "py312"
