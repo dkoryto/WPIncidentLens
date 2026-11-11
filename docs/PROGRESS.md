@@ -12,7 +12,7 @@ Status `IN REVIEW` oznacza otwarty PR, nie ukończone zadanie. `MERGED` oznacza 
 | T-005 kwadratowy parser INSERT, budżet wpisów | #17 | `agent/T-005-sql-header-linear` | MERGED (#19) | nagłówek INSERT liniowy; nazwy na stosie katalogów w budżecie wpisów |
 | T-006 ustalenia przeglądów T-101 i T-102 | #18 | kilka gałęzi `agent/T-006-*` | MERGED (#21–#26) | pozostałe drobne pozycje w #18 |
 | T-102 kontrakty Evidence/Observation/Finding | #5 | `agent/T-102-contracts` | MERGED (#20) | raport `poc-1`, `INCONCLUSIVE`, kody wyjścia 0/3/4, migracja z 0.1.0, ADR 0003; niezależny przegląd agenta, wada blokująca poprawiona w PR |
-| T-201 analiza plików WordPressa | #6 | — | TODO | odblokowane po T-102 |
+| T-201 analiza plików WordPressa | #6 | — | IN PROGRESS | podział na moduły (ADR 0005); WPDetector, integralność i reguły w osobnych PR |
 | T-301 ekstraktor SQL/JSONL | #7 | — | TODO | odblokowane po T-102 |
 | T-401 logi, UTC, korelacja | #13 | — | BLOCKED | wymaga M1 |
 | T-501 reguły, raport HTML, redakcja | #14 | — | TODO | odblokowane po T-102 |
@@ -35,3 +35,4 @@ Status `IN REVIEW` oznacza otwarty PR, nie ukończone zadanie. `MERGED` oznacza 
 - 2026-11-11 — PR #26 i #27 scalone na polecenie właściciela bez wyniku GitHub Actions (kolejka nie ruszała); zamiast CI lokalny przebieg na Linuksie w kontenerze bez sieci.
 - 2026-11-11 — **Bramka M1:** raport w `docs/M1_GATE.md`. Werdykt agenta: K1 i K2 spełnione z zastrzeżeniami; K3 po poprawkach (nieanalizowane instrukcje SQL, stratne dekodowanie, `NO_TRUSTED_REFERENCE`) spełnione z zastrzeżeniami. Decyzja o przejściu bramki należy do właściciela; zakaz pracy na realnym materiale pozostaje. Następny krok: usunięcie starej nazwy `wpincidentlens`, potem M2 (#6) i M3 (#7).
 - 2026-11-11 — Usunięto dawną nazwę WPTrace: pakiet i polecenie to `wpincidentlens`, pole `tool` w raporcie to `WPIncidentLens PoC`, pliki `docs/WPTrace_*` przemianowane (ADR 0004). Dawna nazwa zostaje tylko w materiałach historycznych.
+- 2026-11-12 — T-201 (#6), krok przygotowawczy: analiza plików wydzielona z `cli.py` do `files.py`, `integrity.py`, `filerules.py`, `analysis.py` (ADR 0005), bez zmiany zachowania. Następny krok: trzy równoległe PR — WPDetector, integralność z referencją, reguły plików.
