@@ -1,0 +1,15 @@
+# Runtime artifacts and Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+results/
+*.log
+.env
+.env.*
+.DS_Store
+# Real incident evidence must never be committed
+evidence/
+cases/
+secrets/

@@ -1,0 +1,22 @@
+services:
+  wptrace:
+    # Build after pinning the base-image digest in Dockerfile.
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    read_only: true
+    network_mode: "none"
+    user: "65532:65532"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    volumes:
+      - ../fixtures/site:/evidence/files:ro
+      - ../fixtures/database.sql:/evidence/db.sql:ro
+      - ../fixtures/logs:/evidence/logs:ro
+      - ../results:/results:rw
+    command: ["--files", "/evidence/files", "--database", "/evidence/db.sql", "--logs", "/evidence/logs", "--known-admin", "knownadmin", "--output", "/results", "--case-id", "DEMO-001"]

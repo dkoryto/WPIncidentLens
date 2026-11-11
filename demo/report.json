@@ -1,0 +1,134 @@
+{
+  "schema_version": "0.1.0",
+  "tool": "WPTrace PoC",
+  "tool_version": "0.1.0-poc",
+  "case_id": "FINAL-DEMO-001",
+  "analyzed_at_utc": "2026-11-09T12:54:47.213151+00:00",
+  "assessment": "INDICATORS_FOUND",
+  "disclaimer": "Brak alertów nie dowodzi braku włamania. PoC, nie certyfikacja śledcza.",
+  "findings": [
+    {
+      "rule": "EXECUTABLE_IN_UPLOADS",
+      "severity": "high",
+      "confidence": "medium",
+      "source_type": "file",
+      "source": "wp-content/uploads/2026/11/cache-view.php",
+      "explanation": "Plik wykonywalny PHP w uploads; wymaga analizy kontekstu.",
+      "metadata": {
+        "sha256": "7f79efadcca2de0bd71f39a07aea6fbbf34fe1e4c683e884667fdf864f85ef8c"
+      }
+    },
+    {
+      "rule": "SUSPICIOUS_PHP_EVAL_DECODE",
+      "severity": "high",
+      "confidence": "medium",
+      "source_type": "file",
+      "source": "wp-content/uploads/2026/11/cache-view.php",
+      "explanation": "Wykryto łańcuch eval(base64_decode(...)); to heurystyka, nie dowód malware.",
+      "metadata": {
+        "sha256": "7f79efadcca2de0bd71f39a07aea6fbbf34fe1e4c683e884667fdf864f85ef8c"
+      }
+    },
+    {
+      "rule": "SUSPICIOUS_DB_MARKUP",
+      "severity": "medium",
+      "confidence": "low",
+      "source_type": "database",
+      "source": "demo_options:custom_footer",
+      "explanation": "Wartość opcji zawiera aktywny znacznik HTML lub schemat JS; wymaga weryfikacji.",
+      "metadata": {}
+    },
+    {
+      "rule": "UNRECOGNIZED_ADMIN",
+      "severity": "high",
+      "confidence": "medium",
+      "source_type": "database",
+      "source": "*_users / *_usermeta",
+      "explanation": "Administrator nie figuruje na dostarczonej, zaufanej liście; nie dowodzi to włamania.",
+      "metadata": {
+        "username": "mysteryadmin",
+        "user_id": "2"
+      }
+    },
+    {
+      "rule": "HTTP_EXECUTABLE_IN_UPLOADS",
+      "severity": "high",
+      "confidence": "medium",
+      "source_type": "http_log",
+      "source": "access.log:1",
+      "explanation": "Żądanie HTTP do pliku PHP w uploads; brak dowodu wykonania kodu.",
+      "metadata": {
+        "uri": "/wp-content/uploads/2026/11/cache-view.php",
+        "method": "POST",
+        "status": 200,
+        "observed_time": "09/Nov/2026:02:14:01 +0100",
+        "client_ip": "192.0.2.10"
+      }
+    },
+    {
+      "rule": "CORRELATED_UPLOAD_REQUEST",
+      "severity": "high",
+      "confidence": "medium",
+      "source_type": "correlation",
+      "source": "wp-content/uploads/2026/11/cache-view.php",
+      "explanation": "Ten sam podejrzany plik występuje w obrazie witryny i w logu HTTP; to korelacja, nie dowód wykonania kodu.",
+      "metadata": {
+        "file_source": "wp-content/uploads/2026/11/cache-view.php",
+        "log_source": "access.log:1"
+      }
+    }
+  ],
+  "counts": {
+    "high": 5,
+    "medium": 1
+  },
+  "timeline": [
+    {
+      "time_utc": "2026-11-09T01:14:01+00:00",
+      "source": "access.log:1",
+      "event": "HTTP_EXECUTABLE_IN_UPLOADS",
+      "timestamp_basis": "HTTP access log; synchronizacja zegara niezweryfikowana",
+      "confidence": "medium"
+    },
+    {
+      "time_utc": "2026-11-09T12:48:48.168411+00:00",
+      "source": "files/wp-content/uploads/2026/11/cache-view.php",
+      "event": "SUSPICIOUS_FILE_MTIME",
+      "timestamp_basis": "Filesystem mtime: zmienialny; nie oznacza czasu ataku",
+      "confidence": "low"
+    }
+  ],
+  "coverage_gaps": [
+    "Parser SQL PoC obsługuje wybrane INSERT; nie obsługuje triggerów, procedur, pełnej składni ani multisite"
+  ],
+  "evidence_manifest": [
+    {
+      "source": "database/database.sql",
+      "sha256": "4537f75d228afaf9739f8969cccb4420e4cadfbe29b6e0d675b07adc039943fd",
+      "size": 681
+    },
+    {
+      "source": "files/index.php",
+      "sha256": "fd2178497bf11c65e4e9927059fc8f44a5fafdbf1c03591bbb08c260869642e9",
+      "size": 85,
+      "mtime_ns": 1794228528166636228
+    },
+    {
+      "source": "files/wp-config.php",
+      "sha256": "f06a5eca5c633f61c89c35174036d188b3e67b26e827fc7ef2139cf5eae2b311",
+      "size": 65,
+      "mtime_ns": 1794228528169665328
+    },
+    {
+      "source": "files/wp-content/uploads/2026/11/cache-view.php",
+      "sha256": "7f79efadcca2de0bd71f39a07aea6fbbf34fe1e4c683e884667fdf864f85ef8c",
+      "size": 116,
+      "mtime_ns": 1794228528168410906
+    },
+    {
+      "source": "logs/access.log",
+      "sha256": "1b47959574b08906a6a4fb1916ef014256deeb84fa7b910219cd2900d696ecfc",
+      "size": 225
+    }
+  ]
+}

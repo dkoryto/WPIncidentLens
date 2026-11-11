@@ -1,0 +1,23 @@
+WPTrace PoC v0.1.0 / specyfikacja v0.9
+Data: 2026-11-09
+
+Dostarczone:
+- WPTrace_Specyfikacja_Techniczna.docx: 15 stron, specyfikacja dla dewelopera i ocena architektoniczna
+- WPTrace_Specyfikacja_Techniczna.md: edytowalny tekst specyfikacji
+- WPTrace_Przeglad_Inzynierski.md: niezalezny przeglad, GO/NO-GO
+- WPTrace_PoC/: dzialajacy demonstracyjny CLI Python, testy, syntetyczne fixture, Dockerfile/Compose
+- demo/report.json, demo/report.html: przykladowe wyniki z materialu syntetycznego
+
+Lokalnie zweryfikowane:
+- pytest: 6 passed
+- przeplyw CLI na fixture: assessment=INDICATORS_FOUND, 6 findings, 2 timeline events, 1 coverage gap, 5 evidence-manifest entries
+- sprawdzono generacje HTML/JSON
+- DOCX wyrenderowano i przejrzano: 15 stron
+
+Niezweryfikowane / nieobecne:
+- Docker Engine nie uruchamiany w tym srodowisku
+- Brak rzeczywistej analizy incydentow, probek produkcyjnych i pomiarow skutecznosci
+- Brak YARA-X, oficjalnych checksumow WordPressa, produkcyjnego parsera SQL i pelnego chain of custody
+- Brak niezaleznego audytu zewnetrznego; "niezalezny przeglad" oznacza ocene projektowa, nie zewnetrzna certyfikacje
+
+Decyzja: GO tylko do demonstracji/lokalnego rozwoju; NO-GO dla produkcyjnego DFIR.
