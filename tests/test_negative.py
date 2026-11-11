@@ -151,13 +151,19 @@ def test_n7_log_event_time_is_marked_as_unverified_clock(site, evidence, analyze
 
 # --- N8 i brak wiarygodnego baseline ------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="plik bez wpisu w baseline jest pomijany milcząco; brak NO_TRUSTED_REFERENCE (#6)")
 def test_n8_premium_plugin_without_checksums_has_no_trusted_reference(site, analyze):
     write(site / "wp-content" / "plugins" / "premium-demo" / "premium.php")
 
     run = analyze(site, baseline={"files": {"index.php": sha256(site / "index.php")}})
 
-    assert "NO_TRUSTED_REFERENCE" in run.json_text
+    assert run.has_gap("NO_TRUSTED_REFERENCE: 1 odczytanych plików")
+    assert run.has_gap("wp-content/plugins/premium-demo/premium.php")
+
+
+def test_files_all_listed_in_baseline_have_no_trusted_reference_note(site, analyze):
+    run = analyze(site, baseline={"files": {"index.php": sha256(site / "index.php")}})
+
+    assert not run.has_gap("NO_TRUSTED_REFERENCE")
 
 
 @pytest.mark.parametrize("baseline", [None, {"files": {}}], ids=["not-provided", "empty-manifest"])
