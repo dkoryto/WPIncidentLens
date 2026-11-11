@@ -1,10 +1,10 @@
 # WPIncidentLens — mapa wymagań i stanu implementacji (T-002, aktualizacja po M1)
 
-**Data:** 2026-11-11. **Stan kodu:** gałąź `agent/T-101-case-manager`, commit `4cac876` (PR #27 — w chwili pisania **niescalony** z `main`). **Źródło wymagań:** `docs/WPTrace_Specyfikacja_Senior_PoC_2026-11-09.md` (kolumna „Spec”).
+**Data:** 2026-11-11. **Stan kodu:** gałąź `agent/T-101-case-manager`, commit `4cac876` (PR #27 — w chwili pisania **niescalony** z `main`). **Źródło wymagań:** `docs/WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.md` (kolumna „Spec”).
 
 Mapa opisuje **stan obecny**, nie plan. Numery linii sprawdzono w kodzie tego commita; każdy wskazany test został uruchomiony (macOS, wynik zbiorczy w `docs/TEST_MATRIX.md`).
 
-Skróty modułów: `cli` = `wptrace/cli.py`, `ing` = `wptrace/ingest.py`, `mod` = `wptrace/models.py`, `mig` = `wptrace/migrate.py`, `case` = `wptrace/case.py`, `rep` = `wptrace/report.py`.
+Skróty modułów: `cli` = `wpincidentlens/cli.py`, `ing` = `wpincidentlens/ingest.py`, `mod` = `wpincidentlens/models.py`, `mig` = `wpincidentlens/migrate.py`, `case` = `wpincidentlens/case.py`, `rep` = `wpincidentlens/report.py`.
 
 Skróty plików testów (`tests/test_*.py`): `cli` = `test_cli`, `pos` = `test_scenarios_positive`, `neg` = `test_negative`, `sec` = `test_security_inputs`, `inv` = `test_invariants`, `ing` = `test_ingest`, `prop` = `test_ingest_properties`, `mod` = `test_models`, `con` = `test_contract`, `mig` = `test_migrate`, `case` = `test_case`, `rw` = `test_report_writer`. W kolumnie „Test” pominięto przedrostek `test_`. „XFAIL (#N)” = test istnieje i potwierdza lukę.
 

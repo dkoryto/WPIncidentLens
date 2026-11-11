@@ -5,9 +5,9 @@
 | **Status** | **ACCEPTED** (2026-11-11) |
 | **Kto zdecydował** | Agent kodujący, na podstawie delegacji właściciela repozytorium udzielonej 2026-11-11 („sam podejmuj decyzje”), tak jak ADR 0002. |
 | **Czego to nie oznacza** | Nie odbył się niezależny przegląd AppSec ani przegląd przez drugą osobę. Pozostaje on wymagany przed bramką GO/NO-GO (M7) i przed jakimkolwiek użyciem na realnym materiale. Właściciel może każdą decyzję zmienić; rollback = nowy ADR. |
-| **Wdraża** | ADR 0002: B9, D2, D5, D7; specyfikacja `docs/WPTrace_Specyfikacja_Senior_PoC_2026-11-09.md` §4, §9, §11 |
+| **Wdraża** | ADR 0002: B9, D2, D5, D7; specyfikacja `docs/WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.md` §4, §9, §11 |
 | **Zadanie** | T-102 (#5) |
-| **Kod** | `wptrace/models.py`, `wptrace/migrate.py`, `wptrace/cli.py`, `docs/schema/report-poc-1.schema.json` |
+| **Kod** | `wpincidentlens/models.py`, `wpincidentlens/migrate.py`, `wpincidentlens/cli.py`, `docs/schema/report-poc-1.schema.json` |
 
 ## Kontekst
 
@@ -62,7 +62,7 @@ Konsekwencje: identyfikator nie zależy od kolejności przejścia, `PYTHONHASHSE
 
 ## 4. Walidacja: model i schemat
 
-- `wptrace/models.py`: zamrożone `dataclasses` z jawną walidacją (D2), bez zależności. `validate_report(dict)` sprawdza typy, wyliczenia, nieznane i brakujące pola, unikalność identyfikatorów, istnienie wskazywanych dowodów i obserwacji, zgodność identyfikatorów z treścią, spójność liczników ze statusem pokrycia oraz zgodność `assessment` i `scope_complete` z regułą. Błąd to `ModelError` z nazwą pola.
+- `wpincidentlens/models.py`: zamrożone `dataclasses` z jawną walidacją (D2), bez zależności. `validate_report(dict)` sprawdza typy, wyliczenia, nieznane i brakujące pola, unikalność identyfikatorów, istnienie wskazywanych dowodów i obserwacji, zgodność identyfikatorów z treścią, spójność liczników ze statusem pokrycia oraz zgodność `assessment` i `scope_complete` z regułą. Błąd to `ModelError` z nazwą pola.
 - **Liczniki a dowody (T-006, #18).** W raporcie bez `migrated_from` liczniki `coverage[źródło].entries` muszą mieć pokrycie w `evidence[]` tego źródła: (1) dowodów o danym `read_status` jest najwyżej tyle, ile wynosi licznik tego statusu; (2) licznik niezerowy ma co najmniej jeden dowód, przy czym `READ` i `CHANGED` są liczone łącznie, bo ten sam plik ma w obu statusach jeden identyfikator (§2). Raport z `coverage.database = ANALYZED` i `READ: 1`, ale bez dowodu bazy, jest więc odrzucany, tak samo jak dowód źródła `NOT_PROVIDED` albo dowód pominięty przy liczniku zerowym. Równości nie wymagamy celowo: liczniki liczą wpisy rejestru odczytu, a `evidence[]` scala wpisy o identycznej tożsamości. Po uczynieniu nazw zastępczych różnowartościowymi (`ingest._printable`) taki przypadek nie powstaje w zwykłym przebiegu — w każdym raporcie pisanym w testach liczniki są równe liczbie dowodów — ale pozostaje możliwy, gdy katalog zmieniany w trakcie listowania zwróci tę samą nazwę dwukrotnie albo gdy jedna sesja odczyta to samo źródło dwa razy; odrzucenie własnego raportu po zakończonej analizie byłoby wtedy gorsze niż słabsza reguła. Skutek uboczny: usunięcie z ręcznie zmienionego raportu jednego z kilku dowodów o tym samym statusie nie jest wykrywane. Raport przeniesiony z 0.1.0 nie podlega regule (stary manifest nie zawierał wpisów pominiętych).
 - **Tekst zapisywalny w UTF-8 (T-006, #18).** Każde pole tekstowe, także nazwa i wartość atrybutu obserwacji, jest odrzucane, gdy zawiera samotny surogat (U+D800–U+DFFF): „poprawny” raport musi dać się zapisać jako JSON w UTF-8. Obie reguły zawężają zbiór akceptowanych dokumentów bez zmiany `schema_version`: raport, który je łamie, był wewnętrznie sprzeczny albo niezapisywalny, a narzędzie takiego nie pisało.
 - `docs/schema/report-poc-1.schema.json` (draft 2020-12) opisuje kształt. Nie wyraża referencji ani reguły oceny — to ograniczenie JSON Schema, opisane w samym pliku. `jsonschema` jest zależnością wyłącznie testową (`pyproject.toml`, extras `dev` i `test`); test pilnuje, by wyliczenia w pliku i w modelu były identyczne.
@@ -112,7 +112,7 @@ Skutek: `INCONCLUSIVE` nigdy nie kończy się kodem `0`; `SUSPICIOUS` i `STRONG_
 
 ## 8. Migracja 0.1.0 → `poc-1`
 
-`wptrace.migrate.migrate_0_1_0(report: dict) -> dict` jest czystą funkcją: nie czyta i nie zapisuje plików, nie zmienia wejścia, a wynik przechodzi `validate_report` i JSON Schema. Czego nie da się odtworzyć, jest oznaczone jawnie.
+`wpincidentlens.migrate.migrate_0_1_0(report: dict) -> dict` jest czystą funkcją: nie czyta i nie zapisuje plików, nie zmienia wejścia, a wynik przechodzi `validate_report` i JSON Schema. Czego nie da się odtworzyć, jest oznaczone jawnie.
 
 | 0.1.0 | `poc-1` |
 |---|---|
@@ -154,7 +154,7 @@ Poza zakresem T-102 pozostają także: redakcja i pseudonimizacja (B8, #14) — 
 ## 10. Polityka wersjonowania
 
 - `poc-1` jest zamknięty: każda zmiana, po której poprawny dotąd raport przestaje przechodzić `validate_report` albo zmienia znaczenie istniejącego pola, wymaga `poc-2`. Dotyczy to usunięcia lub zmiany typu pola, dodania pola wymaganego, zmiany reguły identyfikatorów, zmiany reguły `assessment` lub `scope_complete`, zmiany znaczenia wartości wyliczenia.
-- Każda nowa wersja ma nowy plik `docs/schema/report-<wersja>.schema.json`, funkcję migrującą z wersji poprzedniej w `wptrace/migrate.py`, test kompatybilności na zachowanym raporcie poprzedniej wersji i ADR. Narzędzie zapisuje zawsze tylko najnowszą wersję (D7).
+- Każda nowa wersja ma nowy plik `docs/schema/report-<wersja>.schema.json`, funkcję migrującą z wersji poprzedniej w `wpincidentlens/migrate.py`, test kompatybilności na zachowanym raporcie poprzedniej wersji i ADR. Narzędzie zapisuje zawsze tylko najnowszą wersję (D7).
 - Model i schemat odrzucają nieznane pola, więc także dodanie pola opcjonalnego wymaga jednoczesnej zmiany modelu, schematu i testów; w fazie PoC nie utrzymujemy zgodności „w przód”.
 - Nowy `kind` obserwacji, nowe `rule_id` i nowy tekst powodu nie zmieniają wersji schematu: to wartości, nie kształt.
 
@@ -172,7 +172,7 @@ Przyjęte przez agenta prowadzącego z delegacji właściciela (2026-11-11); ka�
 ## Konsekwencje
 
 - `tests/test_cli.py::test_no_indicators_not_a_clean_bill` oczekuje teraz `INCONCLUSIVE` (B9); pozostałe zmiany asercji dotyczą wyłącznie nazw pól nowego kształtu.
-- `wptrace/ingest.py` dostał atrybut `Session.integrity_notes` (źródło i tekst każdej rozbieżności z ponownej weryfikacji). Logika odczytu się nie zmieniła; zmiana pozwala przypisać rozbieżność do źródła bez parsowania tekstu.
+- `wpincidentlens/ingest.py` dostał atrybut `Session.integrity_notes` (źródło i tekst każdej rozbieżności z ponownej weryfikacji). Logika odczytu się nie zmieniła; zmiana pozwala przypisać rozbieżność do źródła bez parsowania tekstu.
 - `compose_report` nie przyjmuje już baseline, którego nie wczytano w tej samej sesji (`load_baseline`): dowodem braku pliku jest wpis baseline w rejestrze sesji.
 - Lista wyjątków strażnika D4 nie wydłużyła się: `models.py` i `migrate.py` nie dotykają systemu plików.
-- Rollback: przywrócenie zapisu 0.1.0 wymaga cofnięcia zmian w `wptrace/cli.py` i testach; raporty `poc-1` nie mają migracji wstecz.
+- Rollback: przywrócenie zapisu 0.1.0 wymaga cofnięcia zmian w `wpincidentlens/cli.py` i testach; raporty `poc-1` nie mają migracji wstecz.

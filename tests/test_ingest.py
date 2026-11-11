@@ -16,8 +16,8 @@ from pathlib import Path
 import pytest
 from conftest import EVAL_MARKER, open_fd_count, sha256, sparse, time_limit, tree_digest, write
 
-from wptrace import ingest
-from wptrace.ingest import IngestRefusal, Limits, ReadStatus, Session
+from wpincidentlens import ingest
+from wpincidentlens.ingest import IngestRefusal, Limits, ReadStatus, Session
 
 CHANGED = "SOURCE_CHANGED_DURING_ANALYSIS"
 needs_permission_bits = pytest.mark.skipif(os.geteuid() == 0, reason="root ignoruje bity uprawnień")

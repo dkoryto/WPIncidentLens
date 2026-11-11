@@ -18,9 +18,9 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from wptrace import ingest
-from wptrace.cli import EXIT_COMPLETE, EXIT_PARTIAL, EXIT_UNPROCESSED, main
-from wptrace.models import describe_location, validate_report
+from wpincidentlens import ingest
+from wpincidentlens.cli import EXIT_COMPLETE, EXIT_PARTIAL, EXIT_UNPROCESSED, main
+from wpincidentlens.models import describe_location, validate_report
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 SCHEMA_PATH = Path(__file__).parents[1] / "docs" / "schema" / "report-poc-1.schema.json"
@@ -156,7 +156,7 @@ def time_limit(seconds: float):
 
 @dataclass
 class Run:
-    """Wynik uruchomienia ``wptrace``: surowy raport ``poc-1`` oraz widoki łączące ustalenie z jego obserwacją i dowodem."""
+    """Wynik uruchomienia ``wpincidentlens``: surowy raport ``poc-1`` oraz widoki łączące ustalenie z jego obserwacją i dowodem."""
     report: dict
     json_text: str
     html: str
@@ -254,7 +254,7 @@ def demo_case(evidence: Path) -> Path:
 
 @pytest.fixture
 def analyze(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
-    """Uruchamia publiczny interfejs ``wptrace`` i zwraca odczytany raport."""
+    """Uruchamia publiczny interfejs ``wpincidentlens`` i zwraca odczytany raport."""
     counter = iter(range(1, 1000))
 
     def run(site: Path, *, database: Path | None = None, logs: Path | None = None,
@@ -289,7 +289,7 @@ def analyze(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
 
 @pytest.fixture
 def refuse(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
-    """Uruchamia ``wptrace`` oczekując odmowy (kod 2); zwraca komunikat błędu, a wyniki nie mogą powstać."""
+    """Uruchamia ``wpincidentlens`` oczekując odmowy (kod 2); zwraca komunikat błędu, a wyniki nie mogą powstać."""
     def run(*argv: str) -> str:
         out = tmp_path / "refused-out"
         capsys.readouterr()

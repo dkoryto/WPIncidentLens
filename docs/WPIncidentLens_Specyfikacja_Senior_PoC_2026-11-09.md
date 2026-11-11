@@ -1,4 +1,4 @@
-# WPTrace — kompletna specyfikacja wykonawcza PoC
+# WPIncidentLens — kompletna specyfikacja wykonawcza PoC
 
 **Dla:** senior Python engineer, security engineer, technical lead i asystenta programistycznego (vibe coding)  
 **Wersja dokumentu:** 1.0 / 9 listopada 2026  
@@ -88,7 +88,7 @@ Panel CLI podaje: identyfikator sprawy, liczbę materiałów, kompletność wej�
 [Host dowodowy / snapshot / backup]     <-- źródła nigdy nie są modyfikowane
              |
              v
-     [Evidence acquisition]  (poza WPTrace; operator + protokół)
+     [Evidence acquisition]  (poza WPIncidentLens; operator + protokół)
              |
              v
      [Readonly case bundle]  -->  [Manifest SHA-256 + origin]
@@ -195,7 +195,7 @@ Pozyskanie jest zadaniem administratora/IR poza narzędziem. Zabezpieczyć zakre
 
 ### 5.2 Import w praktyce
 
-Pierwsze wydanie przyjmuje już rozpakowany katalog + indywidualne pliki `database.sql`, `database.jsonl`, `access.log`, opcjonalne `error.log`. **Brak obsługi dostarczonego przez użytkownika ZIP/TAR** w PoC — ryzyko traversal i decompression bombs. Jeżeli operator potrzebuje archiwum, rozpakowuje je kontrolowaną procedurą na osobnej stacji przed intake, a WPTrace skanuje tylko już przygotowaną kopię.
+Pierwsze wydanie przyjmuje już rozpakowany katalog + indywidualne pliki `database.sql`, `database.jsonl`, `access.log`, opcjonalne `error.log`. **Brak obsługi dostarczonego przez użytkownika ZIP/TAR** w PoC — ryzyko traversal i decompression bombs. Jeżeli operator potrzebuje archiwum, rozpakowuje je kontrolowaną procedurą na osobnej stacji przed intake, a WPIncidentLens skanuje tylko już przygotowaną kopię.
 
 ### 5.3 Guardrails
 
@@ -214,7 +214,7 @@ Nie wykonywać ani nie importować jako PHP. Prefiks tabel, nazwy bazy i ewentua
 
 ### 6.1 Wersja i referencje
 
-Oficjalne checksumy core WordPressa działają w zależności od **wersji i locale**; WP-CLI używa porównania MD5 do publikowanych manifestów. W WPTrace MD5 służy **wyłącznie do porównania z oficjalną dystrybucją**, a manifest dowodowy zawsze używa SHA-256. Nie pobierać danych z sieci w trybie analizy: manifesty pobiera osobny administracyjny mechanizm aktualizacji, zapisuje ich pochodzenie, datę i hash paczki. Wersji odczytanej z przejętego `version.php` nie ufać bez dodatkowej weryfikacji.
+Oficjalne checksumy core WordPressa działają w zależności od **wersji i locale**; WP-CLI używa porównania MD5 do publikowanych manifestów. W WPIncidentLens MD5 służy **wyłącznie do porównania z oficjalną dystrybucją**, a manifest dowodowy zawsze używa SHA-256. Nie pobierać danych z sieci w trybie analizy: manifesty pobiera osobny administracyjny mechanizm aktualizacji, zapisuje ich pochodzenie, datę i hash paczki. Wersji odczytanej z przejętego `version.php` nie ufać bez dodatkowej weryfikacji.
 
 ### 6.2 Klasyfikacja plików
 
@@ -319,7 +319,7 @@ Reguły poddawać testom regresyjnym z dwiema osobnymi tabelami `severity` i `co
 
 Powtórne zdarzenia HTTP na tym samym identyfikatorze reguły agregować do finding z licznością i zakresem czasu; zachować pierwotne observations. Wyjątki dla legalnych plików i kont są możliwe tylko jako jawne reguły podpisane kontekstem środowiska, nie globalne ciche whitelistingi. Suppression **nie usuwa** surowej obserwacji, lecz zmienia jej status w raporcie.
 
-## 10. Model zagrożeń samego WPTrace
+## 10. Model zagrożeń samego WPIncidentLens
 
 ### 10.1 Nieufne wejścia
 
@@ -359,13 +359,13 @@ Przetwarzane dane mogą zawierać PII i sekrety. Domyślny raport nie publikuje 
 **To przykładowy interfejs projektowany dla przyszłego PoC, nie kod gotowego programu.**
 
 ```bash
-wptrace case init --case-id CASE-2026-001 --out ./cases/CASE-2026-001
-wptrace analyze --case ./cases/CASE-2026-001/case.json \
+wpincidentlens case init --case-id CASE-2026-001 --out ./cases/CASE-2026-001
+wpincidentlens analyze --case ./cases/CASE-2026-001/case.json \
   --files /evidence/wordpress --database /evidence/database.sql \
   --logs /evidence/logs --baseline /evidence/baseline \
-  --rules /opt/wptrace/rules --output /results/CASE-2026-001 --offline
-wptrace report verify --case /results/CASE-2026-001
-wptrace version
+  --rules /opt/wpincidentlens/rules --output /results/CASE-2026-001 --offline
+wpincidentlens report verify --case /results/CASE-2026-001
+wpincidentlens version
 ```
 
 `analyze`: konfigurację bierze z case, override tylko jawny; waliduje ścieżki przed odczytem; wypisuje stan każdego adaptera; tworzy wyniki atomowo, nie nadpisuje przypadków bez `--force` i zapisu poprzedniej wersji. W trybie offline brak pobierania aktualizacji. `report verify` sprawdza spójność referencji i hashów raportu, **nie certyfikuje autentyczności historycznej źródeł**.
@@ -375,7 +375,7 @@ wptrace version
 ## 12. Struktura repozytorium dla seniora
 
 ```text
-wptrace/
+wpincidentlens/
   README.md
   SECURITY.md
   LICENSE
@@ -391,7 +391,7 @@ wptrace/
       ADR-001-offline-first.md
       ADR-002-dump-strategy.md
       ADR-003-report-status.md
-  src/wptrace/
+  src/wpincidentlens/
     cli.py
     case.py
     models/
@@ -525,27 +525,27 @@ Każda faza dostarcza: PR, opis kontraktów, fixtures, test report, aktualizacj�
 
 ### Prompt A — rola i zasady nadrzędne
 
-> Jesteś senior Python engineer i application security reviewer. Projekt: WPTrace, offline WordPress incident triage. Pracuj wyłącznie na syntetycznych fixtures i zgodnie z dostarczoną specyfikacją. Nie uruchamiaj PHP z wejścia, nie wykonuj SQL, nie odpytywaj badanej strony, nie dodawaj outbound telemetry. Najpierw zaproponuj kontrakt I/O, testy negatywne, threat model i listę zależności. Nie generuj kodu przed zatwierdzeniem planu. W każdej odpowiedzi podaj: zakres, decyzję, ryzyka, testy, coverage gaps, Definition of Done i ograniczenia.
+> Jesteś senior Python engineer i application security reviewer. Projekt: WPIncidentLens, offline WordPress incident triage. Pracuj wyłącznie na syntetycznych fixtures i zgodnie z dostarczoną specyfikacją. Nie uruchamiaj PHP z wejścia, nie wykonuj SQL, nie odpytywaj badanej strony, nie dodawaj outbound telemetry. Najpierw zaproponuj kontrakt I/O, testy negatywne, threat model i listę zależności. Nie generuj kodu przed zatwierdzeniem planu. W każdej odpowiedzi podaj: zakres, decyzję, ryzyka, testy, coverage gaps, Definition of Done i ograniczenia.
 
 ### Prompt B — pojedynczy feature / ticket
 
-> Implementuj tylko zadanie [T-ID] z dostarczonej specyfikacji WPTrace. Przed kodem podaj krótki plan, zależności, sposób nieprzekraczania granic zaufania i scenariusze testów. Zachowaj kontrakty JSON/schema, nie wymyślaj nowych źródeł danych. Przy nieobsługiwanym wejściu zwracaj jawne, możliwe do testowania błędy i coverage gaps. Dodaj unit, integration i security-negative tests, dokumentację oraz minimalny przykład na danych fikcyjnych. Po implementacji uruchom wymagane testy, porównaj wynik z DoD, wskaż niezamknięte ryzyka. Nie twierdź, że test przeszedł, jeśli go nie uruchomiono.
+> Implementuj tylko zadanie [T-ID] z dostarczonej specyfikacji WPIncidentLens. Przed kodem podaj krótki plan, zależności, sposób nieprzekraczania granic zaufania i scenariusze testów. Zachowaj kontrakty JSON/schema, nie wymyślaj nowych źródeł danych. Przy nieobsługiwanym wejściu zwracaj jawne, możliwe do testowania błędy i coverage gaps. Dodaj unit, integration i security-negative tests, dokumentację oraz minimalny przykład na danych fikcyjnych. Po implementacji uruchom wymagane testy, porównaj wynik z DoD, wskaż niezamknięte ryzyka. Nie twierdź, że test przeszedł, jeśli go nie uruchomiono.
 
 ### Prompt C — niezależny przegląd security
 
-> Przejrzyj implementację WPTrace jako nieufny parser materiałów powłamaniowych. Szukaj: traversal, symlink/race, out-of-bounds, resource exhaustion, wykonania PHP/SQL, deserializacji obiektów PHP, injection/XSS, wydruku sekretów, kontaktów sieciowych, przeoczeń SQL i fałszywego stwierdzenia „clean”. Podaj findings P0/P1/P2 z plikiem, linią, reprodukcją na syntetycznej próbce oraz konkretną poprawką. Nie wdrażaj poprawki bez osobnej decyzji.
+> Przejrzyj implementację WPIncidentLens jako nieufny parser materiałów powłamaniowych. Szukaj: traversal, symlink/race, out-of-bounds, resource exhaustion, wykonania PHP/SQL, deserializacji obiektów PHP, injection/XSS, wydruku sekretów, kontaktów sieciowych, przeoczeń SQL i fałszywego stwierdzenia „clean”. Podaj findings P0/P1/P2 z plikiem, linią, reprodukcją na syntetycznej próbce oraz konkretną poprawką. Nie wdrażaj poprawki bez osobnej decyzji.
 
 ### Prompt D — analiza testów i gotowości
 
-> Oceń, czy WPTrace PoC spełnia kryteria M0–M7. Nie utożsamiaj uruchomienia jednej próbki z gotowością. Zestaw wyniki testów, luki coverage, fałszywe alarmy, brakujące przypadki, dowody izolacji Dockera i reproducibility. Przy każdym kryterium oznacz PASS / FAIL / NOT_TESTED z linkiem do dowodu. Przedstaw decyzję GO/NO-GO dla wewnętrznej demonstracji, a osobno dla produkcji. Bez dowodu nie przyznawaj PASS.
+> Oceń, czy WPIncidentLens PoC spełnia kryteria M0–M7. Nie utożsamiaj uruchomienia jednej próbki z gotowością. Zestaw wyniki testów, luki coverage, fałszywe alarmy, brakujące przypadki, dowody izolacji Dockera i reproducibility. Przy każdym kryterium oznacz PASS / FAIL / NOT_TESTED z linkiem do dowodu. Przedstaw decyzję GO/NO-GO dla wewnętrznej demonstracji, a osobno dla produkcji. Bez dowodu nie przyznawaj PASS.
 
 ### Prompt E — przygotowanie demo i komunikacji
 
-> Na podstawie zatwierdzonych fixture WPTrace przygotuj scenariusz prezentacji na 5 minut, z jasnym rozróżnieniem danych syntetycznych od incydentu rzeczywistego. Pokaż import, wykrycie PHP w uploadach, korelację z logiem, analizę bazy, otwarcie dowodu, status niepewności i eksport HTML. Nie twierdź, że WPTrace automatycznie ustala sprawcę lub wektor wejścia. Zakończ listą ograniczeń i następnym kamieniem milowym.
+> Na podstawie zatwierdzonych fixture WPIncidentLens przygotuj scenariusz prezentacji na 5 minut, z jasnym rozróżnieniem danych syntetycznych od incydentu rzeczywistego. Pokaż import, wykrycie PHP w uploadach, korelację z logiem, analizę bazy, otwarcie dowodu, status niepewności i eksport HTML. Nie twierdź, że WPIncidentLens automatycznie ustala sprawcę lub wektor wejścia. Zakończ listą ograniczeń i następnym kamieniem milowym.
 
 ### Prompt F — reviewer spec-to-code
 
-> Porównaj PR z WPTrace Specyfikacja Senior PoC v1.0: wymagania, acceptance tests, threat model, zakres i schematy. Wydrukuj macierz śledzenia: wymaganie → plik → test → wynik → ryzyko. Nie oceniaj jakości samego stylu; skup się na niewywiązaniu z kontraktu i lukach bezpieczeństwa. Przy brakach wstrzymaj merge.
+> Porównaj PR z WPIncidentLens Specyfikacja Senior PoC v1.0: wymagania, acceptance tests, threat model, zakres i schematy. Wydrukuj macierz śledzenia: wymaganie → plik → test → wynik → ryzyko. Nie oceniaj jakości samego stylu; skup się na niewywiązaniu z kontraktu i lukach bezpieczeństwa. Przy brakach wstrzymaj merge.
 
 ## 20. Finalne kryteria akceptacji całego PoC
 

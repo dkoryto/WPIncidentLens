@@ -19,9 +19,9 @@ Powiązane dokumenty: `docs/TEST_MATRIX.md` (wyniki i lista testów), `docs/THRE
 |---|---|
 | `python -m ruff check .` | All checks passed (reguły `E9`, `F`) |
 | `python -m pytest -q` | **1853 passed, 5 skipped, 13 xfailed** |
-| `python -m pytest -q --cov=wptrace --cov-report=term-missing` | ten sam wynik; pokrycie liniowe **99%** (`cli.py` 98%, `ingest.py` 98%, `migrate.py` 99%, `case.py`, `models.py`, `report.py` 100%) |
+| `python -m pytest -q --cov=wpincidentlens --cov-report=term-missing` | ten sam wynik; pokrycie liniowe **99%** (`cli.py` 98%, `ingest.py` 98%, `migrate.py` 99%, `case.py`, `models.py`, `report.py` 100%) |
 | `python -m pytest -v` | ten sam wynik (trzeci przebieg) |
-| `python -m wptrace … --case-id DEMO-001` na `fixtures/` | kod 0, `SUSPICIOUS`, `scope_complete: true`, 6 ustaleń |
+| `python -m wpincidentlens … --case-id DEMO-001` na `fixtures/` | kod 0, `SUSPICIOUS`, `scope_complete: true`, 6 ustaleń |
 
 Linuksa, Windows i kontenera nie uruchamiano. Wynik z Linuksa znany jest wyłącznie z opisu PR #27 („1856 passed, 2 skipped, 13 xfailed”, kontener `python:3.12-slim`, `--network none`, uid 1000 — pomiar agenta prowadzącego, tutaj nieodtworzony). Wyniku CI dla PR #27 nie sprawdzano.
 
@@ -68,7 +68,7 @@ Dowód — testy, które przeszły w przebiegu z §1 (liczba przypadków w nawia
 
 Zastrzeżenia:
 
-1. **Nie wszystko się wykonało.** Cztery testy nazw plików spoza UTF-8 (`sec::test_s05_non_utf8_filename_does_not_break_the_report`, dwa w `ing`, jeden w `prop`) są na macOS pomijane, bo APFS nie pozwala utworzyć takiej nazwy. W tym środowisku ścieżka kodu `wptrace/ingest.py:413` nie została wykonana ani razu.
+1. **Nie wszystko się wykonało.** Cztery testy nazw plików spoza UTF-8 (`sec::test_s05_non_utf8_filename_does_not_break_the_report`, dwa w `ing`, jeden w `prop`) są na macOS pomijane, bo APFS nie pozwala utworzyć takiej nazwy. W tym środowisku ścieżka kodu `wpincidentlens/ingest.py:413` nie została wykonana ani razu.
 2. **Nie wszystko przechodzi.** W `tests/test_security_inputs.py` jest 5 przypadków XFAIL: stratne dekodowanie SQL i logu bez luki (S-10, ×2), rola administratora rozpoznawana podciągiem (S-11), brak CSP (S-12), token z query stringu w raporcie (S-13). Dotyczą parserów i raportu, nie odczytu plików, ale są testami odporności na wejście.
 3. **Jedna platforma.** ADR 0002 B3 deklaruje gwarancje dla Linuksa i macOS „testowane na obu”; w ramach tego raportu uruchomiono tylko macOS.
 4. **Wyścig jest próbkowany.** Dwa testy z osobnym procesem czytają drzewo pod ostrzałem przez ok. 1,5 s każdy; pokazują brak naruszeń w zaobserwowanych przeplotach, nie brak okna.
@@ -85,8 +85,8 @@ Zastrzeżenia:
 
 Zastrzeżenia:
 
-1. **`atime` jest poza porównaniem.** Oba pomocnicze skróty drzewa pomijają czas dostępu, a `ingest.py` nie otwiera plików z `O_NOATIME` (`wptrace/ingest.py:31-32`). Na systemie plików z aktualizacją `atime` sam odczyt może go zmienić; zapobiega temu dopiero montowanie materiału tylko do odczytu.
-2. **Otwarcie pliku urządzenia** następuje, zanim `fstat` pozwoli go odrzucić (`wptrace/ingest.py:8-11`) i może wywołać efekt uboczny sterownika; materiał należy montować `ro,nodev`. Tego przypadku nie testowano.
+1. **`atime` jest poza porównaniem.** Oba pomocnicze skróty drzewa pomijają czas dostępu, a `ingest.py` nie otwiera plików z `O_NOATIME` (`wpincidentlens/ingest.py:31-32`). Na systemie plików z aktualizacją `atime` sam odczyt może go zmienić; zapobiega temu dopiero montowanie materiału tylko do odczytu.
+2. **Otwarcie pliku urządzenia** następuje, zanim `fstat` pozwoli go odrzucić (`wpincidentlens/ingest.py:8-11`) i może wywołać efekt uboczny sterownika; materiał należy montować `ro,nodev`. Tego przypadku nie testowano.
 3. **Zmiany dokonanej przez inny proces** narzędzie nie powstrzyma; wykrywa ją ponowna weryfikacja, o ile nie została cofnięta i o ile operator nie użył `--no-reverify`.
 4. Jedna platforma i jeden system plików (APFS).
 
@@ -108,14 +108,14 @@ Co nie jest spełnione — sytuacje, które dziś **nie** tworzą luki:
 
 | Nr | Sytuacja | Dowód | Kod | Issue |
 |---|---|---|---|---|
-| 1 | Bajty niepoprawne w UTF-8 w zrzucie SQL są zastępowane znakiem zastępczym bez luki | XFAIL `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[sql-dump]` | `wptrace/cli.py:38-40` | #7 |
-| 2 | To samo w logu | XFAIL `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[access-log]` | `wptrace/cli.py:38-40` | #3 (zamknięte) |
-| 3 | Plik obecny w materiale, ale nieobecny w baseline, jest pomijany bez śladu | XFAIL `neg::test_n8_premium_plugin_without_checksums_has_no_trusted_reference`, XFAIL `pos::test_p5_mu_plugin_added_since_baseline_is_reported` | `wptrace/cli.py:119` | #6 |
-| 4 | Rola administratora cofnięta w serializacji (`b:0`) jest liczona jak nadana | XFAIL `sec::test_s11_revoked_administrator_capability_is_not_an_admin` | `wptrace/cli.py:369` | #7 |
-| 5 | Instrukcje SQL inne niż `INSERT`/`REPLACE` (`UPDATE`, `CREATE TRIGGER`…) nie obniżają pokrycia bazy | sonda, §3 (brak trwałego testu) | `wptrace/cli.py:231`, `:411` | #7 |
-| 6 | `.htaccess` i `.user.ini` są czytane, ale nie ma dla nich żadnej reguły ani luki | sonda, §3 (brak trwałego testu) | `wptrace/cli.py:35` | #6 |
+| 1 | Bajty niepoprawne w UTF-8 w zrzucie SQL są zastępowane znakiem zastępczym bez luki | XFAIL `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[sql-dump]` | `wpincidentlens/cli.py:38-40` | #7 |
+| 2 | To samo w logu | XFAIL `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[access-log]` | `wpincidentlens/cli.py:38-40` | #3 (zamknięte) |
+| 3 | Plik obecny w materiale, ale nieobecny w baseline, jest pomijany bez śladu | XFAIL `neg::test_n8_premium_plugin_without_checksums_has_no_trusted_reference`, XFAIL `pos::test_p5_mu_plugin_added_since_baseline_is_reported` | `wpincidentlens/cli.py:119` | #6 |
+| 4 | Rola administratora cofnięta w serializacji (`b:0`) jest liczona jak nadana | XFAIL `sec::test_s11_revoked_administrator_capability_is_not_an_admin` | `wpincidentlens/cli.py:369` | #7 |
+| 5 | Instrukcje SQL inne niż `INSERT`/`REPLACE` (`UPDATE`, `CREATE TRIGGER`…) nie obniżają pokrycia bazy | sonda, §3 (brak trwałego testu) | `wpincidentlens/cli.py:231`, `:411` | #7 |
+| 6 | `.htaccess` i `.user.ini` są czytane, ale nie ma dla nich żadnej reguły ani luki | sonda, §3 (brak trwałego testu) | `wpincidentlens/cli.py:35` | #6 |
 
-Dodatkowo, z analizy kodu bez testu: punkt montowania wewnątrz drzewa nie jest rozpoznawany (`wptrace/ingest.py:8-11`); tabele wtyczek o nazwie kończącej się na `_users`, `_usermeta`, `_options` są traktowane jak tabele WordPressa (`wptrace/cli.py:347-371`).
+Dodatkowo, z analizy kodu bez testu: punkt montowania wewnątrz drzewa nie jest rozpoznawany (`wpincidentlens/ingest.py:8-11`); tabele wtyczek o nazwie kończącej się na `_users`, `_usermeta`, `_options` są traktowane jak tabele WordPressa (`wpincidentlens/cli.py:347-371`).
 
 Uzasadnienie werdyktu: kryterium mówi „każda”. W warstwie, którą M1 miał dostarczyć (odczyt i kontrakty), własność ma test na 100 losowych drzewach. W całym narzędziu własność jest fałszywa i wynik `NO_INDICATORS_IN_ANALYZED_SCOPE` z kodem 0 jest osiągalny przy treści, której nikt nie przeanalizował (§3). Roadmapa przypisuje luki parserów do M2–M4; czy to wystarcza do przejścia bramki M1, rozstrzyga właściciel.
 
@@ -197,16 +197,16 @@ Pełna tabela ze stanem w kodzie: `docs/THREAT_MODEL.md` §5, wiersze 11–25. N
 
 ## 6. Zmiany zachowania CLI wprowadzone w M1
 
-Wywołanie pozostaje płaskie (`python -m wptrace --files … --output …`); podkomend nie ma.
+Wywołanie pozostaje płaskie (`python -m wpincidentlens --files … --output …`); podkomend nie ma.
 
 ### 6.1. Kody wyjścia
 
 | Kod | Znaczenie | Kod źródłowy |
 |---|---|---|
-| `0` | zakres analizy pełny: pliki, baza i logi `ANALYZED`, baseline `ANALYZED` albo niepodany. **Nie znaczy „brak ustaleń”** — ustalenia nie zmieniają kodu | `wptrace/cli.py:605-609` |
-| `2` | błąd wywołania (odmowa, §6.2); nic nie zostaje zapisane | `wptrace/cli.py:654`, `:661`, `:668` |
-| `3` | analiza częściowa: brak bazy lub logów, wpis pominięty lub zmieniony, przekroczony limit. **Uruchomienie na samych plikach zawsze daje 3** | `wptrace/cli.py:609` |
-| `4` | podane źródło nie zostało przeanalizowane (status `FAILED`), np. pusty katalog, obcy format | `wptrace/cli.py:607-608` |
+| `0` | zakres analizy pełny: pliki, baza i logi `ANALYZED`, baseline `ANALYZED` albo niepodany. **Nie znaczy „brak ustaleń”** — ustalenia nie zmieniają kodu | `wpincidentlens/cli.py:605-609` |
+| `2` | błąd wywołania (odmowa, §6.2); nic nie zostaje zapisane | `wpincidentlens/cli.py:654`, `:661`, `:668` |
+| `3` | analiza częściowa: brak bazy lub logów, wpis pominięty lub zmieniony, przekroczony limit. **Uruchomienie na samych plikach zawsze daje 3** | `wpincidentlens/cli.py:609` |
+| `4` | podane źródło nie zostało przeanalizowane (status `FAILED`), np. pusty katalog, obcy format | `wpincidentlens/cli.py:607-608` |
 | `1` | nieobsłużony wyjątek Pythona (np. błąd I/O przy zapisie wyników); kod `5` ze specyfikacji nie jest wdrożony | — |
 
 Przed M1 zakończona analiza zawsze dawała kod `0` (wersja dokumentu `docs/THREAT_MODEL.md` z T-002, Z-16). Automatyzacja sprawdzająca „kod ≠ 0 = błąd” wymaga dostosowania.
@@ -241,7 +241,7 @@ Nie jest odmową: źródło `--files`, `--database` lub `--logs` bez uprawnień 
 | `--max-depth` | 64 | limit głębokości katalogów |
 | `--max-path-bytes` | 4096 | limit długości ścieżki względnej |
 
-Wartości domyślne: `wptrace/ingest.py:68-78`; definicje flag: `wptrace/cli.py:628-643`. Flaga `--pseudonymize` z ADR 0002 nie istnieje.
+Wartości domyślne: `wpincidentlens/ingest.py:68-78`; definicje flag: `wpincidentlens/cli.py:628-643`. Flaga `--pseudonymize` z ADR 0002 nie istnieje.
 
 ### 6.4. Inne zmiany zachowania
 
@@ -262,7 +262,7 @@ Wartości domyślne: `wptrace/ingest.py:68-78`; definicje flag: `wptrace/cli.py:
 | `report.json` | `poc-1` (`docs/schema/report-poc-1.schema.json`, ADR 0003) | raport 0.1.0 nie jest już zapisywany; `evidence_manifest` → `evidence` (także wpisy pominięte, z `read_status`); `rule` → `rule_id`; nowe `observations`, `coverage` per źródło, `scope_complete`; `counts` usunięte; identyfikatory `ev_`/`obs_`/`fnd_` z treści |
 | `assessment` | — | `INDICATORS_FOUND` zastąpione przez `SUSPICIOUS` / `STRONG_INDICATORS`; brak ustaleń przy niepełnym zakresie to `INCONCLUSIVE`; dla `fixtures/` wynik to `SUSPICIOUS` |
 | `case.json` (nowy) | `case-poc-1` (`docs/schema/case-poc-1.schema.json`) | identyfikator sprawy, pseudonim operatora, czasy UTC, nazwy (ostatni składnik ścieżki) i obecność źródeł, limity, flagi, SHA-256 zapisanego `report.json`, ocena, kod wyjścia; bez ścieżek hosta |
-| Starsze raporty | — | przenosi funkcja `wptrace.migrate.migrate_0_1_0`; nie ma wejścia w CLI |
+| Starsze raporty | — | przenosi funkcja `wpincidentlens.migrate.migrate_0_1_0`; nie ma wejścia w CLI |
 
 ## 7. Zastrzeżenie o przeglądzie i zakaz pracy na realnym materiale
 
@@ -277,7 +277,7 @@ Wartości domyślne: `wptrace/ingest.py:68-78`; definicje flag: `wptrace/cli.py:
 | 2 | Czy wynik z jednej platformy wystarcza, czy przed decyzją wymagany jest zielony przebieg na Linuksie (CI dla PR #27)? |
 | 3 | Czy PR #26 i #27 mają zostać scalone przed decyzją o bramce? |
 | 4 | Czy Issue #14 i #15 mają zostać otwarte ponownie, skoro ich zakres nie jest wykonany? |
-| 5 | Czy przed M2 ma się odbyć przegląd `wptrace/ingest.py` i `wptrace/report.py` przez człowieka? |
+| 5 | Czy przed M2 ma się odbyć przegląd `wpincidentlens/ingest.py` i `wpincidentlens/report.py` przez człowieka? |
 
 ## 8. Co dalej
 

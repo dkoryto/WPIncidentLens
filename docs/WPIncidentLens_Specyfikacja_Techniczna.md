@@ -1,9 +1,9 @@
-# WPTrace
+# WPIncidentLens
 
 **Specyfikacja techniczna, projekt architektury, plan wdrożenia i niezależny przegląd inżynierski**  
 **Wersja:** 0.9 — dokument projektowy  |  **Data:** 9 listopada 2026  |  **Status:** gotowy do realizacji ograniczonego PoC; **niegotowy do wdrożenia produkcyjnego**
 
-> **Misja.** WPTrace pomaga administratorowi WordPressa ustalić, czy dostępne dane zawierają oznaki kompromitacji, jakie zmiany można wykazać i jak wiarygodne są poszczególne hipotezy. Narzędzie nie „certyfikuje czystości” witryny, nie zastępuje pełnego DFIR i domyślnie niczego nie naprawia.
+> **Misja.** WPIncidentLens pomaga administratorowi WordPressa ustalić, czy dostępne dane zawierają oznaki kompromitacji, jakie zmiany można wykazać i jak wiarygodne są poszczególne hipotezy. Narzędzie nie „certyfikuje czystości” witryny, nie zastępuje pełnego DFIR i domyślnie niczego nie naprawia.
 
 ## 1. Streszczenie wykonawcze i decyzja architektoniczna
 
@@ -103,7 +103,7 @@ Brak alertów daje **`NO_INDICATORS_IN_ANALYZED_SCOPE`**, nigdy „NOT_COMPROMIS
 ### 4.2 Kontrakt CLI — docelowy
 
 ```bash
-wptrace analyze \
+wpincidentlens analyze \
   --case-id CASE-2026-0042 \
   --files /evidence/wordpress \
   --database /evidence/database.sql \
@@ -203,7 +203,7 @@ Apache combined, Nginx custom, JSON, błędy PHP, WAF, reverse proxy i hosting m
 
 ## 8. Bezpieczeństwo samego analizatora
 
-WPTrace przetwarza **niezaufane materiały po ataku**, zatem sam jest celem ataku. Model zagrożeń:
+WPIncidentLens przetwarza **niezaufane materiały po ataku**, zatem sam jest celem ataku. Model zagrożeń:
 
 | Zagrożenie | Kontrola wymagana |
 |---|---|
@@ -225,7 +225,7 @@ WPTrace przetwarza **niezaufane materiały po ataku**, zatem sam jest celem atak
 
 ```text
 HOST ANALITYKA
-  WPTrace (Python 3.12, CLI, kontener bez sieci)
+  WPIncidentLens (Python 3.12, CLI, kontener bez sieci)
     /evidence/files   (ro)
     /evidence/db.sql  (ro)
     /evidence/logs    (ro)
@@ -237,9 +237,9 @@ Docker: `network_mode: none`, `read_only: true`, `cap_drop: ALL`, `no-new-privil
 ### 9.2 Uruchomienie dołączonego PoC
 
 ```bash
-cd WPTrace_PoC
+cd WPIncidentLens_PoC
 python -m pytest -q
-python -m wptrace \
+python -m wpincidentlens \
   --files fixtures/site \
   --database fixtures/database.sql \
   --logs fixtures/logs \
@@ -262,7 +262,7 @@ Utworzone pliki: `results/report.json` i `results/report.html`. Dane laboratoryj
 
 WP-CLI zapewnia oficjalną weryfikację checksumów core i wtyczek. PHP Malware Finder dostarcza reguły YARA wykrywające podejrzane wzorce PHP. YARA-X zapewnia Python API i limit czasu skanowania. Plaso jest rozwiniętym silnikiem timeline, którego **nie należy** bez potrzeby włączać jako ciężkiej zależności do pierwszego kontenera.
 
-**Własna wartość WPTrace:** model WordPressa, import niezaufanego materiału z jawnym pokryciem, powiązanie dowodów z plików/DB/logów, ergonomia raportów. Nie deklarować nowej kategorii produktu bez porównania z istniejącymi skanerami i usługami DFIR.
+**Własna wartość WPIncidentLens:** model WordPressa, import niezaufanego materiału z jawnym pokryciem, powiązanie dowodów z plików/DB/logów, ergonomia raportów. Nie deklarować nowej kategorii produktu bez porównania z istniejącymi skanerami i usługami DFIR.
 
 Ważne prawne/techniczne: zgodność reguł napisanych pod klasyczną YARA z YARA-X trzeba **zweryfikować testem kompilacji**. Reguły PHP Malware Finder są na licencji LGPL-3.0; decyzję o vendoringu, dystrybucji i atrybucji podjąć po audycie licencji. Nie kopiować cudzych reguł do repo bez przeanalizowania licencji.
 
@@ -271,8 +271,8 @@ Ważne prawne/techniczne: zgodność reguł napisanych pod klasyczną YARA z YAR
 ### 11.1 Repozytorium docelowe
 
 ```text
-wptrace/
-  wptrace/
+wpincidentlens/
+  wpincidentlens/
     cli.py                  # kontrakty CLI
     ingest/                # dowody + ograniczenia
     file_analysis/         # manifest, core/plugin baseline, yara
@@ -407,4 +407,4 @@ Wymagane: 100% pokrycie jawnych błędów importu (żadnego cichego „OK”); z
 
 ---
 
-**Ostateczny wniosek inżynierski:** WPTrace ma wystarczająco konkretny problem, architekturę i małe jądro, by realizować ograniczony PoC. Przed wersją produkcyjną najważniejsze są bezpieczna i pełna ekstrakcja danych, jakość dowodów oraz jawne ograniczenia analizy — nie panel WWW ani AI.
+**Ostateczny wniosek inżynierski:** WPIncidentLens ma wystarczająco konkretny problem, architekturę i małe jądro, by realizować ograniczony PoC. Przed wersją produkcyjną najważniejsze są bezpieczna i pełna ekstrakcja danych, jakość dowodów oraz jawne ograniczenia analizy — nie panel WWW ani AI.
