@@ -192,12 +192,32 @@ def test_s07_oversized_log_is_skipped_with_gap(site, evidence, analyze):
 
 # --- S-08: złośliwe wejście dla wyrażeń regularnych ----------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="ReDoS: wykładniczy backtracking wzorca wiersza w iter_insert_rows; brak limitu czasu (#7)")
 def test_s08_crafted_insert_does_not_stall_the_sql_parser():
     crafted = "INSERT INTO `wp_options` VALUES ('" + "\\\\" * 40 + "'());"
 
     with time_limit(2):
         list(cli.iter_insert_rows(crafted))
+
+
+@pytest.mark.parametrize("values, expected", [
+    ("(1,'a'),(2,'b')", ["(1,'a')", "(2,'b')"]),
+    ("(1,'x) , (y'),(2,'it''s')", ["(1,'x) , (y')", "(2,'it''s')"]),
+    ("(1,'back\\\\'),(2,'q\\'(')", ["(1,'back\\\\')", "(2,'q\\'(')"]),
+    ("(1,NOW())", ["()"]),
+    ("('\\',1)'''", []),  # nawias wewnątrz łańcucha: stary regex zwracał tu fałszywy wiersz
+    ("1,2)", []),
+    ("(1,2", []),
+    ("", []),
+])
+def test_sql_row_groups_are_split_outside_quotes(values, expected):
+    assert list(cli._iter_row_groups(values)) == expected
+
+
+def test_sql_row_splitting_scales_linearly():
+    many_rows = "INSERT INTO `wp_options` VALUES " + ",".join(f"({n},'v{n}')" for n in range(20000)) + ";"
+
+    with time_limit(5):
+        assert len(list(cli.iter_insert_rows(many_rows))) == 20000
 
 
 def test_s08_repetitive_php_does_not_stall_the_file_rules(site, analyze):

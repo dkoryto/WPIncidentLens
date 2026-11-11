@@ -17,3 +17,5 @@ secrets/
 build/
 dist/
 .ruff_cache/
+.coverage
+.claude/worktrees/
