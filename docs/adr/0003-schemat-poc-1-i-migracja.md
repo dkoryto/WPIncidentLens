@@ -73,7 +73,7 @@ Status źródła wynika z faktów, nie z samej obecności tekstu luki:
 |---|---|
 | `NOT_PROVIDED` | źródła nie podano |
 | `FAILED` | źródło podano, ale nie przeczytano z niego żadnych bajtów albo parser nie przeanalizował niczego (zrzut SQL ponad limit, brak obsługiwanych `INSERT`, log w obcym formacie, log bez wierszy, pusty katalog) |
-| `PARTIAL` | którykolwiek wpis ma status inny niż `READ` (pominięty, błąd, `CHANGED`), plik kodu przekracza limit skanowania treści, log przekracza limit lub ma niesparsowane wiersze, przekroczono 100 000 wierszy `INSERT`, źródło podmieniono albo ponowną weryfikację przerwał limit czasu |
+| `PARTIAL` | którykolwiek wpis ma status inny niż `READ` (pominięty, błąd, `CHANGED`), plik kodu przekracza limit skanowania treści, log przekracza limit lub ma niesparsowane wiersze, przekroczono 100 000 wierszy `INSERT`, rola administratora nie ma odczytanego wiersza użytkownika, źródło podmieniono albo ponowną weryfikację przerwał limit czasu |
 | `ANALYZED` | w pozostałych przypadkach; wymaga co najmniej jednego wpisu `READ` i żadnego innego |
 
 Status inny niż `ANALYZED` ma zawsze co najmniej jeden powód. Dotychczasowe teksty `coverage_gaps` zostały zachowane jako powody.
@@ -154,13 +154,16 @@ Poza zakresem T-102 pozostają także: redakcja i pseudonimizacja (B8, #14) — 
 - Model i schemat odrzucają nieznane pola, więc także dodanie pola opcjonalnego wymaga jednoczesnej zmiany modelu, schematu i testów; w fazie PoC nie utrzymujemy zgodności „w przód”.
 - Nowy `kind` obserwacji, nowe `rule_id` i nowy tekst powodu nie zmieniają wersji schematu: to wartości, nie kształt.
 
-## Decyzje otwarte dla przeglądu
+## Decyzje przyjęte w wariancie mniej ostrożnym
+
+Przyjęte przez agenta prowadzącego z delegacji właściciela (2026-11-11); każdą można odwrócić nowym ADR.
 
 1. **Brak baseline nie czyni zakresu niepełnym.** Zlecenie i specyfikacja §9.1 wymieniają jako źródła krytyczne pliki, bazę i logi. Wariant ostrożniejszy (baseline wymagany do „braku wskaźników”) sprawiłby, że bez zaufanej migawki wynikiem byłoby zawsze `INCONCLUSIVE`. Brak baseline jest raportowany jako powód w `coverage.baseline` i w `coverage_gaps`.
 2. **`--no-reverify` nie obniża oceny.** Flaga jest jawnym wyborem operatora, odnotowanym jako luka; zmiana wykryta w trakcie odczytu nadal daje `CHANGED`. Wariant ostrożniejszy: traktować wyłączoną weryfikację jak niepełny zakres.
 3. **Kod wyjścia `3` przy niepodanej bazie lub logach.** Przyjęto, że „analiza w całości” oznacza pełny zakres wspierany, nie tylko podany materiał. Automatyzacja uruchamiająca narzędzie na samych plikach dostanie `3`.
 4. **`STRONG_INDICATORS` jest dziś nieosiągalny** (§6).
-5. **128-bitowe identyfikatory.** Skrócenie SHA-256 zmniejsza raport; kolizja wymaga około 2^64 prób i kończy się błędem walidacji.
+5. **Brak listy zaufanych administratorów nie obniża pokrycia bazy.** Specyfikacja (N3) traktuje administratora bez listy porównawczej jako inwentaryzację; raport odnotowuje to jako powód. Natomiast rola administratora bez odczytanego wiersza w tabeli użytkowników obniża pokrycie bazy do `PARTIAL`, bo loginu nie da się ustalić.
+6. **128-bitowe identyfikatory.** Skrócenie SHA-256 zmniejsza raport; kolizja wymaga około 2^64 prób i kończy się błędem walidacji.
 
 ## Konsekwencje
 

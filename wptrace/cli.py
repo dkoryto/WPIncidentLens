@@ -328,7 +328,12 @@ def scan_database(path: Path, known_admins: set[str],
         cover.fail("Brak obsługiwanych instrukcji INSERT; parser PoC nie interpretuje tego formatu SQL")
     for user_id in sorted(admins):
         login = users.get(user_id, "")
-        if known_admins and login and login not in known_admins:
+        if not login:
+            # Roli nie da się porównać z zaufaną listą: bez luki administrator zniknąłby z raportu bez śladu.
+            cover.degrade(f"Rola administratora dla user_id {str(user_id)[:40]} bez odczytanego wiersza w tabeli użytkowników; "
+                          "nie można ustalić loginu ani porównać go z zaufaną listą")
+            continue
+        if known_admins and login not in known_admins:
             findings.append(Detection("UNRECOGNIZED_ADMIN", "high", "medium", "database",
                 "Administrator nie figuruje na dostarczonej, zaufanej liście; nie dowodzi to włamania.",
                 _observe(item, "ADMINISTRATOR_ROLE_ROW", admins[user_id], username=login, user_id=user_id)))

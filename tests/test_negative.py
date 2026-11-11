@@ -220,14 +220,15 @@ def test_unsupported_statement_next_to_supported_one_adds_a_gap(site, evidence, 
     assert set(with_skipped.gaps) > set(only_supported.gaps)
 
 
-@pytest.mark.xfail(strict=True, reason="administrator bez sparsowanego wiersza *_users znika bez ustalenia i bez luki (#7)")
 def test_admin_capability_without_user_row_is_not_silently_dropped(site, evidence, analyze):
     orphan = "INSERT INTO `wp_usermeta` VALUES (1,77,'wp_capabilities','a:1:{s:13:\"administrator\";b:1;}');\n"
     database = write(evidence / "db.sql", orphan)
 
     run = analyze(site, database=database, known_admins=("siteadmin",))
 
-    assert run.findings or any("77" in gap for gap in run.gaps)
+    assert any("77" in gap for gap in run.gaps)
+    assert run.report["coverage"]["database"]["status"] == "PARTIAL"
+    assert run.report["assessment"] == "INCONCLUSIVE"
 
 
 @pytest.mark.parametrize("lines, expected_gap", [
