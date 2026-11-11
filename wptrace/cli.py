@@ -200,7 +200,8 @@ _SQL_TOKEN = re.compile(r"""
     | (?P<word> [A-Za-z_]++ )
     | .
 """, re.X | re.S)
-_WRITE_KEYWORD = re.compile(r"\b(?:INSERT|REPLACE)\b", re.I)
+# Bez \b z lewej: w "/*!50001INSERT" numer wersji przylega do słowa kluczowego i granicy słowa tam nie ma.
+_WRITE_KEYWORD = re.compile(r"(?<![A-Za-z_])(?:INSERT|REPLACE)(?![A-Za-z0-9_])", re.I)
 _CORE_TABLE_CELLS = {"_users": 2, "_usermeta": 4, "_options": 3}
 
 
@@ -226,7 +227,8 @@ def _write_statement_starts(sql: str):
             at_start = True
             continue
         # DELIMITER zmienia znak końca instrukcji: dalszego podziału po średniku nie można uznać za wiarygodny.
-        if at_start and token["word"] and token["word"].upper() in ("INSERT", "REPLACE", "DELIMITER"):
+        # Polecenie klienta zaczynające się od "\" (np. \d) też może zmienić znak końca instrukcji.
+        if at_start and ((token["word"] or "").upper() in ("INSERT", "REPLACE", "DELIMITER") or token.group() == "\\"):
             yield token.start()
         at_start = False
 
