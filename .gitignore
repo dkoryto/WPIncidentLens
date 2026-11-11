@@ -13,3 +13,7 @@ results/
 evidence/
 cases/
 secrets/
+*.egg-info/
+build/
+dist/
+.ruff_cache/
