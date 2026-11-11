@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -34,6 +35,7 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 _UTC = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|\+00:00)")
 _SCALARS = (str, int, bool, type(None))
+_SURROGATE = re.compile("[\ud800-\udfff]")  # w tekście Pythona zawsze samotny: para surogatów jest jednym znakiem
 
 
 class ModelError(ValueError):
@@ -110,6 +112,8 @@ def _optional(check: Callable[..., Any], value: Any, where: str, *options: Any) 
 def _str(value: Any, where: str) -> str:
     if not isinstance(value, str):
         raise _wrong(where, "tekstu", value)
+    if unencodable := _SURROGATE.search(value):  # „poprawny” raport musi dać się zapisać jako JSON w UTF-8
+        raise ModelError(f"{where}: tekst nie daje się zapisać w UTF-8 (samotny surogat na pozycji {unencodable.start()})")
     return value
 
 
@@ -331,6 +335,8 @@ class Observation:
             _str(name, f"{where}.attributes (nazwa)")
             if not isinstance(value, _SCALARS):
                 raise _wrong(f"{where}.attributes.{name[:80]}", "tekstu, liczby całkowitej, wartości logicznej albo null", value)
+            if isinstance(value, str):
+                _str(value, f"{where}.attributes.{name[:80]}")
         object.__setattr__(self, "attributes", dict(sorted(self.attributes.items())))
         _optional(_str, self.timestamp_raw, f"{where}.timestamp_raw")
         _optional(_utc, self.timestamp_utc, f"{where}.timestamp_utc")
@@ -552,6 +558,7 @@ class Report:
                 raise ModelError(f"coverage.{entry.source}.reasons: powód nieobecny w coverage_gaps: {missing[0][:120]!r}")
         self._check_legacy_markers(evidence.values(), coverage.values())
         self._check_assessment(findings.values(), coverage)
+        self._check_entry_counters(evidence.values(), coverage.values())
         object.__setattr__(self, "evidence", tuple(sorted(evidence.values(), key=lambda item: (item.logical_path, item.id))))
         object.__setattr__(self, "observations", tuple(sorted(observations.values(), key=lambda item: item.id)))
         object.__setattr__(self, "findings", tuple(sorted(
@@ -595,6 +602,28 @@ class Report:
         downgraded = self.migrated_from is not None and (expected, self.assessment) == (Assessment.STRONG_INDICATORS, Assessment.SUSPICIOUS)
         if self.assessment is not expected and not downgraded:
             raise ModelError(f"assessment: jest {self.assessment}, a z ustaleń i pokrycia wynika {expected}")
+
+    def _check_entry_counters(self, evidence: Iterable[Evidence], coverage: Iterable[Coverage]) -> None:
+        """Liczniki ``coverage[źródło].entries`` muszą mieć pokrycie w ``evidence`` (ADR 0003 §4); nie dotyczy raportu przeniesionego.
+
+        Liczniki liczą wpisy rejestru odczytu, a ``evidence`` scala wpisy o tej samej tożsamości, więc równości wymagać
+        nie można. Dla każdego źródła: (1) dowodów o danym statusie jest najwyżej tyle, ile wynosi licznik; (2) niezerowy
+        licznik ma co najmniej jeden dowód — ``READ`` i ``CHANGED`` łącznie, bo ten sam plik ma w obu statusach jeden identyfikator.
+        """
+        if self.migrated_from is not None:
+            return
+        present = Counter((SOURCE_OF_ORIGIN[item.origin_kind], item.read_status) for item in evidence)
+        skipped = [(status,) for status in READ_STATUSES if status not in (*HASHED_STATUSES, UNKNOWN_LEGACY)]
+        for entry in coverage:
+            for status, counted in entry.entries.items():
+                if present[entry.source, status] > counted:
+                    raise ModelError(f"coverage.{entry.source}.entries.{status}: licznik {counted} jest mniejszy niż liczba dowodów "
+                                     f"tego źródła o tym statusie ({present[entry.source, status]})")
+            for group in (HASHED_STATUSES, *skipped):
+                counted = next((status for status in group if entry.entries[status]), None)
+                if counted is not None and not any(present[entry.source, status] for status in group):
+                    raise ModelError(f"coverage.{entry.source}.entries.{counted}: licznik {entry.entries[counted]} bez żadnego dowodu "
+                                     f"tego źródła o statusie {' lub '.join(group)}")
 
     @property
     def scope_complete(self) -> bool:
