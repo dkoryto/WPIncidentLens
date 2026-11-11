@@ -1,6 +1,6 @@
 # WPIncidentLens — model zagrożeń (T-002)
 
-**Status:** PROPOSED — do przeglądu człowieka; dokument niczego nie zatwierdza. **Data:** 2026-11-11. **Stan kodu:** gałąź `agent/T-001-baseline-ci`, `wptrace/cli.py` (386 linii).
+**Status:** ACCEPTED 2026-11-11 na podstawie delegacji właściciela — patrz `docs/adr/0002-decyzje-bramki-m0.md`; bez niezależnego przeglądu AppSec. **Data:** 2026-11-11. **Stan kodu:** gałąź `agent/T-001-baseline-ci`, `wptrace/cli.py` (386 linii).
 
 Dokument rozdziela **stan obecny** (kolumna „Obecny kod”, z odwołaniem do linii) od **stanu docelowego** (kolumna „Planowana mitygacja”). Brak testu oznacza, że własność nie jest potwierdzona, nawet jeśli kod wygląda poprawnie. Podstawa: specyfikacja Senior PoC §3.1, §5.3, §10.
 
@@ -82,7 +82,7 @@ Ryzyka, które pozostaną także po wdrożeniu planowanych mitygacji:
 
 ## 6. Bramka przeglądu człowieka
 
-Decyzje wymagane **przed** rozpoczęciem T-101 (#4) i T-102 (#5). Agent nie przyjmuje żadnej z nich za rozstrzygniętą.
+Pytania, które musiały zostać rozstrzygnięte przed T-101 (#4) i T-102 (#5). **Rozstrzygnięcia: `docs/adr/0002-decyzje-bramki-m0.md`.**
 
 | ID | Pytanie / decyzja | Dotyczy |
 |---|---|---|
