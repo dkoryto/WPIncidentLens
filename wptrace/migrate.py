@@ -52,7 +52,7 @@ def _utc(value: Any) -> str | None:
     """Czas starego raportu jako UTC; ``None``, gdy nie jest jednoznacznym czasem ze strefą."""
     try:
         return models.utc_iso(datetime.fromisoformat(value))
-    except (TypeError, ValueError):  # ModelError (czas bez strefy) jest podklasą ValueError
+    except (TypeError, ValueError, OverflowError):  # ModelError (czas bez strefy) jest podklasą ValueError
         return None
 
 
@@ -97,7 +97,7 @@ def _place(category: models.Category, source: str, evidence: _Evidence) -> tuple
         return evidence.database(), models.Location(table=table, key=key or None)
     if category is models.Category.HTTP_LOG:
         name, _, line = source.rpartition(":")
-        if name and line.isascii() and line.isdigit():
+        if name and len(line) <= 18 and line.isascii() and line.isdigit():
             return evidence.entry_for(models.OriginKind.LOG, name), models.Location(path=name, line=int(line))
     return evidence.entry_for(_ORIGIN_OF_CATEGORY[category], source), models.Location(path=source)
 
@@ -146,7 +146,7 @@ def _legacy_report(report: Any) -> Mapping[str, Any]:
         raise MigrationError(f"schema_version: oczekiwano {LEGACY_VERSION!r}, jest {str(report.get('schema_version'))[:80]!r}")
     if missing := [name for name in _REQUIRED if name not in report]:
         raise MigrationError(f"raport: brak pól: {', '.join(missing)}")
-    if report["assessment"] not in _ASSESSMENT:
+    if not isinstance(report["assessment"], str) or report["assessment"] not in _ASSESSMENT:
         raise MigrationError(f"assessment: nieznana wartość {str(report['assessment'])[:80]!r}")
     return report
 

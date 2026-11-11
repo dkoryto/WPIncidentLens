@@ -671,3 +671,13 @@ def test_report_never_contains_an_absolute_host_path(evidence, tmp_path, analyze
     assert len(run.gaps) == 6 and run.findings  # EACCES, FIFO, hardlink, symlink ×2, zmiana po odczycie
     assert str(tmp_path) not in run.json_text + run.html
     assert not re.search(r"/(private|var|tmp|home|Users)/", run.json_text + run.html)
+
+
+@pytest.mark.parametrize("line", [
+    '192.0.2.10 - - [x] "GET ' + "\t" * 20_000,
+    '192.0.2.10 - - [x] "GET ' + "/a " * 20_000,
+    "192.0.2.10 " + "- " * 20_000,
+], ids=["tabs-after-method", "many-tokens", "many-dashes"])
+def test_s08_crafted_log_line_does_not_stall_the_log_pattern(line):
+    with time_limit(2):
+        assert cli.LOG_PATTERN.match(line) is None

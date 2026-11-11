@@ -41,7 +41,7 @@ Aktualizacja po T-102 (#5, gałąź `agent/T-102-contracts`, 2026-11-11) — rap
 
 | Komenda | Środowisko | Wynik |
 |---|---|---|
-| `python -m pytest -q` | macOS (Darwin 27.0.0, arm64), Python 3.12.11, pytest 8.4.2, jsonschema 4.26.0 | **572 passed, 2 skipped, 14 xfailed** |
+| `python -m pytest -q` | macOS (Darwin 27.0.0, arm64), Python 3.12.11, pytest 8.4.2, jsonschema 4.26.0 | **591 passed, 2 skipped, 13 xfailed** |
 | `python -m pytest -q -p no:cacheprovider` | Linux, kontener `python:3.12-slim` (Python 3.12.14) z `pytest`/`pytest-cov`/`ruff`/`jsonschema`, `--network none`, użytkownik 65532, kopia repozytorium w `/tmp` | **566 passed, 1 skipped, 15 xfailed** |
 | `python -m ruff check .` | macOS i Linux (jw.) | brak zgłoszeń |
 | `python -m pytest -q --cov=wptrace` | macOS | **98% (`cli.py` 96%, `ingest.py` 98%, `migrate.py` 99%, `models.py` 100%)** |
@@ -115,7 +115,7 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | Pusty katalog logów | luka pokrycia, pokrycie `FAILED`, kod wyjścia 4 | `neg::test_empty_source_directory_is_reported_as_coverage_gap[logs]`, `con::test_incomplete_scope_without_findings_is_inconclusive[empty-log-directory, log-without-lines]` | PASS (T-102; znacznik #3 zdjęty — źródło bez odczytanych bajtów nie może mieć statusu `ANALYZED`) |
 | Pusty katalog `--files` | luka pokrycia, pokrycie `FAILED`, kod wyjścia 4 | `neg::test_empty_source_directory_is_reported_as_coverage_gap[site]`, `con::test_incomplete_scope_without_findings_is_inconclusive[empty-site-directory]` | PASS (T-102; znacznik #6 zdjęty z tego samego powodu; wykrywanie „to nie jest WordPress” nadal należy do #6) |
 | Obcy SQL (PostgreSQL COPY, identyfikatory w `"`, śmieci binarne, pusty plik) | gap „Brak obsługiwanych instrukcji INSERT”, zero ustaleń | `neg::test_foreign_sql_is_reported_as_unparsed_not_clean[…]` | PASS |
-| Nieobsługiwana instrukcja obok obsługiwanej (`REPLACE INTO`) | dodatkowa luka | `neg::test_unsupported_statement_next_to_supported_one_adds_a_gap` | XFAIL (#7) |
+| Nieobsługiwana instrukcja obok obsługiwanej (`REPLACE INTO`) | dodatkowa luka | `neg::test_unsupported_statement_next_to_supported_one_adds_a_gap` | PASS (luka + `PARTIAL`) |
 | Rola administratora bez wiersza `*_users` | ustalenie albo luka | `neg::test_admin_capability_without_user_row_is_not_silently_dropped` | PASS (luka + `PARTIAL`) |
 | Log w obcym formacie / częściowo nieparsowalny | luka z licznikiem | `neg::test_unsupported_log_lines_are_counted_as_coverage_gap[json-lines, partly-parsed]` | PASS |
 
@@ -202,10 +202,10 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | #4 (T-101) | 0 | wszystkie 9 zdjęte w T-101 (dwa testy zmienione: `--database` jako symlink → odmowa wg B5; TOCTOU → nowy hak w `ingest`) |
 | #5 (T-102) | 0 | `INCONCLUSIVE` wdrożone w T-102 — znacznik zdjęty |
 | #6 (T-201) | 4 | wersja referencji; nowy plik spoza baseline; offset sygnatury; `NO_TRUSTED_REFERENCE`. W T-102 zdjęto 3: pusty `--files` i brak/pusty baseline (2 warianty) dają teraz powód w `coverage` |
-| #7 (T-301) | 7 | `NEW_SINCE_BASELINE`; meta-refresh; cytat z redakcją; inwentarz adminów; pominięte instrukcje bez luki; stratne dekodowanie; `b:0` |
+| #7 (T-301) | 6 | `NEW_SINCE_BASELINE`; meta-refresh; cytat z redakcją; inwentarz adminów; stratne dekodowanie; `b:0` |
 | #3 (bez własnego Issue) | 3 | stratne dekodowanie logu; brak CSP; token z query stringu w `report.json`. W T-102 zdjęto 1: pusty katalog logów daje teraz pokrycie `FAILED` z powodem |
 
-Razem 14, tak samo na macOS i na Linuksie. Stan po T-102 (#5); po T-101 (#4) było 20, po naprawie ReDoS (#11) — 30 (29 na macOS), w T-003 — 31.
+Razem 13, tak samo na macOS i na Linuksie. Stan po T-102 (#5); po T-101 (#4) było 20, po naprawie ReDoS (#11) — 30 (29 na macOS), w T-003 — 31.
 
 ## Ograniczenia tej macierzy
 

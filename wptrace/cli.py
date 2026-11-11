@@ -184,18 +184,25 @@ def _iter_row_groups(values: str):
         i += 1
 
 
-def iter_insert_rows(sql: str):
+# Lista kolumn nie zawiera nawiasów: [^;()]* kończy się na pierwszym nawiasie, więc nagłówek bez
+# zamknięcia nie jest skanowany do końca pliku przy każdym wystąpieniu (czas kwadratowy, #17).
+# Biały znak przed VALUES dopasowuje dokładnie jeden kwantyfikator, więc długi ciąg spacji nie daje nawrotów.
+_INSERT_HEAD = re.compile(r"INSERT\s+INTO\s+`?([A-Za-z0-9_]+)(?![A-Za-z0-9_])`?\s*(?:(\([^;()]*\))\s*)?VALUES\s*", re.I)
+# Początek instrukcji zapisującej dane w zrzucie: słowo kluczowe na początku wiersza.
+_WRITE_STATEMENT = re.compile(r"^[ \t]*(?=(?:INSERT|REPLACE)\b)", re.I | re.M)
+_CORE_TABLE_CELLS = {"_users": 2, "_usermeta": 4, "_options": 3}
+
+
+def iter_insert_rows(sql: str, dropped: list[str] | None = None):
     """Narrow PoC subset of mysqldump INSERT syntax; does NOT execute SQL.
 
     Supports quoted identifiers, optional column list, multi-row VALUES, MySQL
-    backslash quotes, numeric and NULL literals. Unsupported INSERTs are ignored.
+    backslash quotes, numeric and NULL literals. Unsupported INSERTs are ignored;
+    a statement that is not terminated (truncated dump) is skipped and its table
+    name is appended to ``dropped`` so the caller can report the gap.
     """
-    # Lista kolumn nie zawiera nawiasów: [^;()]* kończy się na pierwszym nawiasie, więc nagłówek bez
-    # zamknięcia nie jest skanowany do końca pliku przy każdym wystąpieniu (czas kwadratowy, #17).
-    # Biały znak przed VALUES dopasowuje dokładnie jeden kwantyfikator, więc długi ciąg spacji nie daje nawrotów.
-    pat = re.compile(r"INSERT\s+INTO\s+`?([A-Za-z0-9_]+)(?![A-Za-z0-9_])`?\s*(?:(\([^;()]*\))\s*)?VALUES\s*", re.I)
     pos = 0
-    while (m := pat.search(sql, pos)) is not None:
+    while (m := _INSERT_HEAD.search(sql, pos)) is not None:
         table = m.group(1)
         cols = re.findall(r"`([A-Za-z0-9_]+)`", m.group(2) or "")
         i, values, quoted, escaped, nesting = m.end(), "", False, False, 0
@@ -230,6 +237,8 @@ def iter_insert_rows(sql: str):
             i += 1
         pos = i + 1
         if i >= len(sql) or quoted or nesting != 0:
+            if dropped is not None:
+                dropped.append(table)
             continue
         for group in _iter_row_groups(values):
             inside = group[1:-1]
@@ -287,12 +296,20 @@ def scan_database(path: Path, known_admins: set[str],
     sql = _text(item.content).read()
     users, admins, count = {}, {}, 0  # admins: identyfikator użytkownika → miejsce pierwszego wiersza z rolą
     tables = set()
-    for table, cols, cells in iter_insert_rows(sql):
+    dropped: list[str] = []
+    malformed, core_seen = 0, False
+    for table, cols, cells in iter_insert_rows(sql, dropped):
         tables.add(table)
         count += 1
         if count > 100000:
             cover.degrade("Przekroczono 100000 wierszy INSERT, analiza częściowa")
             break
+        if needed := next((cells_needed for suffix, cells_needed in _CORE_TABLE_CELLS.items() if table.endswith(suffix)), 0):
+            core_seen = True
+            # Wiersz z wyrażeniem zamiast literału (np. CONCAT(...)) rozpada się na mniej pól, niż ma tabela.
+            if (len(cells) != len(cols)) if cols else (len(cells) < needed):
+                malformed += 1
+                continue
         if table.endswith("_users"):
             if cols:
                 row = dict(zip(cols, cells))
@@ -310,7 +327,7 @@ def scan_database(path: Path, known_admins: set[str],
             else:
                 continue
             if str(row.get("meta_key") or "").endswith("_capabilities") and "administrator" in str(row.get("meta_value") or ""):
-                admins.setdefault(str(row.get("user_id")), models.Location(table=table, key=str(row.get("meta_key")), row=count))
+                admins.setdefault(str(row.get("user_id")), models.Location(table=table, key=str(row.get("meta_key"))[:200], row=count))
         elif table.endswith("_options"):
             if cols:
                 row = dict(zip(cols, cells))
@@ -318,7 +335,7 @@ def scan_database(path: Path, known_admins: set[str],
                 row = {"option_name": cells[1], "option_value": cells[2]}
             else:
                 continue
-            key = str(row.get("option_name") or "")
+            key = str(row.get("option_name") or "")[:200]
             value = str(row.get("option_value") or "")
             if re.search(r"<script\b|<iframe\b|javascript\s*:", value, flags=re.I):
                 findings.append(Detection("SUSPICIOUS_DB_MARKUP", "medium", "low", "database",
@@ -326,6 +343,18 @@ def scan_database(path: Path, known_admins: set[str],
                     _observe(item, "OPTION_VALUE_WITH_ACTIVE_MARKUP", models.Location(table=table, key=key, row=count))))
     if not tables:
         cover.fail("Brak obsługiwanych instrukcji INSERT; parser PoC nie interpretuje tego formatu SQL")
+    elif not core_seen:
+        cover.fail("Zrzut nie zawiera odczytanych wierszy tabel *_users, *_usermeta ani *_options; "
+                   "analiza DB nie objęła danych WordPressa")
+    if dropped:
+        cover.degrade(f"Pominięto {len(dropped)} niedomkniętych instrukcji INSERT (zrzut ucięty lub uszkodzony)")
+    if malformed:
+        cover.degrade(f"Pominięto {malformed} wierszy tabel użytkowników lub opcji o nieoczekiwanej liczbie pól "
+                      "(np. wyrażenie SQL zamiast literału)")
+    unsupported = sum(1 for start in _WRITE_STATEMENT.finditer(sql) if _INSERT_HEAD.match(sql, start.end()) is None)
+    if unsupported:
+        cover.degrade(f"Pominięto {unsupported} instrukcji INSERT/REPLACE w nieobsługiwanej składni "
+                      "(np. REPLACE INTO, INSERT IGNORE, nazwa z bazą, INSERT ... SET)")
     for user_id in sorted(admins):
         login = users.get(user_id, "")
         if not login:
@@ -342,7 +371,7 @@ def scan_database(path: Path, known_admins: set[str],
     cover.note("Parser SQL PoC obsługuje wybrane INSERT; nie obsługuje triggerów, procedur, pełnej składni ani multisite")
     return findings, cover
 
-LOG_PATTERN = re.compile(r'^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"(GET|POST|PUT|PATCH|DELETE|HEAD)\s+([^ ]+)\s+[^\"]+"\s+(\d{3})\b')
+LOG_PATTERN = re.compile(r'^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"(GET|POST|PUT|PATCH|DELETE|HEAD)[ \t]+(\S+)[ \t]+[^\"]+"\s+(\d{3})\b')
 
 def _log_time_utc(stamp: str) -> str | None:
     """Czas z logu combined jako UTC; ``None``, gdy zapisu nie da się jednoznacznie znormalizować (np. brak strefy)."""
@@ -384,8 +413,8 @@ def scan_logs(root: Path, session: ingest.Session | None = None) -> tuple[list[D
                     cover.note("Nie można znormalizować czasu logu: " + timestamp[:64])
                 request = models.Observation(
                     _evidence(item).id, "HTTP_REQUEST_FOR_PHP_IN_UPLOADS", models.Location(path=item.rel, line=ln),
-                    {"uri": uri[:300], "method": method, "status": int(status), "client_ip": ip},
-                    timestamp_raw=timestamp, timestamp_utc=moment, time_source=models.TimeSource.LOG)
+                    {"uri": uri[:300], "method": method, "status": int(status), "client_ip": ip[:64]},
+                    timestamp_raw=timestamp[:64], timestamp_utc=moment, time_source=models.TimeSource.LOG)
                 findings.append(Detection("HTTP_EXECUTABLE_IN_UPLOADS", "high", "medium", "http_log",
                     "Żądanie HTTP do pliku PHP w uploads; brak dowodu wykonania kodu.", request))
     if observed and not matched:

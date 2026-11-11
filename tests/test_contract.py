@@ -18,6 +18,7 @@ from conftest import (
     UPLOAD_PHP,
     XSS,
     access_line,
+    admin_sql,
     analyze_demo,
     option_sql,
     remove_at,
@@ -576,3 +577,61 @@ def test_schema_fields_match_the_fields_the_model_writes(schema, demo_case, anal
     assert set(schema["required"]) == set(report)
     for name, definition in (("evidence", "evidence"), ("observations", "observation"), ("findings", "finding"), ("timeline", "timeline_event")):
         assert set(defs[definition]["required"]) == set(defs[definition]["properties"]) == set(report[name][0]), name
+
+
+# --- zrzut SQL, którego część parser pominął, nie ma pełnego pokrycia ----------------------------
+
+MARKUP = "<script src=//example.invalid/x.js></script>"
+SKIPPED_SQL = {
+    "truncated-statement": (f"INSERT INTO `wp_options` VALUES (1,'siteurl','{MARKUP}'),(2,'x','tru", "PARTIAL", "niedomkniętych instrukcji"),
+    "replace-into": (f"REPLACE INTO `wp_options` VALUES (1,'a','{MARKUP}');\n", "PARTIAL", "nieobsługiwanej składni"),
+    "insert-ignore": (f"INSERT IGNORE INTO `wp_options` VALUES (1,'a','{MARKUP}');\n", "PARTIAL", "nieobsługiwanej składni"),
+    "database-qualified-name": (f"INSERT INTO wp.wp_options VALUES (1,'a','{MARKUP}');\n", "PARTIAL", "nieobsługiwanej składni"),
+    "insert-set": (f"INSERT INTO `wp_options` SET option_name='a', option_value='{MARKUP}';\n", "PARTIAL", "nieobsługiwanej składni"),
+    "expression-instead-of-literal": ("INSERT INTO `wp_options` VALUES (4,'d',CONCAT('<script>','x'));\n", "PARTIAL", "nieoczekiwanej liczbie pól"),
+    "column-list-longer-than-row": ("INSERT INTO `wp_options` (`option_id`,`option_name`,`option_value`) VALUES (4,CONCAT('a','b'));\n",
+                                    "PARTIAL", "nieoczekiwanej liczbie pól"),
+}
+
+
+@pytest.mark.parametrize("extra, status, reason", SKIPPED_SQL.values(), ids=SKIPPED_SQL.keys())
+def test_sql_that_the_parser_skipped_lowers_database_coverage(complete_case, evidence, analyze, extra, status, reason):
+    database = write(evidence / "skipped.sql", admin_sql("siteadmin") + extra)
+
+    run = analyze(**{**complete_case, "database": database})
+
+    assert run.coverage("database")["status"] == status
+    assert run.has_gap(reason)
+    assert (run.report["assessment"], run.report["scope_complete"], run.exit_code) == ("INCONCLUSIVE", False, 3)
+
+
+def test_dump_without_wordpress_tables_is_not_an_analyzed_database(complete_case, evidence, analyze):
+    database = write(evidence / "foreign.sql", "INSERT INTO `foo` VALUES (1,'x');\n")
+
+    run = analyze(**{**complete_case, "database": database})
+
+    assert run.coverage("database")["status"] == "FAILED"
+    assert (run.report["assessment"], run.exit_code) == ("INCONCLUSIVE", 4)
+
+
+@pytest.mark.parametrize("prose", [
+    "INSERT INTO `wp_options` VALUES (5,'note','please insert the key\\ninto the lock');\n",
+    "INSERT INTO `wp_options` VALUES (5,'note','x'), (6,'other','y');\n",
+    "insert into `wp_options` values (5,'note','x');\n",
+], ids=["keyword-inside-a-value", "multi-row", "lower-case"])
+def test_supported_inserts_keep_database_coverage_complete(complete_case, evidence, analyze, prose):
+    database = write(evidence / "plain.sql", admin_sql("siteadmin") + prose)
+
+    run = analyze(**{**complete_case, "database": database})
+
+    assert (run.coverage("database")["status"], run.report["scope_complete"]) == ("ANALYZED", True)
+
+
+def test_long_option_name_and_client_address_are_truncated_in_the_report(complete_case, evidence, analyze):
+    database = write(evidence / "long.sql", admin_sql("siteadmin") + option_sql("k" * 5000, MARKUP))
+    logs = write(evidence / "logs" / "access.log", access_line("/" + UPLOAD_PHP, ip="1" * 5000)).parent
+
+    run = analyze(**{**complete_case, "database": database, "logs": logs})
+
+    assert max(len(str(value)) for observation in run.report["observations"]
+               for value in [*observation["location"].values(), *observation["attributes"].values()]) <= 300
