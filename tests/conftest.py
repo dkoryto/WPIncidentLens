@@ -12,7 +12,7 @@ import shutil
 import signal
 import stat
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import jsonschema
@@ -24,6 +24,7 @@ from wptrace.models import describe_location, validate_report
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 SCHEMA_PATH = Path(__file__).parents[1] / "docs" / "schema" / "report-poc-1.schema.json"
+CASE_SCHEMA_PATH = SCHEMA_PATH.with_name("case-poc-1.schema.json")
 LEGACY_REPORT_PATH = Path(__file__).parent / "data" / "report-0.1.0.json"  # raport 0.1.0 z danych syntetycznych (dawne demo/report.json)
 HARMLESS_PHP = "<?php // synthetic placeholder, never executed\n"
 EVAL_MARKER = "<?php // SYNTHETIC indicator text, never executed: eval(base64_decode('synthetic'));\n"
@@ -114,10 +115,14 @@ def remove_at(document: dict, path: tuple) -> None:
     del document[last]
 
 
-def schema_errors(report: dict) -> list[str]:
+def schema_errors(report: dict, schema: Path = SCHEMA_PATH) -> list[str]:
     """Komunikaty walidacji raportu opublikowanym JSON Schema (draft 2020-12); pusta lista oznacza zgodność."""
-    validator = jsonschema.Draft202012Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
+    validator = jsonschema.Draft202012Validator(json.loads(schema.read_text(encoding="utf-8")))
     return sorted(error.message for error in validator.iter_errors(report))
+
+
+def case_schema_errors(case: dict) -> list[str]:
+    return schema_errors(case, CASE_SCHEMA_PATH)
 
 
 def tamper_before_reverification(monkeypatch, tamper) -> None:
@@ -158,6 +163,7 @@ class Run:
     stdout: str
     out: Path
     exit_code: int = 0
+    case: dict = field(default_factory=dict)  # odczytany case.json
 
     @property
     def findings(self) -> list[dict]:
@@ -274,7 +280,9 @@ def analyze(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
         report = json.loads(json_text)
         validate_report(report)  # każdy raport zapisany w testach musi spełniać cały kontrakt poc-1…
         assert schema_errors(report) == []  # …i opublikowany JSON Schema
-        return Run(report, json_text, (out / "report.html").read_text(encoding="utf-8"), capsys.readouterr().out, out, code)
+        case = json.loads((out / "case.json").read_text(encoding="utf-8"))
+        assert case_schema_errors(case) == []
+        return Run(report, json_text, (out / "report.html").read_text(encoding="utf-8"), capsys.readouterr().out, out, code, case)
 
     return run
 

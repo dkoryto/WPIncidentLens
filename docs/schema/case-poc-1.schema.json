@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wpincidentlens.invalid/schema/case-poc-1.schema.json",
+  "title": "WPTrace case.json (case-poc-1)",
+  "description": "Opis sprawy i przebiegu analizy zapisywany obok report.json. Bez sekretów, ścieżek hosta i zmiennych środowiskowych.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "case_id", "operator_id", "tool", "tool_version", "created_at_utc", "analysis_finished_at_utc",
+               "sources", "limits", "flags", "report", "assessment", "exit_code"],
+  "properties": {
+    "schema_version": {"const": "case-poc-1"},
+    "case_id": {"$ref": "#/$defs/identifier"},
+    "operator_id": {
+      "description": "Pseudonim operatora podany w --operator-id; null, gdy go nie podano.",
+      "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+    },
+    "tool": {"type": "string", "minLength": 1},
+    "tool_version": {"type": "string", "minLength": 1},
+    "created_at_utc": {
+      "description": "Chwila zbudowania kontekstu sprawy, przed odczytem dowodów (zegar narzędzia).",
+      "$ref": "#/$defs/utc"
+    },
+    "analysis_finished_at_utc": {
+      "description": "Równe analyzed_at_utc w report.json (zegar narzędzia).",
+      "$ref": "#/$defs/utc"
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files", "database", "logs", "baseline"],
+      "properties": {
+        "files": {"$ref": "#/$defs/source"},
+        "database": {"$ref": "#/$defs/source"},
+        "logs": {"$ref": "#/$defs/source"},
+        "baseline": {"$ref": "#/$defs/source"}
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_files", "max_entries", "max_file_bytes", "max_total_bytes", "max_scan_bytes", "max_path_bytes", "max_depth", "max_seconds"],
+      "properties": {
+        "max_files": {"$ref": "#/$defs/positive"},
+        "max_entries": {"$ref": "#/$defs/positive"},
+        "max_file_bytes": {"$ref": "#/$defs/positive"},
+        "max_total_bytes": {"$ref": "#/$defs/positive"},
+        "max_scan_bytes": {"$ref": "#/$defs/positive"},
+        "max_path_bytes": {"$ref": "#/$defs/positive"},
+        "max_depth": {"$ref": "#/$defs/positive"},
+        "max_seconds": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "flags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow_hardlinks", "reverify"],
+      "properties": {
+        "allow_hardlinks": {"type": "boolean"},
+        "reverify": {"type": "boolean"}
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "sha256"],
+      "properties": {
+        "file": {"const": "report.json"},
+        "sha256": {"description": "SHA-256 bajtów zapisanego report.json.", "type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "assessment": {"enum": ["STRONG_INDICATORS", "SUSPICIOUS", "NO_INDICATORS_IN_ANALYZED_SCOPE", "INCONCLUSIVE"]},
+    "exit_code": {"enum": [0, 3, 4]}
+  },
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$"},
+    "utc": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?\\+00:00$"},
+    "positive": {"type": "integer", "minimum": 1},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provided", "name"],
+      "properties": {
+        "provided": {"type": "boolean"},
+        "name": {
+          "description": "Wyłącznie nazwa ostatniego składnika ścieżki podanej przez operatora; nigdy ścieżka hosta. Null dla źródła niepodanego i ścieżki bez nazwy.",
+          "type": ["string", "null"],
+          "pattern": "^[^/]+$"
+        }
+      },
+      "if": {"properties": {"provided": {"const": false}}},
+      "then": {"properties": {"name": {"type": "null"}}}
+    }
+  }
+}

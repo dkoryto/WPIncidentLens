@@ -12,7 +12,15 @@ from conftest import access_line, analyze_demo, open_fd_count, strip_time, tree_
 import wptrace
 from wptrace.cli import main
 
-SOURCES = sorted(Path(wptrace.__file__).parent.glob("*.py"))
+PACKAGE = Path(wptrace.__file__).parent
+
+
+def _sources(package: Path) -> list[Path]:
+    """Wszystkie moduły pakietu, także w podpakietach."""
+    return sorted(package.rglob("*.py"))
+
+
+SOURCES = _sources(PACKAGE)
 NETWORK_MODULES = {"socket", "ssl", "urllib", "http", "ftplib", "smtplib", "asyncio", "requests", "httpx", "xmlrpc"}
 EXECUTION_MODULES = {"subprocess", "multiprocessing", "ctypes", "pickle", "marshal", "importlib", "runpy", "pty"}
 DEMO_RULES = {"EXECUTABLE_IN_UPLOADS", "SUSPICIOUS_PHP_EVAL_DECODE", "UNRECOGNIZED_ADMIN",
@@ -125,9 +133,10 @@ FILE_CALLS = {"open", "fdopen", "read_bytes", "read_text", "write_bytes", "write
 FILE_MODULES = {"shutil", "glob", "tempfile", "mmap", "fileinput", "linecache", "zipfile", "tarfile", "gzip", "bz2", "lzma",
                 "sqlite3", "dbm", "shelve"}
 UNQUALIFIED_IMPORTS = {"os", "os.path", "posix", "posixpath", "io", "builtins"}
-# Wyjątki D4: Reporter nie jest jeszcze wydzielony, więc cli.py tworzy katalog wyników i zapisuje do niego
-# report.json oraz report.html. Lista może się TYLKO skracać; nowe wywołanie plikowe poza ingest.py = błąd.
-ALLOWED_FILE_CALLS = {("cli.py", "mkdir"): 1, ("cli.py", "write_text"): 2}
+# D4: wyniki pisze wyłącznie Reporter. Tworzy katalog wyników, otwiera go i plik tymczasowy, a po błędzie sprząta.
+# Lista może się TYLKO skracać; każde inne wywołanie plikowe poza ingest.py = błąd.
+ALLOWED_FILE_CALLS = {("report.py", "makedirs"): 1, ("report.py", "open"): 2, ("report.py", "unlink"): 1}
+OS_MODULES = {"os", "posix", "nt"}
 
 
 def _file_access(tree: ast.AST, module: str) -> Counter:
@@ -153,10 +162,30 @@ def _file_access(tree: ast.AST, module: str) -> Counter:
 def test_d4_only_ingest_touches_the_filesystem():
     found = Counter()
     for source in SOURCES:
-        if source.name != "ingest.py":
-            found += _file_access(ast.parse(source.read_text(encoding="utf-8")), source.name)
+        module = source.relative_to(PACKAGE).as_posix()
+        if module != "ingest.py":
+            found += _file_access(ast.parse(source.read_text(encoding="utf-8")), module)
 
     assert dict(found) == ALLOWED_FILE_CALLS
+
+
+def test_d4_only_ingest_and_reporter_import_the_os_module():
+    """``os.write`` i ``os.replace`` mają nazwy zbyt ogólne dla strażnika wywołań, więc pilnowany jest sam import."""
+    importing = set()
+    for source in SOURCES:
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or ""] if isinstance(node, ast.ImportFrom) else []
+            if {name.split(".")[0] for name in names} & OS_MODULES:
+                importing.add(source.relative_to(PACKAGE).as_posix())
+
+    assert importing == {"ingest.py", "report.py"}
+
+
+def test_d4_guard_covers_modules_in_subpackages(tmp_path):
+    write(tmp_path / "top.py", "")
+    write(tmp_path / "parsers" / "nested.py", "")
+
+    assert [source.relative_to(tmp_path).as_posix() for source in _sources(tmp_path)] == ["parsers/nested.py", "top.py"]
 
 
 @pytest.mark.parametrize("snippet", [

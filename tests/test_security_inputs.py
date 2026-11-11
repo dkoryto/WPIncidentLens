@@ -591,18 +591,27 @@ def _xss_symlink_name(site, evidence):
     return {}
 
 
-def _xss_case_id(site, evidence):
-    return {"case_id": XSS}
-
-
-@pytest.mark.parametrize("build", [_xss_file_path, _xss_option_name, _xss_log_file_name, _xss_log_timestamp, _xss_symlink_name, _xss_case_id],
-                         ids=["finding-file-path", "finding-option-name", "finding-log-file-name", "gap-log-timestamp", "gap-symlink-name", "case-id"])
+@pytest.mark.parametrize("build", [_xss_file_path, _xss_option_name, _xss_log_file_name, _xss_log_timestamp, _xss_symlink_name],
+                         ids=["finding-file-path", "finding-option-name", "finding-log-file-name", "gap-log-timestamp", "gap-symlink-name"])
 def test_s12_markup_from_evidence_is_escaped_in_html_report(site, evidence, analyze, build):
     run = analyze(site, **build(site, evidence))
 
     assert html.escape(XSS, quote=True) in run.html
     assert XSS not in run.html
     assert not re.search(r"<(script|img|svg|iframe)\b", run.html, re.I)
+
+
+def test_s12_markup_in_case_id_is_refused_by_the_command_line(site, refuse):
+    assert "--case-id" in refuse("--files", str(site), "--case-id", XSS)
+
+
+def test_s12_markup_in_case_id_of_a_composed_report_is_escaped_in_html_report(site, tmp_path):
+    """CaseManager odrzuca taki identyfikator w CLI; raport złożony z pominięciem CLI nadal musi być escapowany."""
+    cli.write_html(cli.compose_report(site, None, None, None, set(), XSS), tmp_path / "report.html")
+    page = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert html.escape(XSS, quote=True) in page
+    assert XSS not in page
 
 
 @pytest.mark.xfail(strict=True, reason="raport HTML nie deklaruje Content-Security-Policy (#3)")
