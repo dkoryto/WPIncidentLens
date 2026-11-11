@@ -188,9 +188,37 @@ def _iter_row_groups(values: str):
 # zamknięcia nie jest skanowany do końca pliku przy każdym wystąpieniu (czas kwadratowy, #17).
 # Biały znak przed VALUES dopasowuje dokładnie jeden kwantyfikator, więc długi ciąg spacji nie daje nawrotów.
 _INSERT_HEAD = re.compile(r"INSERT\s+INTO\s+`?([A-Za-z0-9_]+)(?![A-Za-z0-9_])`?\s*(?:(\([^;()]*\))\s*)?VALUES\s*", re.I)
-# Początek instrukcji zapisującej dane w zrzucie: słowo kluczowe na początku wiersza.
-_WRITE_STATEMENT = re.compile(r"^[ \t]*(?=(?:INSERT|REPLACE)\b)", re.I | re.M)
+# Leksemy zrzutu SQL potrzebne do znalezienia początków instrukcji. Każda alternatywa zawsze się dopasowuje
+# (niedomknięty łańcuch lub komentarz sięga końca tekstu), a kwantyfikatory zaborcze wykluczają nawroty.
+_SQL_TOKEN = re.compile(r"""
+      '(?:[^'\\]|\\.|'')*+(?:'|\Z)
+    | "(?:[^"\\]|\\.|"")*+(?:"|\Z)
+    | `[^`]*+(?:`|\Z)
+    | (?P<comment> --(?=\s|\Z)[^\n]*+ | \#[^\n]*+ | /\*.*?(?:\*/|\Z) )
+    | (?P<end> ; )
+    | (?P<space> \s++ )
+    | (?P<word> [A-Za-z_]++ )
+    | .
+""", re.X | re.S)
 _CORE_TABLE_CELLS = {"_users": 2, "_usermeta": 4, "_options": 3}
+
+
+def _write_statement_starts(sql: str):
+    """Pozycje instrukcji INSERT/REPLACE: słowo kluczowe jako pierwszy leksem instrukcji, poza łańcuchami i komentarzami.
+
+    Używa podziału na instrukcje po średniku, więc instrukcja w tym samym wierszu co poprzednia albo po
+    komentarzu też jest widziana; słowo INSERT w treści wartości nie jest liczone.
+    """
+    at_start = True
+    for token in _SQL_TOKEN.finditer(sql):
+        if token["space"] or token["comment"]:
+            continue
+        if token["end"]:
+            at_start = True
+            continue
+        if at_start and token["word"] and token["word"].upper() in ("INSERT", "REPLACE"):
+            yield token.start()
+        at_start = False
 
 
 def iter_insert_rows(sql: str, dropped: list[str] | None = None):
@@ -351,7 +379,7 @@ def scan_database(path: Path, known_admins: set[str],
     if malformed:
         cover.degrade(f"Pominięto {malformed} wierszy tabel użytkowników lub opcji o nieoczekiwanej liczbie pól "
                       "(np. wyrażenie SQL zamiast literału)")
-    unsupported = sum(1 for start in _WRITE_STATEMENT.finditer(sql) if _INSERT_HEAD.match(sql, start.end()) is None)
+    unsupported = sum(1 for start in _write_statement_starts(sql) if _INSERT_HEAD.match(sql, start) is None)
     if unsupported:
         cover.degrade(f"Pominięto {unsupported} instrukcji INSERT/REPLACE w nieobsługiwanej składni "
                       "(np. REPLACE INTO, INSERT IGNORE, nazwa z bazą, INSERT ... SET)")
@@ -371,7 +399,7 @@ def scan_database(path: Path, known_admins: set[str],
     cover.note("Parser SQL PoC obsługuje wybrane INSERT; nie obsługuje triggerów, procedur, pełnej składni ani multisite")
     return findings, cover
 
-LOG_PATTERN = re.compile(r'^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"(GET|POST|PUT|PATCH|DELETE|HEAD)[ \t]+(\S+)[ \t]+[^\"]+"\s+(\d{3})\b')
+LOG_PATTERN = re.compile(r'^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"(GET|POST|PUT|PATCH|DELETE|HEAD)[ \t]+(\S+)[ \t]+[^\"\s][^\"]*"\s+(\d{3})\b')
 
 def _log_time_utc(stamp: str) -> str | None:
     """Czas z logu combined jako UTC; ``None``, gdy zapisu nie da się jednoznacznie znormalizować (np. brak strefy)."""
