@@ -8,8 +8,10 @@ Status `IN REVIEW` oznacza otwarty PR, nie ukończone zadanie. `MERGED` oznacza 
 | T-002 threat model, ADR, traceability | #2 | `agent/T-002-threat-model-adr` | MERGED (#9) | tylko dokumentacja; ADR 0001 i 0002 ACCEPTED z delegacji właściciela |
 | T-003 macierz testów i testy negatywne | #3 | `agent/T-003-test-matrix` | MERGED (#10) | 104 nowe testy; coverage 93%; `docs/TEST_MATRIX.md` |
 | T-004 ReDoS w parserze INSERT | #11 | `agent/T-004-sql-redos` | MERGED (#12) | macOS: 89 passed, 1 skipped, 29 xfailed |
-| T-101 SecureIngest | #4 | `agent/T-101-secure-ingest` | IN REVIEW | `wptrace/ingest.py` wg ADR 0002 B2–B6, B8, D4; macOS 270 passed, 2 skipped, 20 xfailed po poprawkach z audytu (Linux przed poprawkami: 263 passed, 1 skipped, 20 xfailed; po nich tylko CI); CaseManager i `case.json` poza zakresem tego PR |
-| T-102 kontrakty Evidence/Observation/Finding | #5 | — | TODO | po T-101; schemat `poc-1` z `INCONCLUSIVE` i migracją |
+| T-101 SecureIngest | #4 | `agent/T-101-secure-ingest` | MERGED (#16) | `wptrace/ingest.py` wg ADR 0002; niezależny audyt agenta: 0 critical/high, poprawki w PR; CaseManager i `case.json` jeszcze do zrobienia (#4 otwarte) |
+| T-005 kwadratowy parser INSERT, budżet wpisów | #17 | `agent/T-005-sql-header-linear` | IN REVIEW | macOS: 276 passed, 2 skipped, 20 xfailed |
+| T-006 drobne ustalenia audytu T-101 | #18 | — | TODO | niska waga |
+| T-102 kontrakty Evidence/Observation/Finding | #5 | `agent/T-102-contracts` | IN PROGRESS | schemat `poc-1` z `INCONCLUSIVE` i migracją |
 | T-201 analiza plików WordPressa | #6 | — | BLOCKED | wymaga M1 |
 | T-301 ekstraktor SQL/JSONL | #7 | — | BLOCKED | wymaga M1 |
 | T-401 logi, UTC, korelacja | #13 | — | BLOCKED | wymaga M1 |
@@ -25,3 +27,5 @@ Status `IN REVIEW` oznacza otwarty PR, nie ukończone zadanie. `MERGED` oznacza 
 - 2026-11-11 — T-004 (#11): regex wiersza w `iter_insert_rows` zastąpiony skanerem liniowym; test S-08 przechodzi bez `xfail`.
 - 2026-11-11 — PR-y #8, #10, #12 i #9 scalone do `main` przez agenta na polecenie właściciela. Następny krok: przegląd i PR dla T-101, potem T-102.
 - 2026-11-11 — T-101 (#4): cały odczyt dowodów w `cli.py` idzie przez `wptrace/ingest.py` (deskryptory, `O_NOFOLLOW`, hardlinki, limity, ponowna weryfikacja, strażnik AST D4); schemat raportu 0.1.0 bez zmian; zdjęto 10 przypadków `xfail`. Następny krok: CaseManager i `case.json`, potem T-102.
+- 2026-11-11 — PR #16 (T-101) scalony po niezależnym audycie agenta; ustalenia audytu poza zakresem przeniesione do #17 i #18.
+- 2026-11-11 — T-005 (#17): nagłówek INSERT parsowany liniowo; nazwy wylistowane na stosie katalogów liczą się do budżetu wpisów.
