@@ -56,6 +56,18 @@ def tree_digest(root: Path) -> str:
     return h.hexdigest()
 
 
+def sparse(path: Path, size: int, head: str | bytes = b"") -> Path:
+    """Plik rzadki: nagłówek z treścią i dziura do ``size`` bajtów (bez zapisu danych)."""
+    write(path, head)
+    os.truncate(path, size)
+    return path
+
+
+def open_fd_count() -> int:
+    """Liczba deskryptorów otwartych w procesie testowym (Linux i macOS)."""
+    return len(os.listdir("/dev/fd"))
+
+
 def access_line(uri: str, *, ip: str = "192.0.2.10", when: str = "09/Nov/2026:02:14:01 +0100",
                 method: str = "GET", status: int = 200, extra: str = "") -> str:
     return f'{ip} - - [{when}] "{method} {uri} HTTP/1.1" {status} 75 "-" "SyntheticTest"{extra}\n'
@@ -82,11 +94,15 @@ def strip_time(report: dict) -> dict:
     return {key: value for key, value in report.items() if key != "analyzed_at_utc"}
 
 
+class TimeBudgetExceeded(AssertionError):
+    """Nie ``TimeoutError``: to podklasa ``OSError``, którą odczyt dowodów zamienia w lukę — zawieszenie zostałoby ukryte."""
+
+
 @contextmanager
 def time_limit(seconds: float):
     """Przerywa blokujące wywołanie (także wewnątrz ``re``) zamiast zawieszać cały zestaw testów."""
     def expired(signum, frame):
-        raise TimeoutError(f"przekroczono budżet {seconds} s")
+        raise TimeBudgetExceeded(f"przekroczono budżet {seconds} s")
     previous = signal.signal(signal.SIGALRM, expired)
     signal.setitimer(signal.ITIMER_REAL, seconds)
     try:
@@ -157,10 +173,11 @@ def analyze(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
     counter = iter(range(1, 1000))
 
     def run(site: Path, *, database: Path | None = None, logs: Path | None = None,
-            baseline: Path | dict | None = None, known_admins: tuple[str, ...] = (), case_id: str = "T003-SYNTH") -> Run:
+            baseline: Path | dict | None = None, known_admins: tuple[str, ...] = (), case_id: str = "T003-SYNTH",
+            flags: tuple[str, ...] = ()) -> Run:
         number = next(counter)
         out = tmp_path / f"out-{number}"
-        argv = ["--files", str(site), "--output", str(out), "--case-id", case_id]
+        argv = ["--files", str(site), "--output", str(out), "--case-id", case_id, *flags]
         if database is not None:
             argv += ["--database", str(database)]
         if logs is not None:
@@ -176,6 +193,21 @@ def analyze(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
         json_text = (out / "report.json").read_text(encoding="utf-8")
         return Run(json.loads(json_text), json_text, (out / "report.html").read_text(encoding="utf-8"),
                    capsys.readouterr().out, out)
+
+    return run
+
+
+@pytest.fixture
+def refuse(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    """Uruchamia ``wptrace`` oczekując odmowy (kod 2); zwraca komunikat błędu, a wyniki nie mogą powstać."""
+    def run(*argv: str) -> str:
+        out = tmp_path / "refused-out"
+        capsys.readouterr()
+        with pytest.raises(SystemExit) as stop:
+            main([*argv, "--output", str(out)])
+        assert stop.value.code == 2
+        assert not out.exists()
+        return capsys.readouterr().err
 
     return run
 
