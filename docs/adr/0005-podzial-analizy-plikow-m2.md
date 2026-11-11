@@ -19,6 +19,7 @@ Jedno przejście drzewa przez SecureIngest zostaje w `wpincidentlens/files.py`. 
 | `analysis.py` | wspólne typy: `Detection`, `SourceCoverage`, budowa obserwacji |
 | `files.py` | pętla po wpisach, limit skanu treści, wynik `FileScan` |
 | `integrity.py` | porównanie z zaufaną referencją: baseline SHA-256, lokalny manifest sum WordPress.org (MD5) |
+| `fileclass.py` | klasa pliku po ścieżce (core, drop-in, mu-plugin, plugin, theme, upload…) |
 | `filerules.py` | reguły ścieżki i treści, każda z identyfikatorem i wersją |
 | `wpdetect.py` | WPDetector: wersja, locale, prefiks tabel jako kandydaci |
 
