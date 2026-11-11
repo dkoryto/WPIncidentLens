@@ -1,4 +1,5 @@
 """Scenariusze negatywne N1–N8 (rozdz. 14.2) oraz luki pokrycia: brak alertu nigdy nie znaczy „czysto”."""
+import os
 import re
 
 import pytest
@@ -171,13 +172,34 @@ def test_missing_trusted_baseline_is_reported_as_coverage_gap(site, analyze, bas
     assert any(re.search(r"baseline|migawk|referenc", gap, re.I) for gap in run.gaps)
 
 
-@pytest.mark.parametrize("content", ["{not json", "[]", '"text"'], ids=["invalid-json", "list", "string"])
-@pytest.mark.xfail(strict=True, reason="niepoprawny baseline kończy się nieobsłużonym wyjątkiem zamiast błędu wejścia (#4)")
+@pytest.mark.parametrize("content", [
+    "{not json", "[]", '"text"', '{"files": []}', '{"files": {"index.php": 1}}', '{"known_admins": "siteadmin"}',
+    '{"known_admins": [["siteadmin"]]}', b"\xff\xfe{}", "[" * 100_000,
+], ids=["invalid-json", "list", "string", "files-not-object", "hash-not-string", "admins-not-list", "admin-not-string",
+        "not-utf8", "deeply-nested"])
 def test_malformed_baseline_is_rejected_as_usage_error(site, tmp_path, content):
     baseline = write(tmp_path / "baseline.json", content)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as refusal:
         main(["--files", str(site), "--baseline", str(baseline), "--output", str(tmp_path / "out")])
+
+    assert refusal.value.code == 2
+    assert not (tmp_path / "out").exists()
+
+
+def test_baseline_is_listed_in_evidence_manifest(site, tmp_path, analyze):
+    baseline = write(tmp_path / "trusted.json", '{"files": {}}')
+
+    manifest = analyze(site, baseline=baseline).report["evidence_manifest"]
+
+    assert {"source": "baseline/trusted.json", "sha256": sha256(baseline), "size": 13} in manifest
+
+
+def test_hardlinked_baseline_is_refused_with_a_hint(site, tmp_path, refuse):
+    baseline = write(tmp_path / "trusted.json", '{"files": {}}')
+    os.link(baseline, tmp_path / "second-name.json")
+
+    assert "--allow-hardlinks" in refuse("--files", str(site), "--baseline", str(baseline))
 
 
 # --- Obcy / nieobsługiwany SQL i logi -----------------------------------------------------------

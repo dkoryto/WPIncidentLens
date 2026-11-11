@@ -2,31 +2,41 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import html
+import io
 import json
-import os
 import re
-import stat
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import ingest
+
 VERSION = "0.1.0-poc"
-MAX_FILES = 20000
-MAX_SCAN_BYTES = 4 * 1024 * 1024
+# Materiał dowodowy otwiera wyłącznie wptrace.ingest (ADR 0002 D4); ten moduł dostaje już przeczytane bajty.
+MAX_FILES = ingest.Limits().max_files
+MAX_SCAN_BYTES = ingest.Limits().max_scan_bytes
 MAX_SQL_BYTES = 20 * 1024 * 1024
 MAX_LOG_BYTES = 30 * 1024 * 1024
+MAX_BASELINE_BYTES = 64 * 1024 * 1024
 CODE_SUFFIXES = {".php", ".phtml", ".phar", ".inc"}
 
 
-def digest_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def _session() -> ingest.Session:
+    """Sesja odczytu z limitami domyślnymi; stałe MAX_* są czytane w chwili wywołania."""
+    return ingest.Session(ingest.Limits(max_files=MAX_FILES, max_scan_bytes=MAX_SCAN_BYTES))
+
+
+def _has_content_rules(rel: str) -> bool:
+    path = PurePosixPath(rel)
+    return path.suffix.lower() in CODE_SUFFIXES or path.name in (".htaccess", ".user.ini")
+
+
+def _text(content: bytes) -> io.TextIOWrapper:
+    """Dekoduje jak dotychczasowe otwarcie w trybie tekstowym: UTF-8 ze znakami zastępczymi, uniwersalne końce wierszy."""
+    return io.TextIOWrapper(io.BytesIO(content), encoding="utf-8", errors="replace")
 
 
 def finding(rule: str, severity: str, confidence: str, kind: str,
@@ -36,72 +46,47 @@ def finding(rule: str, severity: str, confidence: str, kind: str,
             "metadata": metadata}
 
 
-def scan_files(root: Path, baseline: dict | None) -> tuple[list[dict], list[dict], list[str]]:
+def scan_files(root: Path, baseline: dict | None,
+               session: ingest.Session | None = None) -> tuple[list[dict], list[dict], list[str]]:
+    session = session or _session()
     discoveries, manifest, gaps = [], [], []
-    visited = 0
-    stack = [root]
     ref = (baseline or {}).get("files", {})
-    while stack:
-        current = stack.pop()
-        try:
-            entries = sorted(os.scandir(current), key=lambda x: x.name)
-        except OSError as exc:
-            gaps.append(f"Nie można odczytać katalogu {current.relative_to(root)}: {exc}")
+    scan_limit = session.limits.max_scan_bytes
+    unread, complete = set(), True  # wpisy widziane, lecz nieprzeczytane; czy przejście objęło całe drzewo
+    for item in session.read(root, "files", expect="dir", wanted=_has_content_rules):
+        gaps.extend(item.gaps)
+        if item.sha256 is None:
+            unread.add(item.rel)
+            complete = complete and item.rel != ingest.ROOT and item.reason != "MAX_FILES"
             continue
-        for entry in entries:
-            path = Path(entry.path)
-            rel = path.relative_to(root).as_posix()
-            try:
-                info = path.lstat()
-            except OSError as exc:
-                gaps.append(f"Nie można sprawdzić {rel}: {exc}")
-                continue
-            if stat.S_ISLNK(info.st_mode):
-                gaps.append(f"Łącze symboliczne pominięte (bez podążania): {rel}")
-                continue
-            if stat.S_ISDIR(info.st_mode):
-                stack.append(path)
-                continue
-            if not stat.S_ISREG(info.st_mode):
-                gaps.append(f"Plik specjalny pominięty: {rel}")
-                continue
-            visited += 1
-            if visited > MAX_FILES:
-                gaps.append(f"Limit {MAX_FILES} plików; analiza katalogu niepełna")
-                return discoveries, manifest, gaps
-            try:
-                sha = digest_file(path)
-            except OSError as exc:
-                gaps.append(f"Nie można obliczyć SHA-256 {rel}: {exc}")
-                continue
-            manifest.append({"source": f"files/{rel}", "sha256": sha,
-                             "size": info.st_size, "mtime_ns": info.st_mtime_ns})
-            if rel in ref and ref[rel] != sha:
-                discoveries.append(finding("BASELINE_FILE_CHANGED", "medium", "high",
-                    "file", rel, "Plik zmieniony względem zaufanej migawki (zmiana nie przesądza o ataku).",
-                    sha256=sha, baseline_sha256=ref[rel]))
-            if rel.startswith("wp-content/uploads/") and path.suffix.lower() in CODE_SUFFIXES:
-                discoveries.append(finding("EXECUTABLE_IN_UPLOADS", "high", "medium",
-                    "file", rel, "Plik wykonywalny PHP w uploads; wymaga analizy kontekstu.", sha256=sha))
-            if info.st_size > MAX_SCAN_BYTES:
-                gaps.append(f"Analiza treści pominięta, plik > {MAX_SCAN_BYTES} B: {rel}")
-                continue
-            if path.suffix.lower() not in CODE_SUFFIXES and path.name not in (".htaccess", ".user.ini"):
-                continue
-            try:
-                raw = path.read_bytes().lower()
-            except OSError as exc:
-                gaps.append(f"Odczyt treści nieudany {rel}: {exc}")
-                continue
-            if re.search(rb"eval\s*\(\s*base64_decode\s*\(", raw):
-                discoveries.append(finding("SUSPICIOUS_PHP_EVAL_DECODE", "high", "medium",
-                    "file", rel, "Wykryto łańcuch eval(base64_decode(...)); to heurystyka, nie dowód malware.", sha256=sha))
-            if re.search(rb"\$_(?:post|get|request)\s*\[.{0,120}\].{0,150}(?:shell_exec|system|passthru)\s*\(", raw, re.DOTALL):
-                discoveries.append(finding("REQUEST_TO_COMMAND_EXEC", "high", "medium",
-                    "file", rel, "Potencjalne powiązanie danych żądania z wykonaniem komendy; wymaga ręcznej weryfikacji.", sha256=sha))
-    if baseline and ref:
+        rel, sha = item.rel, item.sha256
+        manifest.append({"source": f"files/{rel}", "sha256": sha,
+                         "size": item.size, "mtime_ns": item.mtime_ns})
+        if rel in ref and ref[rel] != sha:
+            discoveries.append(finding("BASELINE_FILE_CHANGED", "medium", "high",
+                "file", rel, "Plik zmieniony względem zaufanej migawki (zmiana nie przesądza o ataku).",
+                sha256=sha, baseline_sha256=ref[rel]))
+        if rel.startswith("wp-content/uploads/") and PurePosixPath(rel).suffix.lower() in CODE_SUFFIXES:
+            discoveries.append(finding("EXECUTABLE_IN_UPLOADS", "high", "medium",
+                "file", rel, "Plik wykonywalny PHP w uploads; wymaga analizy kontekstu.", sha256=sha))
+        if item.size > scan_limit:
+            gaps.append(f"Analiza treści pominięta, plik > {scan_limit} B: {rel}")
+            continue
+        if item.content is None:
+            continue
+        raw = item.content.lower()
+        if re.search(rb"eval\s*\(\s*base64_decode\s*\(", raw):
+            discoveries.append(finding("SUSPICIOUS_PHP_EVAL_DECODE", "high", "medium",
+                "file", rel, "Wykryto łańcuch eval(base64_decode(...)); to heurystyka, nie dowód malware.", sha256=sha))
+        if re.search(rb"\$_(?:post|get|request)\s*\[.{0,120}\].{0,150}(?:shell_exec|system|passthru)\s*\(", raw, re.DOTALL):
+            discoveries.append(finding("REQUEST_TO_COMMAND_EXEC", "high", "medium",
+                "file", rel, "Potencjalne powiązanie danych żądania z wykonaniem komendy; wymaga ręcznej weryfikacji.", sha256=sha))
+    if baseline and ref and complete:  # po przerwanym przejściu nie wiadomo, czego w materiale brakuje
         observed = {x["source"][6:] for x in manifest}
         for rel in ref.keys() - observed:
+            parts = rel.split("/")
+            if any("/".join(parts[:depth]) in unread for depth in range(1, len(parts) + 1)):
+                continue  # plik (lub jego katalog) istnieje, tylko nie został przeczytany — luka, nie „brak pliku”
             discoveries.append(finding("BASELINE_FILE_MISSING", "low", "high",
                 "file", rel, "Plik obecny w migawce bazowej nie występuje w materiale wejściowym."))
     return discoveries, manifest, gaps
@@ -221,14 +206,19 @@ def iter_insert_rows(sql: str):
             yield table, cols, cooked
 
 
-def scan_database(path: Path, known_admins: set[str]) -> tuple[list[dict], dict, list[str]]:
+def scan_database(path: Path, known_admins: set[str],
+                  session: ingest.Session | None = None) -> tuple[list[dict], dict | None, list[str]]:
+    """Wpis manifestu jest ``None``, gdy zrzutu nie udało się bezpiecznie odczytać (przyczyna trafia do luk)."""
     gaps, findings = [], []
-    size = path.stat().st_size
-    entry = {"source": f"database/{path.name}", "sha256": digest_file(path), "size": size}
-    if size > MAX_SQL_BYTES:
+    item = (session or _session()).read_file(path, "database", keep_limit=MAX_SQL_BYTES)
+    gaps.extend(item.gaps)
+    if item.sha256 is None:
+        return findings, None, gaps
+    entry = {"source": f"database/{item.rel}", "sha256": item.sha256, "size": item.size}
+    if item.size > MAX_SQL_BYTES:
         gaps.append(f"Eksport SQL większy niż {MAX_SQL_BYTES} B: analiza DB pominięta w PoC")
         return findings, entry, gaps
-    sql = path.read_text(encoding="utf-8", errors="replace")
+    sql = _text(item.content).read()
     users, admins, count = {}, set(), 0
     tables = set()
     for table, cols, cells in iter_insert_rows(sql):
@@ -282,33 +272,34 @@ def scan_database(path: Path, known_admins: set[str]) -> tuple[list[dict], dict,
 
 LOG_PATTERN = re.compile(r'^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"(GET|POST|PUT|PATCH|DELETE|HEAD)\s+([^ ]+)\s+[^\"]+"\s+(\d{3})\b')
 
-def scan_logs(root: Path) -> tuple[list[dict], list[dict], list[str]]:
+def scan_logs(root: Path, session: ingest.Session | None = None) -> tuple[list[dict], list[dict], list[str]]:
     findings, manifest, gaps = [], [], []
-    files = [root] if root.is_file() else sorted(root.rglob("*"))
     observed, skipped, matched = 0, 0, 0
-    for path in files:
-        if path.is_symlink() or not path.is_file():
-            if path.is_symlink(): gaps.append(f"Pominięto link w logach: {path.name}")
+    for item in (session or _session()).read(root, "logs", keep_limit=MAX_LOG_BYTES):
+        name = PurePosixPath(item.rel).name
+        if item.status is ingest.ReadStatus.SKIPPED_SYMLINK and item.rel != ingest.ROOT:
+            gaps.append(f"Pominięto link w logach: {name}")
+        else:
+            gaps.extend(item.gaps)
+        if item.sha256 is None:
             continue
-        size = path.stat().st_size
-        manifest.append({"source": f"logs/{path.name}", "sha256": digest_file(path), "size": size})
-        if size > MAX_LOG_BYTES:
-            gaps.append(f"Log za duży do parsowania w PoC: {path.name}")
+        manifest.append({"source": f"logs/{name}", "sha256": item.sha256, "size": item.size})
+        if item.size > MAX_LOG_BYTES:
+            gaps.append(f"Log za duży do parsowania w PoC: {name}")
             continue
-        with path.open("r", encoding="utf-8", errors="replace") as stream:
-            for ln, line in enumerate(stream, start=1):
-                observed += 1
-                m = LOG_PATTERN.match(line)
-                if not m:
-                    skipped += 1
-                    continue
-                matched += 1
-                ip, timestamp, method, uri, status = m.groups()
-                if method in {"POST", "GET"} and re.search(r"/wp-content/uploads/[^?\s]+\.(?:php|phtml|phar)(?:\?|$)", uri, re.I):
-                    findings.append(finding("HTTP_EXECUTABLE_IN_UPLOADS", "high", "medium", "http_log",
-                        f"{path.name}:{ln}", "Żądanie HTTP do pliku PHP w uploads; brak dowodu wykonania kodu.",
-                        uri=uri[:300], method=method, status=int(status),
-                        observed_time=timestamp, client_ip=ip))
+        for ln, line in enumerate(_text(item.content), start=1):
+            observed += 1
+            m = LOG_PATTERN.match(line)
+            if not m:
+                skipped += 1
+                continue
+            matched += 1
+            ip, timestamp, method, uri, status = m.groups()
+            if method in {"POST", "GET"} and re.search(r"/wp-content/uploads/[^?\s]+\.(?:php|phtml|phar)(?:\?|$)", uri, re.I):
+                findings.append(finding("HTTP_EXECUTABLE_IN_UPLOADS", "high", "medium", "http_log",
+                    f"{name}:{ln}", "Żądanie HTTP do pliku PHP w uploads; brak dowodu wykonania kodu.",
+                    uri=uri[:300], method=method, status=int(status),
+                    observed_time=timestamp, client_ip=ip))
     if observed and not matched:
         gaps.append("Logi nie odpowiadają obsługiwanemu formatowi Apache/Nginx combined")
     elif observed and skipped:
@@ -316,17 +307,46 @@ def scan_logs(root: Path) -> tuple[list[dict], list[dict], list[str]]:
     return findings, manifest, gaps
 
 
+def load_baseline(path: Path, session: ingest.Session) -> tuple[dict, dict, list[str]]:
+    """Czyta zaufany baseline tym samym bezpiecznym odczytem co dowody: (baseline, wpis manifestu, luki).
+
+    Baseline, którego nie da się odczytać albo który ma zły kształt, to błąd wejścia (``ValueError``), nie luka:
+    operator jawnie zażądał porównania, więc ciche pominięcie byłoby mylące.
+    """
+    item = session.read_file(path, "baseline", keep_limit=MAX_BASELINE_BYTES)
+    if item.content is None:
+        raise ValueError(item.gaps[0] if item.sha256 is None else f"plik większy niż {MAX_BASELINE_BYTES} B")
+    try:
+        data = json.loads(item.content.decode("utf-8"))
+    except (ValueError, RecursionError):
+        raise ValueError("niepoprawny JSON (wymagany UTF-8)") from None
+    if not isinstance(data, dict):
+        raise ValueError("baseline musi być obiektem JSON")
+    files, admins = data.get("files", {}), data.get("known_admins", [])
+    if not (isinstance(files, dict) and all(isinstance(value, str) for value in files.values())):
+        raise ValueError("baseline.files musi być obiektem {ścieżka: sha256}")
+    if not (isinstance(admins, list) and all(isinstance(value, str) for value in admins)):
+        raise ValueError("baseline.known_admins musi być listą nazw")
+    return data, {"source": f"baseline/{item.rel}", "sha256": item.sha256, "size": item.size}, list(item.gaps)
+
+
 def compose_report(root: Path, database: Path | None, logs: Path | None,
-                   baseline: dict | None, known_admins: set[str], case_id: str) -> dict:
-    file_findings, inputs, gaps = scan_files(root, baseline)
+                   baseline: dict | None, known_admins: set[str], case_id: str, *,
+                   session: ingest.Session | None = None,
+                   prior_inputs: Sequence[dict] = (), prior_gaps: Sequence[str] = ()) -> dict:
+    """``prior_inputs``/``prior_gaps``: manifest i luki wejść przeczytanych wcześniej w tej samej sesji (baseline)."""
+    session = session or _session()
+    file_findings, inputs, gaps = scan_files(root, baseline, session)
+    inputs.extend(prior_inputs); gaps.extend(prior_gaps)
     items = list(file_findings)
     if database:
-        f, man, g = scan_database(database, known_admins)
-        items.extend(f); inputs.append(man); gaps.extend(g)
+        f, man, g = scan_database(database, known_admins, session)
+        items.extend(f); gaps.extend(g)
+        if man: inputs.append(man)
     else:
         gaps.append("Brak zrzutu bazy danych")
     if logs:
-        f, man, g = scan_logs(logs)
+        f, man, g = scan_logs(logs, session)
         items.extend(f); inputs.extend(man); gaps.extend(g)
     else:
         gaps.append("Brak logów HTTP")
@@ -359,6 +379,7 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
                 "timestamp_basis": "Filesystem mtime: zmienialny; nie oznacza czasu ataku",
                 "confidence": "low"})
     timeline.sort(key=lambda event: (event["time_utc"], event["source"]))
+    gaps.extend(session.finish())
     counts = dict(Counter(x["severity"] for x in items))
     return {"schema_version": "0.1.0", "tool": "WPTrace PoC", "tool_version": VERSION,
         "case_id": case_id, "analyzed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -392,20 +413,45 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--known-admin", action="append", default=[])
     parser.add_argument("--case-id", default="WPTRACE-DEMO")
     parser.add_argument("--output", type=Path, required=True)
+    defaults = ingest.Limits()
+    parser.add_argument("--allow-hardlinks", action="store_true",
+                        help="Czytaj pliki z wieloma dowiązaniami twardymi (domyślnie pomijane z luką pokrycia)")
+    parser.add_argument("--no-reverify", action="store_true",
+                        help="Pomiń ponowną weryfikację skrótów po analizie (odnotowane w raporcie jako luka)")
+    parser.add_argument("--max-files", type=int, default=MAX_FILES, help="Limit liczby plików, łącznie we wszystkich źródłach (%(default)s)")
+    parser.add_argument("--max-file-bytes", type=int, default=defaults.max_file_bytes, help="Limit rozmiaru jednego pliku (%(default)s)")
+    parser.add_argument("--max-total-bytes", type=int, default=defaults.max_total_bytes, help="Limit łącznego rozmiaru czytanych plików (%(default)s)")
+    parser.add_argument("--max-seconds", type=float, default=defaults.max_seconds, help="Limit czasu całej analizy w sekundach (%(default)s)")
     args = parser.parse_args(argv)
-    root = args.files.resolve(strict=True)
-    if not root.is_dir(): parser.error("--files musi wskazywać katalog")
-    out = args.output.resolve()
-    if out == root or root in out.parents:
-        parser.error("--output nie może znajdować się w analizowanym katalogu")
-    if args.database and not args.database.is_file(): parser.error("--database: brak pliku")
-    if args.logs and not args.logs.exists(): parser.error("--logs: brak wskazanej ścieżki")
-    baseline = None
+    given = [(flag, path, expect) for flag, path, expect in (
+        ("--files", args.files, "dir"), ("--database", args.database, "file"),
+        ("--logs", args.logs, "any"), ("--baseline", args.baseline, "file")) if path is not None]
+    for flag, path, expect in given:
+        try:
+            ingest.check_source(path, expect)
+        except ingest.IngestRefusal as refusal:
+            if refusal.reason not in ("EACCES", "EPERM"):  # brak uprawnień to luka pokrycia w raporcie, nie błąd wywołania
+                parser.error(f"{flag}: {refusal}")
+    try:
+        out = ingest.resolve_output(args.output, [path for _, path, _ in given])
+    except ingest.IngestRefusal as refusal:
+        parser.error(f"--output: {refusal}")
+    try:
+        limits = ingest.Limits(max_files=args.max_files, max_file_bytes=args.max_file_bytes, max_total_bytes=args.max_total_bytes,
+                               max_scan_bytes=MAX_SCAN_BYTES, max_seconds=args.max_seconds)
+    except ValueError as invalid:
+        parser.error(str(invalid))
+    session = ingest.Session(limits, allow_hardlinks=args.allow_hardlinks, reverify=not args.no_reverify)
+    baseline, prior_inputs, prior_gaps = None, [], []
     if args.baseline:
-        baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
-        if not isinstance(baseline.get("files", {}), dict): parser.error("baseline.files musi być obiektem")
+        try:
+            baseline, entry, prior_gaps = load_baseline(args.baseline, session)
+        except ValueError as invalid:
+            parser.error(f"--baseline: {invalid}")
+        prior_inputs = [entry]
     admins = set(args.known_admin) | set((baseline or {}).get("known_admins", []))
-    output = compose_report(root, args.database, args.logs, baseline, admins, args.case_id)
+    output = compose_report(args.files, args.database, args.logs, baseline, admins, args.case_id,
+                            session=session, prior_inputs=prior_inputs, prior_gaps=prior_gaps)
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.json").write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
     write_html(output, out / "report.html")
