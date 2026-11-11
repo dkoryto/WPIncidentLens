@@ -72,8 +72,8 @@ Status źródła wynika z faktów, nie z samej obecności tekstu luki:
 | Status | Kiedy |
 |---|---|
 | `NOT_PROVIDED` | źródła nie podano |
-| `FAILED` | źródło podano, ale nie przeczytano z niego żadnych bajtów albo parser nie przeanalizował niczego (zrzut SQL ponad limit, brak obsługiwanych `INSERT`, log w obcym formacie, log bez wierszy, pusty katalog) |
-| `PARTIAL` | którykolwiek wpis ma status inny niż `READ` (pominięty, błąd, `CHANGED`), plik kodu przekracza limit skanowania treści, log przekracza limit lub ma niesparsowane wiersze, przekroczono 100 000 wierszy `INSERT`, rola administratora nie ma odczytanego wiersza użytkownika, źródło podmieniono albo ponowną weryfikację przerwał limit czasu |
+| `FAILED` | źródło podano, ale nie przeczytano z niego żadnych bajtów albo parser nie przeanalizował niczego (zrzut SQL ponad limit, brak obsługiwanych `INSERT`, zrzut bez wierszy tabel `*_users`, `*_usermeta`, `*_options`, log w obcym formacie, log bez wierszy, pusty katalog) |
+| `PARTIAL` | którykolwiek wpis ma status inny niż `READ` (pominięty, błąd, `CHANGED`), plik kodu przekracza limit skanowania treści, log przekracza limit lub ma niesparsowane wiersze, przekroczono 100 000 wierszy `INSERT`, rola administratora nie ma odczytanego wiersza użytkownika, parser SQL pominął instrukcję (niedomkniętą, w nieobsługiwanej składni) albo wiersz tabeli użytkowników lub opcji o nieoczekiwanej liczbie pól, źródło podmieniono albo ponowną weryfikację przerwał limit czasu |
 | `ANALYZED` | w pozostałych przypadkach; wymaga co najmniej jednego wpisu `READ` i żadnego innego |
 
 Status inny niż `ANALYZED` ma zawsze co najmniej jeden powód. Dotychczasowe teksty `coverage_gaps` zostały zachowane jako powody.

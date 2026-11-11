@@ -261,3 +261,15 @@ REFUSED = {
 def test_input_that_is_not_a_consistent_0_1_0_report_is_refused(report, message):
     with pytest.raises(MigrationError, match=message):
         migrate_0_1_0(report)
+
+
+@pytest.mark.parametrize("report", [
+    legacy_report(analyzed_at_utc="0001-01-01T00:00:00+05:00"),
+    legacy_report(assessment=["x"]),
+    legacy_report([legacy_finding(source_type="http_log", source="access.log:" + "9" * 5000)]),
+], ids=["time-out-of-range", "assessment-not-text", "huge-line-number"])
+def test_malformed_legacy_values_end_in_a_migration_error_or_a_valid_report(report):
+    try:
+        validate_report(migrate_0_1_0(report))
+    except MigrationError:
+        pass

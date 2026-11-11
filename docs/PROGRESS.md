@@ -11,7 +11,7 @@ Status `IN REVIEW` oznacza otwarty PR, nie ukończone zadanie. `MERGED` oznacza 
 | T-101 SecureIngest | #4 | `agent/T-101-secure-ingest` | MERGED (#16) | `wptrace/ingest.py` wg ADR 0002; niezależny audyt agenta: 0 critical/high, poprawki w PR; CaseManager i `case.json` jeszcze do zrobienia (#4 otwarte) |
 | T-005 kwadratowy parser INSERT, budżet wpisów | #17 | `agent/T-005-sql-header-linear` | MERGED (#19) | nagłówek INSERT liniowy; nazwy na stosie katalogów w budżecie wpisów |
 | T-006 drobne ustalenia audytu T-101 | #18 | — | TODO | niska waga |
-| T-102 kontrakty Evidence/Observation/Finding | #5 | `agent/T-102-contracts` | IN REVIEW | raport `poc-1`, `INCONCLUSIVE`, kody wyjścia 0/3/4, migracja z 0.1.0, ADR 0003; macOS 571 passed, 2 skipped, 15 xfailed |
+| T-102 kontrakty Evidence/Observation/Finding | #5 | `agent/T-102-contracts` | IN REVIEW | raport `poc-1`, `INCONCLUSIVE`, kody wyjścia 0/3/4, migracja z 0.1.0, ADR 0003; macOS 591 passed, 2 skipped, 13 xfailed po poprawkach z przeglądu |
 | T-201 analiza plików WordPressa | #6 | — | TODO | odblokowane po T-102 |
 | T-301 ekstraktor SQL/JSONL | #7 | — | TODO | odblokowane po T-102 |
 | T-401 logi, UTC, korelacja | #13 | — | BLOCKED | wymaga M1 |

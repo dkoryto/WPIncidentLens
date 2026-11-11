@@ -209,7 +209,6 @@ def test_foreign_sql_is_reported_as_unparsed_not_clean(site, evidence, analyze, 
     assert run.has_gap("Brak obsługiwanych instrukcji INSERT")
 
 
-@pytest.mark.xfail(strict=True, reason="pominięte instrukcje (np. REPLACE INTO) nie zwiększają coverage_gaps, gdy inne INSERT-y się sparsowały (#7)")
 def test_unsupported_statement_next_to_supported_one_adds_a_gap(site, evidence, analyze):
     supported = option_sql("blogname", "Synthetic Site")
     skipped = "REPLACE INTO `wp_usermeta` VALUES (9,9,'wp_capabilities','a:1:{s:13:\"administrator\";b:1;}');\n"
