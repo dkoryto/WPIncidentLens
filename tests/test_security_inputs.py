@@ -458,6 +458,23 @@ def test_sql_row_groups_are_split_outside_quotes(values, expected):
     assert list(cli._iter_row_groups(values)) == expected
 
 
+@pytest.mark.parametrize("crafted", [
+    "INSERT INTO a(" * 40_000,
+    "INSERT INTO a (`x`" * 40_000,
+    "INSERT INTO a" + " " * 400_000 + "x",
+    ("INSERT INTO a(`x`) " + " " * 50) * 8_000,
+], ids=["unclosed-column-list", "unclosed-with-column", "long-whitespace", "no-values-keyword"])
+def test_s08_unterminated_insert_headers_do_not_stall_the_sql_parser(crafted):
+    with time_limit(3):
+        assert list(cli.iter_insert_rows(crafted)) == []
+
+
+def test_sql_column_list_is_still_recognised():
+    rows = list(cli.iter_insert_rows("INSERT INTO `wp_users` (`ID`, `user_login`) VALUES (1,'a');"))
+
+    assert rows == [("wp_users", ["ID", "user_login"], ["1", "a"])]
+
+
 def test_sql_row_splitting_scales_linearly():
     many_rows = "INSERT INTO `wp_options` VALUES " + ",".join(f"({n},'v{n}')" for n in range(20000)) + ";"
 

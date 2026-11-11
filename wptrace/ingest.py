@@ -248,7 +248,7 @@ class Session:
         self._clock = clock or time.monotonic  # zegar monotoniczny: zmiana czasu systemowego nie wydłuża budżetu
         self._deadline = self._clock() + self.limits.max_seconds
         self._roots: list[_Root] = []
-        self._files = self._entries = self._bytes = self._hardlinked = 0
+        self._files = self._entries = self._pending = self._bytes = self._hardlinked = 0
 
     def read(self, path: str | os.PathLike[str], source: str, *, expect: str = "any",
              wanted: Callable[[str], bool] | None = None, keep_limit: int | None = None) -> Iterator[Evidence]:
@@ -308,6 +308,7 @@ class Session:
                     frames.pop()
                     os.close(dir_fd)
                     continue
+                self._pending -= 1
                 if self._expired():
                     yield self._skip(root.source, ROOT, ReadStatus.SKIPPED_LIMIT, "MAX_SECONDS")
                     return
@@ -344,7 +345,8 @@ class Session:
                 if record.reason == "MAX_FILES":  # dalsze pliki i tak byłyby pominięte
                     return
         finally:
-            for dir_fd, _, _ in frames:
+            for dir_fd, names, _ in frames:
+                self._pending -= sum(1 for _ in names)
                 os.close(dir_fd)
 
     def _enter(self, frames: list, fd: int, parts: tuple[str, ...], source: str) -> Evidence | None:
@@ -352,13 +354,16 @@ class Session:
         miliony dowiązań lub pustych katalogów nie ominęły limitu plików ani nie rozdęły rejestru i raportu. Zwraca wpis do raportu: ERROR, gdy katalogu nie da się
         wylistować (deskryptor jest wtedy zamykany), albo SKIPPED_LIMIT, gdy lista została obcięta budżetem wpisów."""
         where = "/".join(parts) or ROOT
-        budget = max(self.limits.max_entries - self._entries, 0)
+        # Nazwy wylistowane, lecz jeszcze nieodwiedzone (na stosie katalogów nadrzędnych) też zajmują budżet:
+        # inaczej każdy poziom zagnieżdżenia mógłby trzymać w pamięci osobną, pełną listę.
+        budget = max(self.limits.max_entries - self._entries - self._pending, 0)
         try:
             names = _sorted_names(fd, budget)
         except OSError as exc:
             os.close(fd)
             return self._skip(source, where, ReadStatus.ERROR, _error_name(exc))
         frames.append((fd, iter(names[:budget]), parts))
+        self._pending += min(len(names), budget)
         if len(names) > budget:
             return self._skip(source, where, ReadStatus.SKIPPED_LIMIT, "MAX_ENTRIES")
         return None
