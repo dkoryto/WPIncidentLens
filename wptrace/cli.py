@@ -200,23 +200,33 @@ _SQL_TOKEN = re.compile(r"""
     | (?P<word> [A-Za-z_]++ )
     | .
 """, re.X | re.S)
+_WRITE_KEYWORD = re.compile(r"\b(?:INSERT|REPLACE)\b", re.I)
 _CORE_TABLE_CELLS = {"_users": 2, "_usermeta": 4, "_options": 3}
 
 
 def _write_statement_starts(sql: str):
     """Pozycje instrukcji INSERT/REPLACE: słowo kluczowe jako pierwszy leksem instrukcji, poza łańcuchami i komentarzami.
 
+    Zgłasza też miejsca, których podział na instrukcje nie obejmuje wiarygodnie: komentarz wykonywalny ze słowem
+    INSERT/REPLACE i dyrektywę DELIMITER. Wywołujący liczy je jako składnię nieobsługiwaną.
+
     Używa podziału na instrukcje po średniku, więc instrukcja w tym samym wierszu co poprzednia albo po
     komentarzu też jest widziana; słowo INSERT w treści wartości nie jest liczone.
     """
     at_start = True
     for token in _SQL_TOKEN.finditer(sql):
-        if token["space"] or token["comment"]:
+        if token["comment"]:
+            # Komentarz wykonywalny (/*!NNNNN ... */, /*M! ... */) serwer traktuje jak kod.
+            if token["comment"].startswith(("/*!", "/*M!")) and _WRITE_KEYWORD.search(token["comment"]):
+                yield token.start()
+            continue
+        if token["space"]:
             continue
         if token["end"]:
             at_start = True
             continue
-        if at_start and token["word"] and token["word"].upper() in ("INSERT", "REPLACE"):
+        # DELIMITER zmienia znak końca instrukcji: dalszego podziału po średniku nie można uznać za wiarygodny.
+        if at_start and token["word"] and token["word"].upper() in ("INSERT", "REPLACE", "DELIMITER"):
             yield token.start()
         at_start = False
 
@@ -382,7 +392,7 @@ def scan_database(path: Path, known_admins: set[str],
     unsupported = sum(1 for start in _write_statement_starts(sql) if _INSERT_HEAD.match(sql, start) is None)
     if unsupported:
         cover.degrade(f"Pominięto {unsupported} instrukcji INSERT/REPLACE w nieobsługiwanej składni "
-                      "(np. REPLACE INTO, INSERT IGNORE, nazwa z bazą, INSERT ... SET)")
+                      "(np. REPLACE INTO, INSERT IGNORE, nazwa z bazą, INSERT ... SET, komentarz wykonywalny, DELIMITER)")
     for user_id in sorted(admins):
         login = users.get(user_id, "")
         if not login:
