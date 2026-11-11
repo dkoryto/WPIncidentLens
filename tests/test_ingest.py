@@ -844,7 +844,8 @@ def test_entry_limit_spans_all_sources_of_a_session(tmp_path):
 
     records = read(second, session, source="logs")
 
-    assert rels(records) == ["f0.php"]
+    # Obcięta lista katalogu bierze nazwy w kolejności systemu plików, więc sprawdzamy liczbę, nie nazwę.
+    assert len(rels(records)) == 1
     assert any(record.reason == "MAX_ENTRIES" for record in records)
 
 
