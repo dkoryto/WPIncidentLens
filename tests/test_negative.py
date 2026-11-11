@@ -109,15 +109,11 @@ def test_n6_missing_source_is_reported_as_coverage_gap(site, evidence, analyze, 
     assert "Brak alertów nie dowodzi braku włamania" in run.html
 
 
-@pytest.mark.xfail(strict=True, reason="assessment nie zna stanu INCONCLUSIVE; brak krytycznych źródeł daje NO_INDICATORS (#5)")
 def test_n6_missing_database_and_logs_is_inconclusive(site, analyze):
     assert analyze(site).report["assessment"] == "INCONCLUSIVE"
 
 
-@pytest.mark.parametrize("source", [
-    pytest.param("logs", marks=pytest.mark.xfail(strict=True, reason="pusty katalog logów nie daje żadnej luki pokrycia (#3)")),
-    pytest.param("site", marks=pytest.mark.xfail(strict=True, reason="pusty katalog --files (0 plików, brak WordPressa) nie daje luki pokrycia (#6)")),
-])
+@pytest.mark.parametrize("source", ["logs", "site"])
 def test_empty_source_directory_is_reported_as_coverage_gap(evidence, analyze, source):
     populated = {"site": write(evidence / "site" / "index.php").parent,
                  "logs": write(evidence / "logs" / "access.log", access_line("/")).parent}
@@ -165,7 +161,6 @@ def test_n8_premium_plugin_without_checksums_has_no_trusted_reference(site, anal
 
 
 @pytest.mark.parametrize("baseline", [None, {"files": {}}], ids=["not-provided", "empty-manifest"])
-@pytest.mark.xfail(strict=True, reason="brak lub pusty baseline nie jest raportowany jako luka pokrycia (#6)")
 def test_missing_trusted_baseline_is_reported_as_coverage_gap(site, analyze, baseline):
     run = analyze(site, baseline=baseline)
 
@@ -190,7 +185,7 @@ def test_malformed_baseline_is_rejected_as_usage_error(site, tmp_path, content):
 def test_baseline_is_listed_in_evidence_manifest(site, tmp_path, analyze):
     baseline = write(tmp_path / "trusted.json", '{"files": {}}')
 
-    manifest = analyze(site, baseline=baseline).report["evidence_manifest"]
+    manifest = analyze(site, baseline=baseline).manifest
 
     assert {"source": "baseline/trusted.json", "sha256": sha256(baseline), "size": 13} in manifest
 

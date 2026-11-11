@@ -13,18 +13,18 @@ def test_poc_end_to_end(tmp_path):
     code=main(["--files",str(FIX/'site'),"--database",str(FIX/'database.sql'),"--logs",str(FIX/'logs'),"--baseline",str(FIX/'baseline.json'),"--output",str(out),"--case-id","TEST-01"])
     assert code==0
     data=json.loads((out/'report.json').read_text())
-    rules={x['rule'] for x in data['findings']}
+    rules={x['rule_id'] for x in data['findings']}
     assert {'EXECUTABLE_IN_UPLOADS','SUSPICIOUS_PHP_EVAL_DECODE','UNRECOGNIZED_ADMIN',
             'SUSPICIOUS_DB_MARKUP','HTTP_EXECUTABLE_IN_UPLOADS','CORRELATED_UPLOAD_REQUEST'} <= rules
-    assert data['assessment']=='INDICATORS_FOUND'
-    assert len(data['evidence_manifest'])>=5
+    assert data['assessment']=='SUSPICIOUS'
+    assert len(data['evidence'])>=5
     assert any(x['event']=='HTTP_EXECUTABLE_IN_UPLOADS' and x['time_utc'].startswith('2026-11-09T01:14') for x in data['timeline'])
     assert 'WPTrace' in (out/'report.html').read_text()
 
 def test_no_indicators_not_a_clean_bill(tmp_path):
     root=tmp_path/'wp';root.mkdir();(root/'index.php').write_text('<?php echo 1;')
     data=compose_report(root,None,None,None,set(),'TEST')
-    assert data['assessment']=='NO_INDICATORS_IN_ANALYZED_SCOPE'
+    assert data['assessment']=='INCONCLUSIVE'
     assert len(data['coverage_gaps'])>=2
 
 def test_symlinks_never_followed(tmp_path):
@@ -32,7 +32,7 @@ def test_symlinks_never_followed(tmp_path):
     secret=tmp_path/'secret.php';secret.write_text('<?php eval(base64_decode("x")); ?>')
     (site/'link.php').symlink_to(secret)
     data=compose_report(site,None,None,None,set(),'TEST')
-    assert not any(x['rule']=='SUSPICIOUS_PHP_EVAL_DECODE' for x in data['findings'])
+    assert not any(x['rule_id']=='SUSPICIOUS_PHP_EVAL_DECODE' for x in data['findings'])
     assert any('symboliczne' in x for x in data['coverage_gaps'])
 
 
