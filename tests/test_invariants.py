@@ -101,16 +101,17 @@ def test_full_analysis_leaks_no_file_descriptor(demo_case, analyze):
     assert open_fd_count() == before
 
 
-def test_report_keeps_the_0_1_0_shape(demo_case, analyze):
-    """T-101 nie zmienia schematu: statusy odczytu trafiają do raportu wyłącznie jako teksty w ``coverage_gaps``."""
+def test_report_has_the_poc_1_shape(demo_case, analyze):
+    """ADR 0002 D7: po T-102 narzędzie pisze wyłącznie ``poc-1``; raporty 0.1.0 obsługuje migracja (``tests/test_migrate.py``)."""
     report = analyze_demo(analyze, demo_case).report
 
-    assert report["schema_version"] == "0.1.0"
-    assert list(report) == ["schema_version", "tool", "tool_version", "case_id", "analyzed_at_utc", "assessment", "disclaimer",
-                            "findings", "counts", "timeline", "coverage_gaps", "evidence_manifest"]
-    assert {entry["source"].split("/")[0]: sorted(entry) for entry in report["evidence_manifest"]} == {
-        "baseline": ["sha256", "size", "source"], "database": ["sha256", "size", "source"],
-        "files": ["mtime_ns", "sha256", "size", "source"], "logs": ["sha256", "size", "source"]}
+    assert report["schema_version"] == "poc-1"
+    assert list(report) == ["schema_version", "tool", "tool_version", "case_id", "analyzed_at_utc", "analyzed_at_time_source", "assessment",
+                            "scope_complete", "disclaimer", "findings", "observations", "evidence", "coverage", "coverage_gaps", "timeline"]
+    assert {entry["logical_path"].split("/")[0] for entry in report["evidence"]} == {"baseline", "database", "files", "logs"}
+    assert {tuple(entry) for entry in report["evidence"]} == {
+        ("id", "origin_kind", "logical_path", "read_status", "read_reason", "sha256", "size_bytes", "mtime_ns", "hardlinked")}
+    assert list(report["coverage"]) == ["files", "database", "logs", "baseline"]
     assert all(isinstance(gap, str) for gap in report["coverage_gaps"])
 
 

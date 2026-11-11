@@ -1,134 +1,307 @@
 {
-  "schema_version": "0.1.0",
+  "schema_version": "poc-1",
   "tool": "WPTrace PoC",
   "tool_version": "0.1.0-poc",
-  "case_id": "FINAL-DEMO-001",
-  "analyzed_at_utc": "2026-11-09T12:54:47.213151+00:00",
-  "assessment": "INDICATORS_FOUND",
+  "case_id": "DEMO-001",
+  "analyzed_at_utc": "2026-11-11T17:36:16.628184+00:00",
+  "analyzed_at_time_source": "tool_clock",
+  "assessment": "SUSPICIOUS",
+  "scope_complete": true,
   "disclaimer": "Brak alertów nie dowodzi braku włamania. PoC, nie certyfikacja śledcza.",
   "findings": [
     {
-      "rule": "EXECUTABLE_IN_UPLOADS",
+      "id": "fnd_bb9f37d9fa0f55772be69a24e031d8d3",
+      "rule_id": "CORRELATED_UPLOAD_REQUEST",
+      "category": "correlation",
       "severity": "high",
       "confidence": "medium",
-      "source_type": "file",
-      "source": "wp-content/uploads/2026/11/cache-view.php",
-      "explanation": "Plik wykonywalny PHP w uploads; wymaga analizy kontekstu.",
-      "metadata": {
-        "sha256": "7f79efadcca2de0bd71f39a07aea6fbbf34fe1e4c683e884667fdf864f85ef8c"
-      }
+      "reason": "Ten sam podejrzany plik występuje w obrazie witryny i w logu HTTP; to korelacja, nie dowód wykonania kodu.",
+      "observations": [
+        "obs_0bce47c79cdf200ff2507a952a3539cb",
+        "obs_8f09ebe185e5221250f7a894f3c868ef"
+      ]
     },
     {
-      "rule": "SUSPICIOUS_PHP_EVAL_DECODE",
+      "id": "fnd_3184508e081782b22aafdaef4886859c",
+      "rule_id": "EXECUTABLE_IN_UPLOADS",
+      "category": "file",
       "severity": "high",
       "confidence": "medium",
-      "source_type": "file",
-      "source": "wp-content/uploads/2026/11/cache-view.php",
-      "explanation": "Wykryto łańcuch eval(base64_decode(...)); to heurystyka, nie dowód malware.",
-      "metadata": {
-        "sha256": "7f79efadcca2de0bd71f39a07aea6fbbf34fe1e4c683e884667fdf864f85ef8c"
-      }
+      "reason": "Plik wykonywalny PHP w uploads; wymaga analizy kontekstu.",
+      "observations": [
+        "obs_0bce47c79cdf200ff2507a952a3539cb"
+      ]
     },
     {
-      "rule": "SUSPICIOUS_DB_MARKUP",
+      "id": "fnd_cd94187794a057bad8b7e5b682d3ad86",
+      "rule_id": "HTTP_EXECUTABLE_IN_UPLOADS",
+      "category": "http_log",
+      "severity": "high",
+      "confidence": "medium",
+      "reason": "Żądanie HTTP do pliku PHP w uploads; brak dowodu wykonania kodu.",
+      "observations": [
+        "obs_8f09ebe185e5221250f7a894f3c868ef"
+      ]
+    },
+    {
+      "id": "fnd_942658e9ba8edf891b4e8885a51cf812",
+      "rule_id": "SUSPICIOUS_PHP_EVAL_DECODE",
+      "category": "file",
+      "severity": "high",
+      "confidence": "medium",
+      "reason": "Wykryto łańcuch eval(base64_decode(...)); to heurystyka, nie dowód malware.",
+      "observations": [
+        "obs_a5cfcd3391a74c0e0b0dfa7856f160eb"
+      ]
+    },
+    {
+      "id": "fnd_b75a8637dc7df241b81f91e12247fc82",
+      "rule_id": "UNRECOGNIZED_ADMIN",
+      "category": "database",
+      "severity": "high",
+      "confidence": "medium",
+      "reason": "Administrator nie figuruje na dostarczonej, zaufanej liście; nie dowodzi to włamania.",
+      "observations": [
+        "obs_ec5d5c74cb575db85f702c65d780587e"
+      ]
+    },
+    {
+      "id": "fnd_01671c1785d77238c475b4efe11a2511",
+      "rule_id": "SUSPICIOUS_DB_MARKUP",
+      "category": "database",
       "severity": "medium",
       "confidence": "low",
-      "source_type": "database",
-      "source": "demo_options:custom_footer",
-      "explanation": "Wartość opcji zawiera aktywny znacznik HTML lub schemat JS; wymaga weryfikacji.",
-      "metadata": {}
-    },
-    {
-      "rule": "UNRECOGNIZED_ADMIN",
-      "severity": "high",
-      "confidence": "medium",
-      "source_type": "database",
-      "source": "*_users / *_usermeta",
-      "explanation": "Administrator nie figuruje na dostarczonej, zaufanej liście; nie dowodzi to włamania.",
-      "metadata": {
-        "username": "mysteryadmin",
-        "user_id": "2"
-      }
-    },
-    {
-      "rule": "HTTP_EXECUTABLE_IN_UPLOADS",
-      "severity": "high",
-      "confidence": "medium",
-      "source_type": "http_log",
-      "source": "access.log:1",
-      "explanation": "Żądanie HTTP do pliku PHP w uploads; brak dowodu wykonania kodu.",
-      "metadata": {
-        "uri": "/wp-content/uploads/2026/11/cache-view.php",
-        "method": "POST",
-        "status": 200,
-        "observed_time": "09/Nov/2026:02:14:01 +0100",
-        "client_ip": "192.0.2.10"
-      }
-    },
-    {
-      "rule": "CORRELATED_UPLOAD_REQUEST",
-      "severity": "high",
-      "confidence": "medium",
-      "source_type": "correlation",
-      "source": "wp-content/uploads/2026/11/cache-view.php",
-      "explanation": "Ten sam podejrzany plik występuje w obrazie witryny i w logu HTTP; to korelacja, nie dowód wykonania kodu.",
-      "metadata": {
-        "file_source": "wp-content/uploads/2026/11/cache-view.php",
-        "log_source": "access.log:1"
-      }
+      "reason": "Wartość opcji zawiera aktywny znacznik HTML lub schemat JS; wymaga weryfikacji.",
+      "observations": [
+        "obs_fda5ba8118e5400715e4023aa5c747d2"
+      ]
     }
   ],
-  "counts": {
-    "high": 5,
-    "medium": 1
+  "observations": [
+    {
+      "id": "obs_0bce47c79cdf200ff2507a952a3539cb",
+      "evidence_id": "ev_e26da2a4531021b991e43de7a3e6f6eb",
+      "kind": "PHP_FILE_IN_UPLOADS",
+      "location": {
+        "path": "wp-content/uploads/2026/11/cache-view.php"
+      },
+      "attributes": {},
+      "timestamp_raw": null,
+      "timestamp_utc": null,
+      "time_source": null
+    },
+    {
+      "id": "obs_8f09ebe185e5221250f7a894f3c868ef",
+      "evidence_id": "ev_5d7d0fb9113455411b0531b6e76297ae",
+      "kind": "HTTP_REQUEST_FOR_PHP_IN_UPLOADS",
+      "location": {
+        "path": "access.log",
+        "line": 1
+      },
+      "attributes": {
+        "client_ip": "192.0.2.10",
+        "method": "POST",
+        "status": 200,
+        "uri": "/wp-content/uploads/2026/11/cache-view.php"
+      },
+      "timestamp_raw": "09/Nov/2026:02:14:01 +0100",
+      "timestamp_utc": "2026-11-09T01:14:01+00:00",
+      "time_source": "log"
+    },
+    {
+      "id": "obs_a5cfcd3391a74c0e0b0dfa7856f160eb",
+      "evidence_id": "ev_e26da2a4531021b991e43de7a3e6f6eb",
+      "kind": "EVAL_BASE64_DECODE_PATTERN",
+      "location": {
+        "path": "wp-content/uploads/2026/11/cache-view.php"
+      },
+      "attributes": {},
+      "timestamp_raw": null,
+      "timestamp_utc": null,
+      "time_source": null
+    },
+    {
+      "id": "obs_ec5d5c74cb575db85f702c65d780587e",
+      "evidence_id": "ev_fae4ca6b150b337f30f397c34e5072be",
+      "kind": "ADMINISTRATOR_ROLE_ROW",
+      "location": {
+        "table": "demo_usermeta",
+        "key": "demo_capabilities",
+        "row": 4
+      },
+      "attributes": {
+        "user_id": "2",
+        "username": "mysteryadmin"
+      },
+      "timestamp_raw": null,
+      "timestamp_utc": null,
+      "time_source": null
+    },
+    {
+      "id": "obs_fda5ba8118e5400715e4023aa5c747d2",
+      "evidence_id": "ev_fae4ca6b150b337f30f397c34e5072be",
+      "kind": "OPTION_VALUE_WITH_ACTIVE_MARKUP",
+      "location": {
+        "table": "demo_options",
+        "key": "custom_footer",
+        "row": 5
+      },
+      "attributes": {},
+      "timestamp_raw": null,
+      "timestamp_utc": null,
+      "time_source": null
+    }
+  ],
+  "evidence": [
+    {
+      "id": "ev_8a676a34625e25497e2ab73ba4ffd3c3",
+      "origin_kind": "baseline",
+      "logical_path": "baseline/baseline.json",
+      "read_status": "READ",
+      "read_reason": null,
+      "sha256": "6cd5dcd6c3c68e4e8ab71f112b198528edfb4ac8f6c89d4d81ee26d8a1b799db",
+      "size_bytes": 46,
+      "mtime_ns": 1794416353262443656,
+      "hardlinked": false
+    },
+    {
+      "id": "ev_fae4ca6b150b337f30f397c34e5072be",
+      "origin_kind": "sql_dump",
+      "logical_path": "database/database.sql",
+      "read_status": "READ",
+      "read_reason": null,
+      "sha256": "4537f75d228afaf9739f8969cccb4420e4cadfbe29b6e0d675b07adc039943fd",
+      "size_bytes": 681,
+      "mtime_ns": 1794416353262538782,
+      "hardlinked": false
+    },
+    {
+      "id": "ev_53ed43e51c3a0b99525df659248bfe55",
+      "origin_kind": "file",
+      "logical_path": "files/index.php",
+      "read_status": "READ",
+      "read_reason": null,
+      "sha256": "fd2178497bf11c65e4e9927059fc8f44a5fafdbf1c03591bbb08c260869642e9",
+      "size_bytes": 85,
+      "mtime_ns": 1794416353262746241,
+      "hardlinked": false
+    },
+    {
+      "id": "ev_94cb65e7b146a109f8671808c7af86ba",
+      "origin_kind": "file",
+      "logical_path": "files/wp-config.php",
+      "read_status": "READ",
+      "read_reason": null,
+      "sha256": "f06a5eca5c633f61c89c35174036d188b3e67b26e827fc7ef2139cf5eae2b311",
+      "size_bytes": 65,
+      "mtime_ns": 1794416353262823741,
+      "hardlinked": false
+    },
+    {
+      "id": "ev_e26da2a4531021b991e43de7a3e6f6eb",
+      "origin_kind": "file",
+      "logical_path": "files/wp-content/uploads/2026/11/cache-view.php",
+      "read_status": "READ",
+      "read_reason": null,
+      "sha256": "7f79efadcca2de0bd71f39a07aea6fbbf34fe1e4c683e884667fdf864f85ef8c",
+      "size_bytes": 116,
+      "mtime_ns": 1794416353262924116,
+      "hardlinked": false
+    },
+    {
+      "id": "ev_5d7d0fb9113455411b0531b6e76297ae",
+      "origin_kind": "log",
+      "logical_path": "logs/access.log",
+      "read_status": "READ",
+      "read_reason": null,
+      "sha256": "1b47959574b08906a6a4fb1916ef014256deeb84fa7b910219cd2900d696ecfc",
+      "size_bytes": 225,
+      "mtime_ns": 1794416353262657032,
+      "hardlinked": false
+    }
+  ],
+  "coverage": {
+    "files": {
+      "status": "ANALYZED",
+      "entries": {
+        "READ": 3,
+        "SKIPPED_SYMLINK": 0,
+        "SKIPPED_HARDLINK": 0,
+        "SKIPPED_SPECIAL": 0,
+        "SKIPPED_LIMIT": 0,
+        "ERROR": 0,
+        "CHANGED": 0
+      },
+      "reasons": []
+    },
+    "database": {
+      "status": "ANALYZED",
+      "entries": {
+        "READ": 1,
+        "SKIPPED_SYMLINK": 0,
+        "SKIPPED_HARDLINK": 0,
+        "SKIPPED_SPECIAL": 0,
+        "SKIPPED_LIMIT": 0,
+        "ERROR": 0,
+        "CHANGED": 0
+      },
+      "reasons": [
+        "Parser SQL PoC obsługuje wybrane INSERT; nie obsługuje triggerów, procedur, pełnej składni ani multisite"
+      ]
+    },
+    "logs": {
+      "status": "ANALYZED",
+      "entries": {
+        "READ": 1,
+        "SKIPPED_SYMLINK": 0,
+        "SKIPPED_HARDLINK": 0,
+        "SKIPPED_SPECIAL": 0,
+        "SKIPPED_LIMIT": 0,
+        "ERROR": 0,
+        "CHANGED": 0
+      },
+      "reasons": []
+    },
+    "baseline": {
+      "status": "ANALYZED",
+      "entries": {
+        "READ": 1,
+        "SKIPPED_SYMLINK": 0,
+        "SKIPPED_HARDLINK": 0,
+        "SKIPPED_SPECIAL": 0,
+        "SKIPPED_LIMIT": 0,
+        "ERROR": 0,
+        "CHANGED": 0
+      },
+      "reasons": [
+        "Baseline nie zawiera skrótów plików (files): porównanie plików z referencją niewykonane"
+      ]
+    }
   },
+  "coverage_gaps": [
+    "Baseline nie zawiera skrótów plików (files): porównanie plików z referencją niewykonane",
+    "Parser SQL PoC obsługuje wybrane INSERT; nie obsługuje triggerów, procedur, pełnej składni ani multisite"
+  ],
   "timeline": [
     {
       "time_utc": "2026-11-09T01:14:01+00:00",
-      "source": "access.log:1",
-      "event": "HTTP_EXECUTABLE_IN_UPLOADS",
+      "time_source": "log",
       "timestamp_basis": "HTTP access log; synchronizacja zegara niezweryfikowana",
-      "confidence": "medium"
+      "event": "HTTP_EXECUTABLE_IN_UPLOADS",
+      "source": "access.log:1",
+      "confidence": "medium",
+      "evidence_id": "ev_5d7d0fb9113455411b0531b6e76297ae",
+      "observation_id": "obs_8f09ebe185e5221250f7a894f3c868ef"
     },
     {
-      "time_utc": "2026-11-09T12:48:48.168411+00:00",
-      "source": "files/wp-content/uploads/2026/11/cache-view.php",
-      "event": "SUSPICIOUS_FILE_MTIME",
+      "time_utc": "2026-11-11T16:59:13.262924+00:00",
+      "time_source": "mtime",
       "timestamp_basis": "Filesystem mtime: zmienialny; nie oznacza czasu ataku",
-      "confidence": "low"
-    }
-  ],
-  "coverage_gaps": [
-    "Parser SQL PoC obsługuje wybrane INSERT; nie obsługuje triggerów, procedur, pełnej składni ani multisite"
-  ],
-  "evidence_manifest": [
-    {
-      "source": "database/database.sql",
-      "sha256": "4537f75d228afaf9739f8969cccb4420e4cadfbe29b6e0d675b07adc039943fd",
-      "size": 681
-    },
-    {
-      "source": "files/index.php",
-      "sha256": "fd2178497bf11c65e4e9927059fc8f44a5fafdbf1c03591bbb08c260869642e9",
-      "size": 85,
-      "mtime_ns": 1794228528166636228
-    },
-    {
-      "source": "files/wp-config.php",
-      "sha256": "f06a5eca5c633f61c89c35174036d188b3e67b26e827fc7ef2139cf5eae2b311",
-      "size": 65,
-      "mtime_ns": 1794228528169665328
-    },
-    {
+      "event": "SUSPICIOUS_FILE_MTIME",
       "source": "files/wp-content/uploads/2026/11/cache-view.php",
-      "sha256": "7f79efadcca2de0bd71f39a07aea6fbbf34fe1e4c683e884667fdf864f85ef8c",
-      "size": 116,
-      "mtime_ns": 1794228528168410906
-    },
-    {
-      "source": "logs/access.log",
-      "sha256": "1b47959574b08906a6a4fb1916ef014256deeb84fa7b910219cd2900d696ecfc",
-      "size": 225
+      "confidence": "low",
+      "evidence_id": "ev_e26da2a4531021b991e43de7a3e6f6eb",
+      "observation_id": null
     }
   ]
 }

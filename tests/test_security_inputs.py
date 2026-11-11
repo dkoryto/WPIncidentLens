@@ -6,7 +6,20 @@ import re
 import unicodedata
 
 import pytest
-from conftest import CANARY, EVAL_MARKER, UPLOAD_PHP, XSS, access_line, admin_sql, option_sql, sha256, sparse, time_limit, write
+from conftest import (
+    CANARY,
+    EVAL_MARKER,
+    UPLOAD_PHP,
+    XSS,
+    access_line,
+    admin_sql,
+    option_sql,
+    sha256,
+    sparse,
+    tamper_before_reverification,
+    time_limit,
+    write,
+)
 
 from wptrace import cli, ingest
 
@@ -183,17 +196,6 @@ def test_s02_file_swapped_for_symlink_after_check_is_not_read(site, tmp_path, an
     assert run.has_gap("Łącze symboliczne pominięte (bez podążania): theme.php")
 
 
-def _tamper_before_reverification(monkeypatch, tamper):
-    """Hak: tuż przed ponowną weryfikacją (po zakończeniu analizy treści) materiał zostaje zmieniony."""
-    real_finish = ingest.Session.finish
-
-    def finish(session):
-        tamper()
-        return real_finish(session)
-
-    monkeypatch.setattr(ingest.Session, "finish", finish)
-
-
 @pytest.mark.parametrize("tampered, named", [("site/index.php", "index.php"), ("db.sql", "database/db.sql"),
                                              ("logs/access.log", "logs/access.log"), ("baseline.json", "baseline/baseline.json")],
                          ids=["files", "database", "logs", "baseline"])
@@ -202,7 +204,7 @@ def test_s02_evidence_changed_after_reading_is_reported_for_every_source(evidenc
     write(evidence / "db.sql", admin_sql("siteadmin"))
     write(evidence / "logs" / "access.log", access_line("/"))
     write(evidence / "baseline.json", "{}")
-    _tamper_before_reverification(monkeypatch, lambda: write(evidence / tampered, "tampered after analysis"))
+    tamper_before_reverification(monkeypatch, lambda: write(evidence / tampered, "tampered after analysis"))
 
     run = analyze(evidence / "site", database=evidence / "db.sql", logs=evidence / "logs", baseline=evidence / "baseline.json")
 
@@ -211,7 +213,7 @@ def test_s02_evidence_changed_after_reading_is_reported_for_every_source(evidenc
 
 
 def test_s02_no_reverify_flag_skips_the_check_and_says_so(site, analyze, monkeypatch):
-    _tamper_before_reverification(monkeypatch, lambda: write(site / "index.php", "tampered after analysis"))
+    tamper_before_reverification(monkeypatch, lambda: write(site / "index.php", "tampered after analysis"))
 
     run = analyze(site, flags=("--no-reverify",))
 
@@ -338,7 +340,7 @@ def test_s06_file_count_limit_stops_scan_with_gap(site, analyze, monkeypatch):
     run = analyze(site)
 
     assert run.has_gap("Limit 3 plików; analiza katalogu niepełna")
-    assert len(run.report["evidence_manifest"]) == 3
+    assert len(run.manifest) == 3
 
 
 def test_s06_default_file_count_limit_follows_adr_0002():
@@ -353,7 +355,7 @@ def test_s06_file_count_limit_is_shared_by_all_sources(site, evidence, analyze):
 
     assert run.findings == []
     assert run.has_gap("Limit 2 plików; analiza katalogu niepełna (pierwszy pominięty wpis: database/db.sql)")
-    assert [entry["source"] for entry in run.report["evidence_manifest"]] == ["files/index.php", "files/second.php"]
+    assert [entry["source"] for entry in run.manifest] == ["files/index.php", "files/second.php"]
 
 
 @pytest.mark.parametrize("flags, expected_gap", [
@@ -369,7 +371,7 @@ def test_s07_size_limit_flags_skip_the_file_and_continue_with_the_rest(evidence,
 
     assert run.has_gap(expected_gap)
     assert run.finding("SUSPICIOUS_PHP_EVAL_DECODE")["source"] == "z-last.php"
-    assert [entry["source"] for entry in run.report["evidence_manifest"]] == ["files/z-last.php"]
+    assert [entry["source"] for entry in run.manifest] == ["files/z-last.php"]
 
 
 def test_s07_ten_gigabyte_sparse_file_is_skipped_without_hashing(site, analyze):
@@ -379,7 +381,7 @@ def test_s07_ten_gigabyte_sparse_file_is_skipped_without_hashing(site, analyze):
         run = analyze(site)
 
     assert run.has_gap(f"Plik większy niż limit {2 * 1024**3} B pominięty bez obliczania skrótu: huge.bin")
-    assert [entry["source"] for entry in run.report["evidence_manifest"]] == ["files/index.php"]
+    assert [entry["source"] for entry in run.manifest] == ["files/index.php"]
 
 
 def test_s07_time_limit_flag_yields_partial_analysis_with_gap(site, analyze, monkeypatch):
@@ -389,7 +391,7 @@ def test_s07_time_limit_flag_yields_partial_analysis_with_gap(site, analyze, mon
     run = analyze(site, flags=("--max-seconds", "5"))
 
     assert run.has_gap("Limit czasu analizy 5 s przekroczony")
-    assert run.report["evidence_manifest"] == []
+    assert run.manifest == []
 
 
 @pytest.mark.parametrize("flag", ["--max-files", "--max-file-bytes", "--max-total-bytes", "--max-seconds"])
@@ -404,7 +406,7 @@ def test_s07_oversized_site_file_is_hashed_but_not_content_scanned(site, analyze
 
     assert run.findings == []
     assert run.has_gap(f"Analiza treści pominięta, plik > {cli.MAX_SCAN_BYTES} B: big.php")
-    assert ("files/big.php", cli.MAX_SCAN_BYTES + 1) in {(entry["source"], entry["size"]) for entry in run.report["evidence_manifest"]}
+    assert ("files/big.php", cli.MAX_SCAN_BYTES + 1) in {(entry["source"], entry["size"]) for entry in run.manifest}
 
 
 @pytest.mark.parametrize("build, rule", [
@@ -660,7 +662,7 @@ def test_report_never_contains_an_absolute_host_path(evidence, tmp_path, analyze
     logs = write(evidence / "logs" / "access.log", access_line("/" + UPLOAD_PHP)).parent
     (logs / "link.log").symlink_to(outside)
     locked.chmod(0o000)
-    _tamper_before_reverification(monkeypatch, lambda: write(site / "index.php", "tampered after analysis"))
+    tamper_before_reverification(monkeypatch, lambda: write(site / "index.php", "tampered after analysis"))
     try:
         run = analyze(site, database=locked, logs=logs, baseline={"files": {"index.php": "0" * 64}})
     finally:
@@ -669,3 +671,13 @@ def test_report_never_contains_an_absolute_host_path(evidence, tmp_path, analyze
     assert len(run.gaps) == 6 and run.findings  # EACCES, FIFO, hardlink, symlink ×2, zmiana po odczycie
     assert str(tmp_path) not in run.json_text + run.html
     assert not re.search(r"/(private|var|tmp|home|Users)/", run.json_text + run.html)
+
+
+@pytest.mark.parametrize("line", [
+    '192.0.2.10 - - [x] "GET ' + "\t" * 20_000,
+    '192.0.2.10 - - [x] "GET ' + "/a " * 20_000,
+    "192.0.2.10 " + "- " * 20_000,
+], ids=["tabs-after-method", "many-tokens", "many-dashes"])
+def test_s08_crafted_log_line_does_not_stall_the_log_pattern(line):
+    with time_limit(2):
+        assert cli.LOG_PATTERN.match(line) is None

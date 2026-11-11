@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:wpincidentlens:schema:report:poc-1",
+  "title": "WPIncidentLens (WPTrace PoC) — raport poc-1",
+  "description": "Kształt pliku report.json w schemacie poc-1 (ADR 0003). Schemat opisuje typy, pola wymagane i wyliczenia. Nie sprawdza istnienia wskazywanych dowodów i obserwacji, unikalności identyfikatorów, zgodności identyfikatora z treścią ani zgodności assessment z regułą oceny: te niezmienniki egzekwuje wptrace.models.validate_report.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "tool", "tool_version", "case_id", "analyzed_at_utc", "analyzed_at_time_source", "assessment",
+    "scope_complete", "disclaimer", "findings", "observations", "evidence", "coverage", "coverage_gaps", "timeline"
+  ],
+  "properties": {
+    "schema_version": {"const": "poc-1"},
+    "tool": {"type": "string"},
+    "tool_version": {"type": "string"},
+    "case_id": {"type": "string"},
+    "analyzed_at_utc": {
+      "description": "Czas zakończenia analizy według zegara narzędzia; null tylko w raporcie przeniesionym, którego czasu nie dało się znormalizować.",
+      "oneOf": [{"$ref": "#/$defs/utc"}, {"type": "null"}]
+    },
+    "analyzed_at_time_source": {"const": "tool_clock"},
+    "assessment": {
+      "description": "Etykieta triage, nie werdykt. INCONCLUSIVE: brak ustaleń przy niepełnym zakresie.",
+      "enum": ["STRONG_INDICATORS", "SUSPICIOUS", "NO_INDICATORS_IN_ANALYZED_SCOPE", "INCONCLUSIVE"]
+    },
+    "scope_complete": {
+      "description": "true, gdy files, database i logs mają status ANALYZED, a baseline ANALYZED albo NOT_PROVIDED.",
+      "type": "boolean"
+    },
+    "disclaimer": {"type": "string"},
+    "migrated_from": {
+      "description": "Obecne tylko w raporcie przeniesionym ze starszego schematu.",
+      "const": "0.1.0"
+    },
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}},
+    "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files", "database", "logs", "baseline"],
+      "properties": {
+        "files": {"$ref": "#/$defs/coverage"},
+        "database": {"$ref": "#/$defs/coverage"},
+        "logs": {"$ref": "#/$defs/coverage"},
+        "baseline": {"$ref": "#/$defs/coverage"}
+      }
+    },
+    "coverage_gaps": {
+      "description": "Wszystkie ograniczenia analizy: powody z coverage oraz uwagi dotyczące całej sesji.",
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "timeline": {"type": "array", "items": {"$ref": "#/$defs/timeline_event"}}
+  },
+  "if": {"required": ["migrated_from"]},
+  "else": {
+    "description": "UNKNOWN_LEGACY występuje wyłącznie w raporcie przeniesionym.",
+    "properties": {
+      "analyzed_at_utc": {"$ref": "#/$defs/utc"},
+      "evidence": {"items": {"properties": {"read_status": {"not": {"const": "UNKNOWN_LEGACY"}}}}},
+      "coverage": {"additionalProperties": {"properties": {"status": {"not": {"const": "UNKNOWN_LEGACY"}}}}}
+    }
+  },
+  "$defs": {
+    "utc": {
+      "description": "ISO 8601 w UTC, z 'Z' albo '+00:00'.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|\\+00:00)$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "name": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+    "evidence_id": {"type": "string", "pattern": "^ev_[0-9a-f]{32}$"},
+    "observation_id": {"type": "string", "pattern": "^obs_[0-9a-f]{32}$"},
+    "finding_id": {"type": "string", "pattern": "^fnd_[0-9a-f]{32}$"},
+    "severity": {"enum": ["low", "medium", "high", "critical"]},
+    "confidence": {"enum": ["low", "medium", "high"]},
+    "count": {"type": "integer", "minimum": 0},
+    "evidence": {
+      "description": "Wpis materiału wejściowego wraz z wynikiem próby odczytu, także wpis pominięty.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "origin_kind", "logical_path", "read_status", "read_reason", "sha256", "size_bytes", "mtime_ns", "hardlinked"],
+      "properties": {
+        "id": {"$ref": "#/$defs/evidence_id"},
+        "origin_kind": {"enum": ["file", "sql_dump", "log", "baseline"]},
+        "logical_path": {
+          "description": "<źródło>/<ścieżka względna do źródła>; nigdy ścieżka hosta. '<źródło>/.' opisuje samo źródło.",
+          "type": "string",
+          "pattern": "^(files|database|logs|baseline)/"
+        },
+        "read_status": {
+          "enum": ["READ", "SKIPPED_SYMLINK", "SKIPPED_HARDLINK", "SKIPPED_SPECIAL", "SKIPPED_LIMIT", "ERROR", "CHANGED", "UNKNOWN_LEGACY"]
+        },
+        "read_reason": {"type": ["string", "null"]},
+        "sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "size_bytes": {"oneOf": [{"$ref": "#/$defs/count"}, {"type": "null"}]},
+        "mtime_ns": {
+          "description": "Surowy mtime w nanosekundach od 1970-01-01 UTC (ujemny dla czasu wcześniejszego); deklaracja systemu plików, nie dowód.",
+          "type": ["integer", "null"]
+        },
+        "hardlinked": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"read_status": {"enum": ["READ", "CHANGED"]}}},
+          "then": {"properties": {"sha256": {"$ref": "#/$defs/sha256"}}}
+        },
+        {
+          "if": {"properties": {"read_status": {"enum": ["SKIPPED_SYMLINK", "SKIPPED_HARDLINK", "SKIPPED_SPECIAL", "SKIPPED_LIMIT", "ERROR"]}}},
+          "then": {"properties": {"sha256": {"type": "null"}}}
+        }
+      ]
+    },
+    "location": {
+      "description": "Miejsce faktu w dowodzie; obecne są tylko pola znane parserowi.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string"},
+        "line": {"$ref": "#/$defs/count"},
+        "table": {"type": "string"},
+        "key": {"type": "string"},
+        "row": {"$ref": "#/$defs/count"}
+      }
+    },
+    "observation": {
+      "description": "Fakt odczytany przez parser, bez oceny.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "evidence_id", "kind", "location", "attributes", "timestamp_raw", "timestamp_utc", "time_source"],
+      "properties": {
+        "id": {"$ref": "#/$defs/observation_id"},
+        "evidence_id": {"$ref": "#/$defs/evidence_id"},
+        "kind": {"$ref": "#/$defs/name"},
+        "location": {"$ref": "#/$defs/location"},
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {"type": ["string", "integer", "boolean", "null"]}
+        },
+        "timestamp_raw": {"type": ["string", "null"]},
+        "timestamp_utc": {"oneOf": [{"$ref": "#/$defs/utc"}, {"type": "null"}]},
+        "time_source": {"enum": ["log", "mtime", "tool_clock", null]}
+      }
+    },
+    "finding": {
+      "description": "Interpretacja co najmniej jednej obserwacji; severity i confidence są niezależne.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "rule_id", "category", "severity", "confidence", "reason", "observations"],
+      "properties": {
+        "id": {"$ref": "#/$defs/finding_id"},
+        "rule_id": {"$ref": "#/$defs/name"},
+        "category": {"enum": ["file", "database", "http_log", "correlation"]},
+        "severity": {"$ref": "#/$defs/severity"},
+        "confidence": {"$ref": "#/$defs/confidence"},
+        "reason": {"type": "string"},
+        "observations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/observation_id"},
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "coverage": {
+      "description": "Pokrycie jednego źródła. entries: liczba wpisów według statusu odczytu; null tylko ze statusem UNKNOWN_LEGACY.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "entries", "reasons"],
+      "properties": {
+        "status": {"enum": ["ANALYZED", "PARTIAL", "NOT_PROVIDED", "FAILED", "UNKNOWN_LEGACY"]},
+        "entries": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["READ", "SKIPPED_SYMLINK", "SKIPPED_HARDLINK", "SKIPPED_SPECIAL", "SKIPPED_LIMIT", "ERROR", "CHANGED"],
+              "properties": {
+                "READ": {"$ref": "#/$defs/count"},
+                "SKIPPED_SYMLINK": {"$ref": "#/$defs/count"},
+                "SKIPPED_HARDLINK": {"$ref": "#/$defs/count"},
+                "SKIPPED_SPECIAL": {"$ref": "#/$defs/count"},
+                "SKIPPED_LIMIT": {"$ref": "#/$defs/count"},
+                "ERROR": {"$ref": "#/$defs/count"},
+                "CHANGED": {"$ref": "#/$defs/count"}
+              }
+            }
+          ]
+        },
+        "reasons": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "UNKNOWN_LEGACY"}}},
+          "then": {"properties": {"entries": {"type": "null"}}},
+          "else": {"properties": {"entries": {"type": "object"}}}
+        },
+        {
+          "if": {"properties": {"status": {"enum": ["PARTIAL", "NOT_PROVIDED", "FAILED"]}}},
+          "then": {"properties": {"reasons": {"minItems": 1}}}
+        }
+      ]
+    },
+    "timeline_event": {
+      "description": "Orientacyjny znacznik czasu z jawnym źródłem; nie dowodzi kolejności ani przyczynowości.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["time_utc", "time_source", "timestamp_basis", "event", "source", "confidence", "evidence_id", "observation_id"],
+      "properties": {
+        "time_utc": {"$ref": "#/$defs/utc"},
+        "time_source": {"enum": ["log", "mtime"]},
+        "timestamp_basis": {"type": "string"},
+        "event": {"$ref": "#/$defs/name"},
+        "source": {"type": "string"},
+        "confidence": {"$ref": "#/$defs/confidence"},
+        "evidence_id": {"$ref": "#/$defs/evidence_id"},
+        "observation_id": {"oneOf": [{"$ref": "#/$defs/observation_id"}, {"type": "null"}]}
+      }
+    }
+  }
+}

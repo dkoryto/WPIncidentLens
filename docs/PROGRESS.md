@@ -9,13 +9,13 @@ Status `IN REVIEW` oznacza otwarty PR, nie ukończone zadanie. `MERGED` oznacza 
 | T-003 macierz testów i testy negatywne | #3 | `agent/T-003-test-matrix` | MERGED (#10) | 104 nowe testy; coverage 93%; `docs/TEST_MATRIX.md` |
 | T-004 ReDoS w parserze INSERT | #11 | `agent/T-004-sql-redos` | MERGED (#12) | macOS: 89 passed, 1 skipped, 29 xfailed |
 | T-101 SecureIngest | #4 | `agent/T-101-secure-ingest` | MERGED (#16) | `wptrace/ingest.py` wg ADR 0002; niezależny audyt agenta: 0 critical/high, poprawki w PR; CaseManager i `case.json` jeszcze do zrobienia (#4 otwarte) |
-| T-005 kwadratowy parser INSERT, budżet wpisów | #17 | `agent/T-005-sql-header-linear` | IN REVIEW | macOS: 276 passed, 2 skipped, 20 xfailed |
+| T-005 kwadratowy parser INSERT, budżet wpisów | #17 | `agent/T-005-sql-header-linear` | MERGED (#19) | nagłówek INSERT liniowy; nazwy na stosie katalogów w budżecie wpisów |
 | T-006 drobne ustalenia audytu T-101 | #18 | — | TODO | niska waga |
-| T-102 kontrakty Evidence/Observation/Finding | #5 | `agent/T-102-contracts` | IN PROGRESS | schemat `poc-1` z `INCONCLUSIVE` i migracją |
-| T-201 analiza plików WordPressa | #6 | — | BLOCKED | wymaga M1 |
-| T-301 ekstraktor SQL/JSONL | #7 | — | BLOCKED | wymaga M1 |
+| T-102 kontrakty Evidence/Observation/Finding | #5 | `agent/T-102-contracts` | IN REVIEW | raport `poc-1`, `INCONCLUSIVE`, kody wyjścia 0/3/4, migracja z 0.1.0, ADR 0003; macOS 591 passed, 2 skipped, 13 xfailed po poprawkach z przeglądu |
+| T-201 analiza plików WordPressa | #6 | — | TODO | odblokowane po T-102 |
+| T-301 ekstraktor SQL/JSONL | #7 | — | TODO | odblokowane po T-102 |
 | T-401 logi, UTC, korelacja | #13 | — | BLOCKED | wymaga M1 |
-| T-501 reguły, raport HTML, redakcja | #14 | — | BLOCKED | wymaga T-102 |
+| T-501 reguły, raport HTML, redakcja | #14 | — | TODO | odblokowane po T-102 |
 | T-601 hardening, pomiar kontenera, QA | #15 | — | BLOCKED | wymaga M1–M5 |
 
 ## Przekazanie
@@ -29,3 +29,4 @@ Status `IN REVIEW` oznacza otwarty PR, nie ukończone zadanie. `MERGED` oznacza 
 - 2026-11-11 — T-101 (#4): cały odczyt dowodów w `cli.py` idzie przez `wptrace/ingest.py` (deskryptory, `O_NOFOLLOW`, hardlinki, limity, ponowna weryfikacja, strażnik AST D4); schemat raportu 0.1.0 bez zmian; zdjęto 10 przypadków `xfail`. Następny krok: CaseManager i `case.json`, potem T-102.
 - 2026-11-11 — PR #16 (T-101) scalony po niezależnym audycie agenta; ustalenia audytu poza zakresem przeniesione do #17 i #18.
 - 2026-11-11 — T-005 (#17): nagłówek INSERT parsowany liniowo; nazwy wylistowane na stosie katalogów liczą się do budżetu wpisów.
+- 2026-11-11 — T-102 (#5): raport `poc-1` z obserwacjami, pokryciem per źródło i `INCONCLUSIVE`; uruchomienie bez bazy lub logów kończy się kodem 3. Następny krok: CaseManager (#4), #18, potem T-201 i T-301.

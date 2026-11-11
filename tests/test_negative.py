@@ -109,15 +109,11 @@ def test_n6_missing_source_is_reported_as_coverage_gap(site, evidence, analyze, 
     assert "Brak alertów nie dowodzi braku włamania" in run.html
 
 
-@pytest.mark.xfail(strict=True, reason="assessment nie zna stanu INCONCLUSIVE; brak krytycznych źródeł daje NO_INDICATORS (#5)")
 def test_n6_missing_database_and_logs_is_inconclusive(site, analyze):
     assert analyze(site).report["assessment"] == "INCONCLUSIVE"
 
 
-@pytest.mark.parametrize("source", [
-    pytest.param("logs", marks=pytest.mark.xfail(strict=True, reason="pusty katalog logów nie daje żadnej luki pokrycia (#3)")),
-    pytest.param("site", marks=pytest.mark.xfail(strict=True, reason="pusty katalog --files (0 plików, brak WordPressa) nie daje luki pokrycia (#6)")),
-])
+@pytest.mark.parametrize("source", ["logs", "site"])
 def test_empty_source_directory_is_reported_as_coverage_gap(evidence, analyze, source):
     populated = {"site": write(evidence / "site" / "index.php").parent,
                  "logs": write(evidence / "logs" / "access.log", access_line("/")).parent}
@@ -165,7 +161,6 @@ def test_n8_premium_plugin_without_checksums_has_no_trusted_reference(site, anal
 
 
 @pytest.mark.parametrize("baseline", [None, {"files": {}}], ids=["not-provided", "empty-manifest"])
-@pytest.mark.xfail(strict=True, reason="brak lub pusty baseline nie jest raportowany jako luka pokrycia (#6)")
 def test_missing_trusted_baseline_is_reported_as_coverage_gap(site, analyze, baseline):
     run = analyze(site, baseline=baseline)
 
@@ -190,7 +185,7 @@ def test_malformed_baseline_is_rejected_as_usage_error(site, tmp_path, content):
 def test_baseline_is_listed_in_evidence_manifest(site, tmp_path, analyze):
     baseline = write(tmp_path / "trusted.json", '{"files": {}}')
 
-    manifest = analyze(site, baseline=baseline).report["evidence_manifest"]
+    manifest = analyze(site, baseline=baseline).manifest
 
     assert {"source": "baseline/trusted.json", "sha256": sha256(baseline), "size": 13} in manifest
 
@@ -214,7 +209,6 @@ def test_foreign_sql_is_reported_as_unparsed_not_clean(site, evidence, analyze, 
     assert run.has_gap("Brak obsługiwanych instrukcji INSERT")
 
 
-@pytest.mark.xfail(strict=True, reason="pominięte instrukcje (np. REPLACE INTO) nie zwiększają coverage_gaps, gdy inne INSERT-y się sparsowały (#7)")
 def test_unsupported_statement_next_to_supported_one_adds_a_gap(site, evidence, analyze):
     supported = option_sql("blogname", "Synthetic Site")
     skipped = "REPLACE INTO `wp_usermeta` VALUES (9,9,'wp_capabilities','a:1:{s:13:\"administrator\";b:1;}');\n"
@@ -225,14 +219,15 @@ def test_unsupported_statement_next_to_supported_one_adds_a_gap(site, evidence, 
     assert set(with_skipped.gaps) > set(only_supported.gaps)
 
 
-@pytest.mark.xfail(strict=True, reason="administrator bez sparsowanego wiersza *_users znika bez ustalenia i bez luki (#7)")
 def test_admin_capability_without_user_row_is_not_silently_dropped(site, evidence, analyze):
     orphan = "INSERT INTO `wp_usermeta` VALUES (1,77,'wp_capabilities','a:1:{s:13:\"administrator\";b:1;}');\n"
     database = write(evidence / "db.sql", orphan)
 
     run = analyze(site, database=database, known_admins=("siteadmin",))
 
-    assert run.findings or any("77" in gap for gap in run.gaps)
+    assert any("77" in gap for gap in run.gaps)
+    assert run.report["coverage"]["database"]["status"] == "PARTIAL"
+    assert run.report["assessment"] == "INCONCLUSIVE"
 
 
 @pytest.mark.parametrize("lines, expected_gap", [
