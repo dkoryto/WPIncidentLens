@@ -19,3 +19,4 @@ dist/
 .ruff_cache/
 .coverage
 .claude/worktrees/
+graphify-out/
