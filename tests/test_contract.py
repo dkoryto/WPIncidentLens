@@ -652,3 +652,71 @@ def test_long_option_name_and_client_address_are_truncated_in_the_report(complet
 
     assert max(len(str(value)) for observation in run.report["observations"]
                for value in [*observation["location"].values(), *observation["attributes"].values()]) <= 300
+
+
+# --- pliki logów o tej samej nazwie w różnych katalogach ------------------------------------------
+
+@pytest.fixture
+def twin_logs(evidence):
+    """Dwa pliki ``access.log`` o identycznej treści (jedno żądanie do PHP w uploads) w katalogach ``a`` i ``b``."""
+    for directory in ("a", "b"):
+        write(evidence / "rotated" / directory / "access.log", access_line("/" + UPLOAD_PHP))
+    return evidence / "rotated"
+
+
+def test_same_named_logs_in_two_directories_are_two_evidence_entries(complete_case, twin_logs, analyze):
+    run = analyze(**{**complete_case, "logs": twin_logs})
+    first, second = run.evidence("logs/a/access.log"), run.evidence("logs/b/access.log")
+
+    assert first["id"] != second["id"] and first["sha256"] == second["sha256"]
+    assert entries(run, "logs") == {"READ": 2}
+
+
+def test_requests_in_same_named_logs_are_attributed_to_their_own_file(complete_case, twin_logs, analyze):
+    run = analyze(**{**complete_case, "logs": twin_logs})
+
+    assert sorted(item["source"] for item in run.findings if item["rule"] == "HTTP_EXECUTABLE_IN_UPLOADS") == [
+        "a/access.log:1", "b/access.log:1"]
+
+
+# --- mtime, którego nie da się zapisać jako daty --------------------------------------------------
+
+YEAR_10000_SECONDS = 253_402_300_800
+
+
+def _flagged_upload(mtime_ns: int) -> tuple[cli.Detection, models.Evidence]:
+    record = models.Evidence("file", f"files/{UPLOAD_PHP}", "READ", sha256="a" * 64, size_bytes=1, mtime_ns=mtime_ns)
+    fact = models.Observation(record.id, "PHP_FILE_IN_UPLOADS", models.Location(path=UPLOAD_PHP))
+    return cli.Detection("EXECUTABLE_IN_UPLOADS", "high", "medium", "file", "ustalenie syntetyczne", fact), record
+
+
+@pytest.mark.parametrize("mtime_ns", [YEAR_10000_SECONDS * 10**9, 10**30, -10**30, -(10**20)],
+                         ids=["year-10000", "far-future", "far-past", "before-year-1"])
+def test_flagged_file_with_mtime_outside_the_datetime_range_gets_a_note_instead_of_a_timeline_event(mtime_ns):
+    found, record = _flagged_upload(mtime_ns)
+
+    assert cli._timeline([found], {record.id: record}) == ([], [f"Nie można zapisać mtime jako czasu UTC: files/{UPLOAD_PHP}"])
+
+
+def test_flagged_file_with_an_ordinary_mtime_is_dated_without_a_note():
+    found, record = _flagged_upload(1_762_650_841 * 10**9)
+
+    events, undated = cli._timeline([found], {record.id: record})
+
+    assert ([(event.time_utc, event.event) for event in events], undated) == (
+        [("2025-11-09T01:14:01+00:00", "SUSPICIOUS_FILE_MTIME")], [])
+
+
+def test_report_names_the_flagged_file_whose_mtime_cannot_be_written_as_a_date(complete_case, site, analyze):
+    upload = write(site / UPLOAD_PHP)
+    try:
+        os.utime(upload, ns=(0, YEAR_10000_SECONDS * 10**9))
+    except (OSError, OverflowError):
+        pytest.skip("system plików nie przyjmuje mtime spoza zakresu lat 1–9999")
+    if upload.stat().st_mtime_ns != YEAR_10000_SECONDS * 10**9:
+        pytest.skip("system plików nie zachowuje mtime spoza zakresu lat 1–9999")
+
+    run = analyze(**complete_case)
+
+    assert f"Nie można zapisać mtime jako czasu UTC: files/{UPLOAD_PHP}" in run.gaps
+    assert not any(event["event"] == "SUSPICIOUS_FILE_MTIME" for event in run.report["timeline"])
