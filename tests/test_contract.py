@@ -585,6 +585,9 @@ MARKUP = "<script src=//example.invalid/x.js></script>"
 SKIPPED_SQL = {
     "executable-comment": (f"/*!50001 REPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}') */;\n", "PARTIAL", "nieobsługiwanej składni"),
     "mariadb-executable-comment": (f"/*M!100100 replace into `wp_options` VALUES (2,'c','{MARKUP}') */;\n", "PARTIAL", "nieobsługiwanej składni"),
+    "executable-comment-without-space-after-version": (f"/*!50001REPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}') */;\n",
+                                                       "PARTIAL", "nieobsługiwanej składni"),
+    "client-delimiter-command": (f"\\d ;;\nREPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}') ;;\n", "PARTIAL", "nieobsługiwanej składni"),
     "delimiter-directive": (f"DELIMITER ;;\nREPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}') ;;\nDELIMITER ;\n", "PARTIAL", "nieobsługiwanej składni"),
     "second-statement-on-the-same-line": (f"INSERT INTO `wp_options` VALUES (1,'a','b'); REPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}');\n",
                                           "PARTIAL", "nieobsługiwanej składni"),
