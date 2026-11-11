@@ -2,7 +2,7 @@
 
 **Nie jest to gotowe narzędzie produkcyjne ani dowód braku kompromitacji.**
 
-PoC zapewnia działający **offline** przepływ: statyczna analiza kopii katalogu WordPressa, wybranego podzbioru eksportu SQL i logów HTTP → manifest SHA-256 → `report.json` + `report.html`. Zawiera wyłącznie syntetyczne dane testowe.
+PoC zapewnia działający **offline** przepływ: statyczna analiza kopii katalogu WordPressa, wybranego podzbioru eksportu SQL i logów HTTP → manifest SHA-256 → `report.json` + `report.html` + `case.json`. Zawiera wyłącznie syntetyczne dane testowe.
 
 ## Test lokalny
 
@@ -36,8 +36,33 @@ Materiał dowodowy otwiera wyłącznie moduł `wptrace/ingest.py`: względem des
 | `--max-file-bytes` | 2147483648 (2 GiB) | większy plik jest pomijany bez liczenia skrótu |
 | `--max-total-bytes` | 21474836480 (20 GiB) | limit łącznego rozmiaru czytanych plików |
 | `--max-seconds` | 1800 | limit czasu całej analizy, sprawdzany między plikami |
+| `--max-depth` | 64 | limit głębokości katalogów; głębszy katalog nie jest przeglądany |
+| `--max-path-bytes` | 4096 | limit długości ścieżki względnej do źródła; dłuższa ścieżka jest pomijana |
 
-Stałe limity: treść plików analizowana do 4 MiB, SQL do 20 MiB, log do 30 MiB, ścieżka względna do 4096 bajtów, głębokość katalogów 64. Bezpieczny odczyt nie zastępuje izolacji: nie wykrywa punktów montowania w drzewie ani zmian cofniętych przed ponowną weryfikacją; materiał montuj tylko do odczytu, z `nodev`.
+Każdy limit musi być dodatni i skończony, inaczej wywołanie jest odrzucane (kod 2). Stałe limity: treść plików analizowana do 4 MiB, SQL do 20 MiB, log do 30 MiB. Bezpieczny odczyt nie zastępuje izolacji: nie wykrywa punktów montowania w drzewie ani zmian cofniętych przed ponowną weryfikacją; materiał montuj tylko do odczytu, z `nodev`.
+
+## Sprawa i zapis wyników (T-101)
+
+Wywołanie waliduje `wptrace/case.py` (CaseManager), zanim zostanie przeczytany jakikolwiek dowód; wyniki zapisuje wyłącznie `wptrace/report.py` (Reporter).
+
+- `--case-id` (domyślnie `WPTRACE-DEMO`) i opcjonalny `--operator-id`: 1–64 znaki `A-Z a-z 0-9 . _ -`, pierwszy znak inny niż kropka i łącznik. Inna wartość (separator ścieżki, spacja, znak sterujący, znak spoza ASCII) to błąd wywołania (kod 2).
+- `--operator-id` to pseudonim podany przez operatora. Narzędzie nie odczytuje nazwy użytkownika systemu, nazwy hosta ani zmiennych środowiskowych; bez flagi pole ma wartość `null`.
+- Wartość `--known-admin` oraz ścieżki, skróty i loginy w baseline, których nie da się zapisać w UTF-8, są odrzucane (kod 2) przed analizą.
+- `--output` wskazujący dowiązanie symboliczne albo wpis niebędący katalogiem jest odrzucany (kod 2). Sprawdzany jest ostatni składnik ścieżki, nie katalogi nadrzędne.
+- Każdy plik wyników powstaje jako plik tymczasowy w katalogu wyników (uprawnienia `0600`) i jest zamieniany na docelowy dopiero po zapisaniu w całości. Istniejący wpis o nazwie wyniku, także dowiązanie symboliczne, jest zastępowany, a cel dowiązania pozostaje nietknięty. Zamiana trzech plików nie jest jedną operacją: `case.json` jest zamieniany jako ostatni.
+
+`case.json` (schemat **`case-poc-1`**, [docs/schema/case-poc-1.schema.json](docs/schema/case-poc-1.schema.json)) opisuje sprawę i przebieg. Nie zawiera sekretów, ścieżek hosta, zmiennych środowiskowych ani listy zaufanych administratorów.
+
+| Pole | Zawartość |
+|---|---|
+| `schema_version`, `case_id`, `operator_id` | wersja schematu, identyfikator sprawy, pseudonim operatora albo `null` |
+| `tool`, `tool_version` | jak w `report.json` |
+| `created_at_utc`, `analysis_finished_at_utc` | czas walidacji wywołania i czas zakończenia analizy (równy `analyzed_at_utc` raportu); UTC, zegar narzędzia |
+| `sources` | dla `files`, `database`, `logs`, `baseline`: `provided` oraz `name` — wyłącznie ostatni składnik podanej ścieżki (`null`, gdy źródła nie podano albo ścieżka nie ma nazwy, np. `.`) |
+| `limits` | wszystkie limity odczytu użyte w przebiegu |
+| `flags` | `allow_hardlinks`, `reverify` |
+| `report` | nazwa pliku raportu i SHA-256 jego zapisanych bajtów |
+| `assessment`, `exit_code` | etykieta triage z raportu i kod wyjścia procesu |
 
 ## Kontener Docker
 
@@ -48,7 +73,7 @@ mkdir -p results && chmod 777 results  # TYLKO jednorazowy lokalny PoC; nigdy na
 cd docker && docker compose run --build --rm wptrace
 ```
 
-Tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability, non-root. Wymaga poprawnych uprawnień do odczytu dowodów i zapisu wyniku przez UID 65532.
+Tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability, non-root. Wymaga poprawnych uprawnień do odczytu dowodów i zapisu wyniku przez UID 65532. Pliki wyników mają uprawnienia `0600` i właściciela UID 65532, więc inny użytkownik hosta odczyta je dopiero po zmianie właściciela lub uprawnień.
 
 ## Ograniczenia PoC
 

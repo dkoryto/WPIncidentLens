@@ -143,7 +143,7 @@ Pominięte, bo PoC nie ma skąd ich wziąć; nie wstawiono atrap.
 
 | Obiekt | Pola odroczone | Powód |
 |---|---|---|
-| Case (§4.1) | `created_at_utc`, `operator_id`, `analyst_notes`, `ruleset_id`, `ruleset_sha256`, `analysis_started_at_utc`, `mode`, `source_authorization_confirmed` | brak CaseManagera i `case.json` (pozostała część #4) |
+| Case (§4.1) | `analyst_notes`, `ruleset_id`, `ruleset_sha256`, `mode`, `source_authorization_confirmed` | `created_at_utc`, `operator_id` i czas zakończenia analizy zapisuje od T-101 `case.json` (`case-poc-1`, `docs/schema/case-poc-1.schema.json`); pozostałe pola wymagają RulesEngine (#14) i decyzji o trybach pracy |
 | Evidence (§4.2) | `intake_order`, `mtime_precision`, `acquired_at_utc`, `source_confidence`, `acquisition_note` | narzędzie nie zna okoliczności pozyskania; `mtime_ns` jest surową wartością w nanosekundach |
 | Observation (§4.3) | `source_span` (offset i długość w bajtach), `raw_value_sha256`, `normalized_value`, `detector_id`, `parse_confidence`, `clock_uncertainty_seconds` | parsery PoC nie śledzą offsetów ani niepewności zegara (#6, #7) |
 | Finding (§4.4) | `rule_version`, `title`, `alternative_explanations[]`, `recommendation`, `status` | brak wersjonowanego zestawu reguł (RulesEngine, #14) |

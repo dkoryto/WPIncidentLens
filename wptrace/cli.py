@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import html
 import io
 import json
 import re
@@ -11,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from . import ingest, models
+from . import case, ingest, models, report
 
 VERSION = "0.1.0-poc"
 DISCLAIMER = "Brak alertów nie dowodzi braku włamania. PoC, nie certyfikacja śledcza."
@@ -610,34 +609,7 @@ def exit_code(report: dict) -> int:
     return EXIT_COMPLETE if report["scope_complete"] else EXIT_PARTIAL
 
 
-def write_html(report: dict, path: Path) -> None:
-    esc = lambda s: html.escape(str(s), quote=True)
-    places = {item["id"]: models.describe_location(item["location"]) for item in report.get("observations", [])}
-    where = lambda item: "; ".join(dict.fromkeys(places.get(reference, reference) for reference in item["observations"]))
-    rows = "".join(f"<tr><td>{esc(i['severity'])}</td><td>{esc(i['confidence'])}</td><td>{esc(i['rule_id'])}</td><td>{esc(where(i))}</td><td>{esc(i['reason'])}</td></tr>" for i in report["findings"])
-    gaps = "".join(f"<li>{esc(g)}</li>" for g in report["coverage_gaps"])
-    timeline_rows = "".join(f"<tr><td>{esc(i['time_utc'])}</td><td>{esc(i['event'])}</td><td>{esc(i['source'])}</td><td>{esc(i['timestamp_basis'])}</td></tr>" for i in report.get("timeline", []))
-
-    def counted(entries: dict | None) -> tuple:
-        """Liczba wpisów odczytanych i pozostałych (pominiętych, błędnych, zmienionych); raport przeniesiony z 0.1.0 ich nie zna."""
-        if entries is None:
-            return "brak danych", "brak danych"
-        read = str(ingest.ReadStatus.READ)
-        return entries[read], sum(count for status, count in entries.items() if status != read)
-
-    coverage_rows = "".join(
-        f"<tr><td>{esc(source)}</td><td>{esc(entry['status'])}</td>" + "".join(f"<td>{esc(count)}</td>" for count in counted(entry["entries"])) + "</tr>"
-        for source, entry in report.get("coverage", {}).items())
-    scope = {True: "pełny", False: "niepełny"}.get(report.get("scope_complete"), "nieokreślony")
-    doc = f"""<!doctype html><html lang=\"pl\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>WPTrace · {esc(report['case_id'])}</title>
-<style>body{{font:16px/1.5 system-ui,sans-serif;margin:3em auto;max-width:1100px;padding:0 1em;color:#192938}}h1{{font-size:2em}}h2{{margin-top:2em}}table{{border-collapse:collapse;width:100%}}td,th{{border-bottom:1px solid #cbd5e1;padding:.65em;text-align:left;vertical-align:top}}th{{background:#edf2f7}}small{{color:#48596c}}code{{word-break:break-all}}</style>
-<h1>WPTrace — raport analityczny</h1><p>Sprawa: <b>{esc(report['case_id'])}</b> · {esc(report['analyzed_at_utc'])}</p>
-<p>Stan: <strong>{esc(report['assessment'])}</strong>. Zakres analizy: <strong>{esc(scope)}</strong>. {esc(report['disclaimer'])}</p>
-<h2>Ustalenia ({len(report['findings'])})</h2><table><thead><tr><th>Waga</th><th>Pewność</th><th>Reguła</th><th>Źródło</th><th>Wyjaśnienie</th></tr></thead><tbody>{rows}</tbody></table>
-<h2>Pokrycie źródeł</h2><table><thead><tr><th>Źródło</th><th>Status</th><th>Wpisy odczytane</th><th>Wpisy pominięte lub zmienione</th></tr></thead><tbody>{coverage_rows}</tbody></table>
-<h2>Oś czasu (orientacyjna)</h2><table><thead><tr><th>UTC</th><th>Zdarzenie</th><th>Źródło</th><th>Podstawa czasu</th></tr></thead><tbody>{timeline_rows}</tbody></table>
-<h2>Ograniczenia danych</h2><ul>{gaps}</ul><p><small>Pełny manifest SHA-256 i metadane są w report.json. Dane wejściowe nie są modyfikowane.</small></p></html>"""
-    path.write_text(doc, encoding="utf-8")
+write_html = report.write_html  # reeksport: Reporter jest w wptrace/report.py (ADR 0001, krok migracji 1)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -651,7 +623,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--logs", type=Path)
     parser.add_argument("--baseline", type=Path, help="Zaufany JSON: {files: {ścieżka: sha256}, known_admins: [...]} ")
     parser.add_argument("--known-admin", action="append", default=[])
-    parser.add_argument("--case-id", default="WPTRACE-DEMO")
+    parser.add_argument("--case-id", default="WPTRACE-DEMO",
+                        help="Identyfikator sprawy: 1–64 znaki A-Z a-z 0-9 . _ -, pierwszy znak inny niż kropka i łącznik (%(default)s)")
+    parser.add_argument("--operator-id", help="Pseudonim operatora zapisywany w case.json (te same znaki co --case-id); domyślnie brak")
     parser.add_argument("--output", type=Path, required=True)
     defaults = ingest.Limits()
     parser.add_argument("--allow-hardlinks", action="store_true",
@@ -664,40 +638,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-file-bytes", type=int, default=defaults.max_file_bytes, help="Limit rozmiaru jednego pliku (%(default)s)")
     parser.add_argument("--max-total-bytes", type=int, default=defaults.max_total_bytes, help="Limit łącznego rozmiaru czytanych plików (%(default)s)")
     parser.add_argument("--max-seconds", type=float, default=defaults.max_seconds, help="Limit czasu całej analizy w sekundach (%(default)s)")
+    parser.add_argument("--max-depth", type=int, default=defaults.max_depth, help="Limit głębokości katalogów (%(default)s)")
+    parser.add_argument("--max-path-bytes", type=int, default=defaults.max_path_bytes,
+                        help="Limit długości ścieżki względnej do źródła w bajtach (%(default)s)")
     args = parser.parse_args(argv)
-    given = [(flag, path, expect) for flag, path, expect in (
-        ("--files", args.files, "dir"), ("--database", args.database, "file"),
-        ("--logs", args.logs, "any"), ("--baseline", args.baseline, "file")) if path is not None]
-    for flag, path, expect in given:
-        try:
-            ingest.check_source(path, expect)
-        except ingest.IngestRefusal as refusal:
-            if refusal.reason not in ("EACCES", "EPERM"):  # brak uprawnień to luka pokrycia w raporcie, nie błąd wywołania
-                parser.error(f"{flag}: {refusal}")
     try:
-        out = ingest.resolve_output(args.output, [path for _, path, _ in given])
-    except ingest.IngestRefusal as refusal:
-        parser.error(f"--output: {refusal}")
-    try:
-        limits = ingest.Limits(max_files=args.max_files, max_entries=args.max_entries, max_file_bytes=args.max_file_bytes, max_total_bytes=args.max_total_bytes,
-                               max_scan_bytes=MAX_SCAN_BYTES, max_seconds=args.max_seconds)
-    except ValueError as invalid:
+        context = case.build(
+            files=args.files, database=args.database, logs=args.logs, baseline=args.baseline, output=args.output,
+            case_id=args.case_id, operator_id=args.operator_id, known_admins=args.known_admin,
+            allow_hardlinks=args.allow_hardlinks, reverify=not args.no_reverify,
+            limits={"max_files": args.max_files, "max_entries": args.max_entries, "max_file_bytes": args.max_file_bytes,
+                    "max_total_bytes": args.max_total_bytes, "max_scan_bytes": MAX_SCAN_BYTES, "max_seconds": args.max_seconds,
+                    "max_depth": args.max_depth, "max_path_bytes": args.max_path_bytes})
+    except case.CaseError as invalid:
         parser.error(str(invalid))
-    session = ingest.Session(limits, allow_hardlinks=args.allow_hardlinks, reverify=not args.no_reverify)
+    session = ingest.Session(context.limits, allow_hardlinks=context.allow_hardlinks, reverify=context.reverify)
     baseline = None
-    if args.baseline:
+    if context.baseline:
         try:
-            baseline = load_baseline(args.baseline, session)
+            baseline = case.check_baseline(load_baseline(context.baseline, session))
         except ValueError as invalid:
             parser.error(f"--baseline: {invalid}")
-    admins = set(args.known_admin) | set((baseline or {}).get("known_admins", []))
-    output = compose_report(args.files, args.database, args.logs, baseline, admins, args.case_id, session=session)
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "report.json").write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
-    write_html(output, out / "report.html")
+    admins = set(context.known_admins) | set((baseline or {}).get("known_admins", []))
+    output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session)
     code = exit_code(output)
+    try:
+        report.write(context.output, output, context.describe(), code)
+    except report.OutputRefusal as refusal:
+        parser.error(f"--output: {refusal}")
     print(json.dumps({"assessment": output["assessment"], "scope_complete": output["scope_complete"], "findings":len(output["findings"]),
-                      "coverage_gaps":len(output["coverage_gaps"]), "exit_code": code, "report":str(out / "report.html")}, ensure_ascii=False))
+                      "coverage_gaps":len(output["coverage_gaps"]), "exit_code": code, "report":str(context.output / "report.html")}, ensure_ascii=False))
     return code
 
 if __name__ == "__main__":
