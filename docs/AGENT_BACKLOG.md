@@ -19,7 +19,7 @@ Kolejne zaplanowane zadania: T-401 (logi, UTC, korelacja), T-501 (reguły i rapo
 ## Techniczne przypomnienia
 
 - Istniejący raport `schema_version=0.1.0` nie spełnia docelowego modelu `poc-1`; wprowadzać zmianę z migracją i testami.
-- `wptrace/cli.py` jest monolitem; refaktoryzacja stopniowa, nie rewrite „w jednym PR”.
+- `wpincidentlens/cli.py` jest monolitem; refaktoryzacja stopniowa, nie rewrite „w jednym PR”.
 - Logi i SQL są celowo obsługiwane częściowo. Każde pominięcie musi być raportowane jako coverage gap.
 - 6 historycznie zaliczonych testów i syntetyczne fixtures nie dowodzą gotowości bezpieczeństwa.
 - Bez realnych dowodów, sekretów, automatycznych zmian produkcyjnych, sieci w runtime i niezweryfikowanego stwierdzenia „clean”.

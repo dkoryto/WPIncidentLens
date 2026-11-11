@@ -1,6 +1,6 @@
 # Macierz testów P1–P6, N1–N8, S-01–S-18 (T-003, stan po M1)
 
-**Stan na 2026-11-11**, gałąź `agent/T-101-case-manager`, commit `4cac876` (PR #27, w chwili pisania niescalony z `main`). Źródło scenariuszy: `docs/WPTrace_Specyfikacja_Senior_PoC_2026-11-09.md`, rozdz. 14.1–14.3. Dokument opisuje jeden, aktualny stan; wcześniejsze wyniki cząstkowe (T-003, #11, T-101, T-102) są w historii gita tego pliku.
+**Stan na 2026-11-11**, gałąź `agent/T-101-case-manager`, commit `4cac876` (PR #27, w chwili pisania niescalony z `main`). Źródło scenariuszy: `docs/WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.md`, rozdz. 14.1–14.3. Dokument opisuje jeden, aktualny stan; wcześniejsze wyniki cząstkowe (T-003, #11, T-101, T-102) są w historii gita tego pliku.
 
 Macierz nie jest dowodem bezpieczeństwa ani skuteczności detekcji. `PASS` znaczy tylko: opisane zachowanie zaobserwowano w uruchomionym teście na danych syntetycznych, na macOS.
 
@@ -22,11 +22,11 @@ Uruchomione przez agenta aktualizującego ten dokument, w świeżym środowisku 
 |---|---|---|
 | `python -m ruff check .` | macOS 27.0.1 (Darwin 27.0.0, arm64), ruff 0.8.6 | **All checks passed** (reguły `E9`, `F`) |
 | `python -m pytest -q` | jw., Python 3.12.11, pytest 8.4.2, jsonschema 4.26.0 | **1864 passed, 5 skipped, 10 xfailed** (19,75 s) |
-| `python -m pytest -q --cov=wptrace --cov-report=term-missing` | jw., pytest-cov 6.3.0, coverage 7.17.2 | **1864 passed, 5 skipped, 10 xfailed; pokrycie 99%** (tabela niżej) |
+| `python -m pytest -q --cov=wpincidentlens --cov-report=term-missing` | jw., pytest-cov 6.3.0, coverage 7.17.2 | **1864 passed, 5 skipped, 10 xfailed; pokrycie 99%** (tabela niżej) |
 | `python -m pytest -v` | jw. | ten sam wynik; trzeci przebieg, w tym oba testy wyścigu |
-| `python -m wptrace --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output <tmp> --case-id DEMO-001` | jw. | kod 0; `SUSPICIOUS`, `scope_complete: true`, 6 ustaleń, 2 luki; powstały `report.json`, `report.html`, `case.json`, wszystkie z trybem `0600` |
-| `python -m wptrace --files fixtures/site --output <tmp>` | jw. | kod 3; `SUSPICIOUS`, `scope_complete: false` |
-| `python -m wptrace --help` | jw. | kod 0 |
+| `python -m wpincidentlens --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output <tmp> --case-id DEMO-001` | jw. | kod 0; `SUSPICIOUS`, `scope_complete: true`, 6 ustaleń, 2 luki; powstały `report.json`, `report.html`, `case.json`, wszystkie z trybem `0600` |
+| `python -m wpincidentlens --files fixtures/site --output <tmp>` | jw. | kod 3; `SUSPICIOUS`, `scope_complete: false` |
+| `python -m wpincidentlens --help` | jw. | kod 0 |
 
 Zebrano 1871 przypadków z 362 funkcji testowych (`pytest --collect-only -q`): 1066 w `prop`, 184 w `mod`, 119 w `con`, 116 w `ing`, 108 w `sec`, 91 w `case`, 61 w `mig`, 41 w `neg`, 38 w `inv`, 22 w `rw`, 19 w `pos`, 6 w `cli`.
 
@@ -47,14 +47,14 @@ Pominięcia na macOS (5), wszystkie z powodu systemu plików APFS:
 ```
 Name                  Stmts   Miss  Cover   Missing
 ---------------------------------------------------
-wptrace/__init__.py       1      0   100%
-wptrace/__main__.py       2      0   100%
-wptrace/case.py          86      0   100%
-wptrace/cli.py          470     11    98%   334-335, 345-346, 355, 359, 368, 377, 440-441, 674
-wptrace/ingest.py       380      7    98%   170-172, 334-335, 413, 520
-wptrace/migrate.py      136      1    99%   211
-wptrace/models.py       459      0   100%
-wptrace/report.py        82      0   100%
+wpincidentlens/__init__.py       1      0   100%
+wpincidentlens/__main__.py       2      0   100%
+wpincidentlens/case.py          86      0   100%
+wpincidentlens/cli.py          470     11    98%   334-335, 345-346, 355, 359, 368, 377, 440-441, 674
+wpincidentlens/ingest.py       380      7    98%   170-172, 334-335, 413, 520
+wpincidentlens/migrate.py      136      1    99%   211
+wpincidentlens/models.py       459      0   100%
+wpincidentlens/report.py        82      0   100%
 ---------------------------------------------------
 TOTAL                  1616     19    99%
 ```
@@ -115,7 +115,7 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | Obcy SQL (PostgreSQL COPY, identyfikatory w `"`, śmieci binarne, pusty plik) | gap „Brak obsługiwanych instrukcji INSERT”, zero ustaleń | `neg::test_foreign_sql_is_reported_as_unparsed_not_clean` (4 warianty) | PASS |
 | `INSERT`/`REPLACE` w nieobsługiwanej składni, instrukcja niedomknięta, komentarz wykonywalny, `DELIMITER`, ukośnik wsteczny poza łańcuchem, wiersz o złej liczbie pól | luka i pokrycie bazy `PARTIAL` albo `FAILED` | `neg::test_unsupported_statement_next_to_supported_one_adds_a_gap`, `con::test_sql_that_the_parser_skipped_lowers_database_coverage` (16 przypadków), `con::test_dump_without_wordpress_tables_is_not_an_analyzed_database` | PASS |
 | Obsługiwane `INSERT` w różnych zapisach | pokrycie bazy pozostaje `ANALYZED` | `con::test_supported_inserts_keep_database_coverage_complete` (8 przypadków) | PASS |
-| Instrukcje SQL inne niż `INSERT`/`REPLACE` (`UPDATE`, `CREATE TRIGGER`…) | luka obniżająca pokrycie | — | NOT COVERED: kod daje tylko stałą notę (`wptrace/cli.py:411`); jednorazowa sonda opisana w `docs/M1_GATE.md` §3 dała pokrycie `ANALYZED` (#7) |
+| Instrukcje SQL inne niż `INSERT`/`REPLACE` (`UPDATE`, `CREATE TRIGGER`…) | luka obniżająca pokrycie | — | NOT COVERED: kod daje tylko stałą notę (`wpincidentlens/cli.py:411`); jednorazowa sonda opisana w `docs/M1_GATE.md` §3 dała pokrycie `ANALYZED` (#7) |
 | Rola administratora bez wiersza `*_users` | ustalenie albo luka | `neg::test_admin_capability_without_user_row_is_not_silently_dropped` | PASS (luka + `PARTIAL`) |
 | Log w obcym formacie / częściowo nieparsowalny | luka z licznikiem | `neg::test_unsupported_log_lines_are_counted_as_coverage_gap[json-lines, partly-parsed]` | PASS |
 
@@ -138,7 +138,7 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | S-03 | FIFO w katalogu logów | luka | gap z nazwą pliku | `sec::test_s03_fifo_in_logs_is_skipped_with_gap` | PASS |
 | S-03 | FIFO podane wprost jako `--database`, `--logs`, `--baseline` | odmowa, kod 2, bez zawieszenia | `SystemExit(2)` w budżecie czasu | `sec::test_s03_fifo_given_as_source_is_refused_without_blocking` (3 warianty), `ing::test_fifo_given_as_source_root_is_refused_without_blocking` | PASS |
 | S-03 | Socket (gniazdo uniksowe w drzewie; lokalne, bez sieci) | pominięte, status `SKIPPED_SPECIAL`, bez łączenia | `reason == "SOCKET"` | `ing::test_unix_socket_is_skipped_without_connecting` | PASS |
-| S-03 | Plik urządzenia w drzewie | pominięty z luką | — | — | NOT COVERED: wymaga uprawnień roota; kod otwiera wpis przed `fstat` (`wptrace/ingest.py:8-11`) |
+| S-03 | Plik urządzenia w drzewie | pominięty z luką | — | — | NOT COVERED: wymaga uprawnień roota; kod otwiera wpis przed `fstat` (`wpincidentlens/ingest.py:8-11`) |
 | S-03 | Nieczytelny plik lub katalog w dowolnym źródle | luka z nazwą błędu (`EACCES`), bez awarii i bez ścieżki hosta | gap „Odczyt nieudany (EACCES): …” | `sec::test_unreadable_log_file_becomes_a_gap_not_a_crash`, `sec::test_unreadable_entry_becomes_a_gap_named_by_errno[site-file, site-directory, database-file, logs-directory]`, `ing::test_unreadable_entry_is_an_error_record_named_by_errno[file, directory]`, `ing::test_io_error_becomes_an_error_record_without_leaking_descriptors` (3 warianty) | PASS |
 | S-04 | Nazwa pliku 255 znaków | ścieżka nieobcięta w raporcie | `source` ustalenia | `sec::test_s04_maximum_length_filename_is_reported_untruncated` | PASS |
 | S-04 | Ścieżka dłuższa niż `PATH_MAX` | przy domyślnym limicie 4096 B: luka i odcięcie; przy podniesionym limicie: odczyt względem deskryptorów | `MAX_PATH_BYTES` | `ing::test_tree_nested_beyond_path_max_is_cut_off_at_the_default_path_limit`, `ing::test_tree_nested_beyond_path_max_is_readable_when_the_limit_allows` | PASS |
@@ -151,7 +151,7 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | S-06 | Limit niedodatni lub nieskończony | odmowa, kod 2 | komunikat z nazwą limitu | `sec::test_non_positive_limit_is_rejected_as_usage_error` (4 flagi), `case::test_limit_that_is_not_a_positive_finite_number_is_refused` (4 warianty), `ing::test_limits_reject_non_positive_values` (8 wariantów) | PASS |
 | S-06 | Limity na losowych drzewach (25 ziaren × 4 konfiguracje) | żaden limit nie jest przekroczony | liczniki rejestru | `prop::test_limits_are_never_exceeded` (100 przypadków) | PASS |
 | S-06 | Milion małych plików | budżet czasu/pamięci | — | — | NOT COVERED: nie tworzono miliona plików; zmierzono tylko mechanizm limitu |
-| S-06 | Limit czasu wewnątrz parserów SQL i logów oraz w trakcie odczytu jednego pliku | przerwanie z luką | — | — | NOT COVERED: kod sprawdza zegar tylko między wpisami (`wptrace/ingest.py:327`, `:474`) |
+| S-06 | Limit czasu wewnątrz parserów SQL i logów oraz w trakcie odczytu jednego pliku | przerwanie z luką | — | — | NOT COVERED: kod sprawdza zegar tylko między wpisami (`wpincidentlens/ingest.py:327`, `:474`) |
 | S-07 | Plik > limitu (plik rzadki, progi 4/20/30 MiB + 1 B) | treść pominięta z luką; hash i rozmiar w manifeście | gap „Analiza treści pominięta” / „Eksport SQL większy niż” / „Log za duży” | `sec::test_s07_oversized_site_file_is_hashed_but_not_content_scanned`, `sec::test_s07_oversized_sql_dump_is_skipped_with_gap`, `sec::test_s07_oversized_log_is_skipped_with_gap` | PASS |
 | S-07 | 10 GB sparse file | pominięty przed skrótem (limit 2 GiB na plik, `--max-file-bytes`), luka, reszta analizowana | gap „Plik większy niż limit … pominięty bez obliczania skrótu” w 5 s | `sec::test_s07_ten_gigabyte_sparse_file_is_skipped_without_hashing`, `sec::test_s07_size_limit_flags_skip_the_file_and_continue_with_the_rest[max-file-bytes, max-total-bytes]`, `ing::test_file_above_size_limit_is_skipped_before_hashing`, `ing::test_total_volume_limit_skips_what_does_not_fit_and_continues` | PASS |
 | S-07 | Limit treści plików (4 MiB) a SQL i logi | SQL (20 MiB) i logi (30 MiB) zachowują własne progi | reguły DB i logów działają powyżej progu plików | `sec::test_s07_file_scan_limit_does_not_apply_to_sql_and_logs[sql-dump, access-log]` | PASS |
@@ -181,7 +181,7 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | S-16 | `--output` wewnątrz dowolnego źródła, równe źródłu albo zawierające źródło (także przez symlink i inną wielkość liter) | odrzucone, kod 2, nic nie zapisane | `SystemExit(2)`, drzewo bez zmian | `cli::test_output_cannot_be_inside_evidence`, `inv::test_s16_output_inside_logs_directory_is_refused`, `inv::test_s16_output_overlapping_any_source_is_refused_before_anything_is_written` (4 warianty), `ing::test_output_overlapping_a_source_is_refused` (6 wariantów), `ing::test_output_inside_source_spelled_in_another_letter_case_is_refused` | PASS |
 | S-16 | Brak wycieku deskryptorów | liczba otwartych fd bez zmian (także po przerwaniu, limitach i błędach) | `/dev/fd` przed i po | `ing::test_no_file_descriptor_is_leaked` (8 wariantów), `inv::test_full_analysis_leaks_no_file_descriptor`, `prop::test_no_descriptor_stays_open_after_a_full_read` (100), `prop::test_no_descriptor_stays_open_when_the_reader_is_abandoned_midway` (100), `rw::test_writer_leaks_no_file_descriptor_after_a_failed_write` | PASS |
 | B8 | Ścieżki hosta w raporcie | żadna luka ani ustalenie nie zawiera ścieżki bezwzględnej; błędy jako nazwa (`EACCES`) | brak `tmp_path` w JSON i HTML | `sec::test_report_never_contains_an_absolute_host_path`, `ing::test_no_message_contains_an_absolute_host_path`, `prop::test_every_unread_entry_carries_a_gap_and_nothing_names_a_host_path` (100), `prop::test_report_and_html_name_no_host_path_and_no_content_from_outside` (18), `case::test_case_json_contains_no_host_path` | PASS — redakcji query stringów i pseudonimizacji nie ma |
-| D4 | Dowody otwiera wyłącznie `wptrace/ingest.py`, wyniki pisze wyłącznie `wptrace/report.py` | strażnik AST: poza `ingest.py` dozwolone tylko `makedirs` ×1, `open` ×2 i `unlink` ×1 w `report.py`; moduł `os` importują tylko `ingest.py` i `report.py`; strażnik obejmuje podpakiety; `ingest.py` importuje tylko dozwolone moduły stdlib i nie zawiera wywołań ani flag zapisu | lista wyjątków w teście | `inv::test_d4_only_ingest_touches_the_filesystem`, `inv::test_d4_only_ingest_and_reporter_import_the_os_module`, `inv::test_d4_guard_covers_modules_in_subpackages`, `inv::test_d4_guard_recognises_file_access` (20 wariantów), `ing::test_ingest_imports_only_allowlisted_standard_modules`, `ing::test_ingest_contains_no_writing_call_or_flag`, `case::test_case_manager_imports_nothing_that_identifies_the_host_or_opens_files` | PASS — strażnik działa po nazwach wywołań: potykacz, nie piaskownica |
+| D4 | Dowody otwiera wyłącznie `wpincidentlens/ingest.py`, wyniki pisze wyłącznie `wpincidentlens/report.py` | strażnik AST: poza `ingest.py` dozwolone tylko `makedirs` ×1, `open` ×2 i `unlink` ×1 w `report.py`; moduł `os` importują tylko `ingest.py` i `report.py`; strażnik obejmuje podpakiety; `ingest.py` importuje tylko dozwolone moduły stdlib i nie zawiera wywołań ani flag zapisu | lista wyjątków w teście | `inv::test_d4_only_ingest_touches_the_filesystem`, `inv::test_d4_only_ingest_and_reporter_import_the_os_module`, `inv::test_d4_guard_covers_modules_in_subpackages`, `inv::test_d4_guard_recognises_file_access` (20 wariantów), `ing::test_ingest_imports_only_allowlisted_standard_modules`, `ing::test_ingest_contains_no_writing_call_or_flag`, `case::test_case_manager_imports_nothing_that_identifies_the_host_or_opens_files` | PASS — strażnik działa po nazwach wywołań: potykacz, nie piaskownica |
 | B3 | Platforma bez `dir_fd`/`O_NOFOLLOW` | jawna odmowa pracy | `IngestRefusal(UNSUPPORTED_PLATFORM)` | `ing::test_platform_without_descriptor_relative_open_is_refused` | PASS — symulacja przez monkeypatch; Windows nie był uruchamiany |
 | S-17 | Brak uruchomienia PHP ani innych procesów | pełna analiza z zablokowanym `subprocess`/`os.system`/`fork`/`exec`; brak `eval`/`exec` w silniku | 6 reguł demo; analiza AST | `inv::test_s17_full_analysis_runs_with_process_spawning_blocked`, `inv::test_s17_engine_has_no_dynamic_execution_primitives` | PASS |
 | S-18 | Deterministyczne raporty | dwa uruchomienia → identyczny JSON i HTML z pominięciem `analyzed_at_utc`; kolejność odczytu bajtowo posortowana; ten sam rejestr na losowych drzewach | porównanie raportów | `inv::test_s18_two_runs_on_same_evidence_give_identical_json`, `inv::test_s18_two_runs_on_same_evidence_give_identical_html`, `ing::test_entries_are_visited_in_bytewise_sorted_preorder`, `ing::test_two_sessions_report_identical_records_in_identical_order`, `prop::test_two_sessions_over_the_same_tree_give_the_same_ledger` (100), `con::test_reports_from_processes_with_different_hash_seeds_are_identical` | PASS |

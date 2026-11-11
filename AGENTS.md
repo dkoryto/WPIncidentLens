@@ -1,12 +1,12 @@
 # WPIncidentLens — instrukcje dla agenta kodującego
 
-Projekt: defensywne, lokalne narzędzie analizy powłamaniowej WordPressa. Repozytorium jest **prywatne**. Obecny kod to ograniczony PoC, nie narzędzie produkcyjne. Zachowaj działający interfejs `python -m wptrace`, dopóki nie powstanie zaakceptowana migracja.
+Projekt: defensywne, lokalne narzędzie analizy powłamaniowej WordPressa. Repozytorium jest **prywatne**. Obecny kod to ograniczony PoC, nie narzędzie produkcyjne. Zachowaj działający interfejs `python -m wpincidentlens`, dopóki nie powstanie zaakceptowana migracja.
 
 ## Zanim rozpoczniesz
 
-1. Przeczytaj `README.md`, `docs/MASTER_AGENT_PROMPT.md`, `docs/WPTrace_Specyfikacja_Senior_PoC_2026-11-09.md`, `docs/WPTrace_Specyfikacja_Techniczna.md`, `docs/WPTrace_Przeglad_Inzynierski.md`, `docs/MIGRATION_2026-11-11.md`, `wptrace/cli.py` i `tests/test_cli.py`.
+1. Przeczytaj `README.md`, `docs/MASTER_AGENT_PROMPT.md`, `docs/WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.md`, `docs/WPIncidentLens_Specyfikacja_Techniczna.md`, `docs/WPIncidentLens_Przeglad_Inzynierski.md`, `docs/MIGRATION_2026-11-11.md`, `wpincidentlens/cli.py` i `tests/test_cli.py`.
 2. Przejrzyj otwarte GitHub Issues. Zacznij od **T-001 (#1)**, następnie **T-002 (#2)** i **T-003 (#3)**. Nie omijaj zależności i bramek bezpieczeństwa.
-3. Sprawdź `git status`, bieżącą gałąź, dostępne narzędzia, a następnie wykonaj `python -m pytest -q` i `python -m wptrace --help`. Jeśli nie można uruchomić testów, podaj przyczynę zamiast deklarować PASS.
+3. Sprawdź `git status`, bieżącą gałąź, dostępne narzędzia, a następnie wykonaj `python -m pytest -q` i `python -m wpincidentlens --help`. Jeśli nie można uruchomić testów, podaj przyczynę zamiast deklarować PASS.
 
 ## Niezmienne zasady
 

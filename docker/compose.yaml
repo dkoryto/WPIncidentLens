@@ -1,5 +1,5 @@
 services:
-  wptrace:
+  wpincidentlens:
     # Build after pinning the base-image digest in Dockerfile.
     build:
       context: ..

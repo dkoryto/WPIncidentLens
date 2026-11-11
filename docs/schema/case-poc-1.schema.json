@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://wpincidentlens.invalid/schema/case-poc-1.schema.json",
-  "title": "WPTrace case.json (case-poc-1)",
+  "title": "WPIncidentLens case.json (case-poc-1)",
   "description": "Opis sprawy i przebiegu analizy zapisywany obok report.json. Bez sekretów, ścieżek hosta i zmiennych środowiskowych.",
   "type": "object",
   "additionalProperties": false,

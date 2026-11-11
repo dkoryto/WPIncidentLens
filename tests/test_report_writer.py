@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from conftest import sha256, tamper_before_reverification, write
 
-from wptrace import cli, report
+from wpincidentlens import cli, report
 
 OUTPUTS = ("report.json", "report.html", "case.json")
 # Opis sprawy sprzed analizy w kształcie ``CaseContext.describe()``; pisarz przenosi go do case.json bez interpretacji.

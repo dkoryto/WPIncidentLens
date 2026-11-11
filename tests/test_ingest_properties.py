@@ -29,8 +29,8 @@ from pathlib import Path
 import pytest
 from conftest import open_fd_count, sparse, time_limit
 
-from wptrace.ingest import CHANGED_GAP, ROOT, Limits, ReadStatus, Session
-from wptrace.models import validate_report
+from wpincidentlens.ingest import CHANGED_GAP, ROOT, Limits, ReadStatus, Session
+from wpincidentlens.models import validate_report
 
 SEEDS = range(25)
 CONFIGS = ("default", "hardlinks", "tight-a", "tight-b")
@@ -613,7 +613,7 @@ def test_entry_marked_changed_by_reverification_carries_its_own_gap(tmp_path):
     assert session.ledger[0].gaps  # …ale sam wpis jej nie niesie
 
 
-# --- własności end-to-end: przez publiczny interfejs wptrace -----------------------------------
+# --- własności end-to-end: przez publiczny interfejs wpincidentlens -----------------------------------
 
 def cli_flags(tree: Tree, variant: str) -> tuple[str, ...]:
     if variant == "default":

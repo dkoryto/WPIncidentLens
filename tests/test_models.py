@@ -1,6 +1,6 @@
 """Kontrakty danych ``poc-1`` (T-102, ADR 0003): pola, referencje, identyfikatory z treści i reguła oceny.
 
-Wyłącznie obiekty syntetyczne budowane w pamięci; moduł ``wptrace.models`` niczego nie czyta ani nie zapisuje.
+Wyłącznie obiekty syntetyczne budowane w pamięci; moduł ``wpincidentlens.models`` niczego nie czyta ani nie zapisuje.
 """
 import copy
 import hashlib
@@ -10,8 +10,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from conftest import remove_at, replace_at
 
-from wptrace.ingest import ReadStatus
-from wptrace.models import (
+from wpincidentlens.ingest import ReadStatus
+from wpincidentlens.models import (
     SOURCES,
     Assessment,
     Confidence,
@@ -65,7 +65,7 @@ def parts() -> dict:
                           timestamp_raw="09/Nov/2026:02:14:01 +0100", timestamp_utc=LOG_TIME, time_source="log")
     found = finding(observation=in_uploads.id)
     event = TimelineEvent(LOG_TIME, "log", "HTTP access log", "HTTP_EXECUTABLE_IN_UPLOADS", "access.log:1", "medium", log.id, request.id)
-    return {"case_id": "SYNTH-1", "tool": "WPTrace PoC", "tool_version": "test", "analyzed_at_utc": "2026-11-11T10:00:00+00:00",
+    return {"case_id": "SYNTH-1", "tool": "WPIncidentLens PoC", "tool_version": "test", "analyzed_at_utc": "2026-11-11T10:00:00+00:00",
             "assessment": "SUSPICIOUS", "disclaimer": "syntetyczne", "evidence": (upload, log, dump, trusted), "observations": (in_uploads, request),
             "findings": (found,), "coverage": all_coverage(), "coverage_gaps": (), "timeline": (event,)}
 
