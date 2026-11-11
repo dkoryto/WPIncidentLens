@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import itertools
 import os
 import stat
 import time
@@ -67,6 +68,7 @@ class IngestRefusal(Exception):
 class Limits:
     """Limity ADR 0002 B6; obowiązują łącznie dla wszystkich źródeł jednej sesji."""
     max_files: int = 200_000
+    max_entries: int = 1_000_000  # wszystkie wpisy: pliki, katalogi, dowiązania, pliki specjalne
     max_file_bytes: int = 2 * 1024**3
     max_total_bytes: int = 20 * 1024**3
     max_scan_bytes: int = 4 * 1024**2
@@ -114,7 +116,7 @@ class _Root:
 def _require_platform() -> None:
     flags = all(hasattr(os, name) for name in ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK", "O_CLOEXEC"))
     if not (flags and {os.open, os.stat} <= os.supports_dir_fd and os.stat in os.supports_follow_symlinks
-            and os.listdir in os.supports_fd):
+            and os.scandir in os.supports_fd):
         raise IngestRefusal(ReadStatus.ERROR, "UNSUPPORTED_PLATFORM")
 
 
@@ -141,8 +143,11 @@ def _where(source: str, rel: str) -> str:
     return rel if source == "files" else f"{source}/{rel}"
 
 
-def _sorted_names(dir_fd: int) -> list[str]:
-    return sorted(os.listdir(dir_fd), key=os.fsencode)
+def _sorted_names(dir_fd: int, limit: int) -> list[str]:
+    """Najwyżej ``limit + 1`` nazw z katalogu: nadmiarowa nazwa sygnalizuje obcięcie, a lista nie rośnie bez ograniczeń."""
+    with os.scandir(dir_fd) as entries:
+        names = [entry.name for entry in itertools.islice(entries, limit + 1)]
+    return sorted(names, key=os.fsencode)
 
 
 def _open_at(name: str, flags: int, dir_fd: int | None = None) -> tuple[int, os.stat_result]:
@@ -243,7 +248,7 @@ class Session:
         self._clock = clock or time.monotonic  # zegar monotoniczny: zmiana czasu systemowego nie wydłuża budżetu
         self._deadline = self._clock() + self.limits.max_seconds
         self._roots: list[_Root] = []
-        self._files = self._bytes = self._hardlinked = 0
+        self._files = self._entries = self._bytes = self._hardlinked = 0
 
     def read(self, path: str | os.PathLike[str], source: str, *, expect: str = "any",
              wanted: Callable[[str], bool] | None = None, keep_limit: int | None = None) -> Iterator[Evidence]:
@@ -294,8 +299,8 @@ class Session:
         """Przejście w głąb bez rekurencji: na stosie leżą otwarte katalogi, więc deskryptorów jest najwyżej tyle, ile poziomów."""
         frames: list[tuple[int, Iterator[str], tuple[str, ...]]] = []
         try:
-            if failure := self._enter(frames, root_fd, (), root.source):
-                yield failure
+            if note := self._enter(frames, root_fd, (), root.source):
+                yield note
             while frames:
                 dir_fd, names, parts = frames[-1]
                 name = next(names, None)
@@ -308,6 +313,10 @@ class Session:
                     return
                 here = (*parts, name)
                 rel = "/".join(here)
+                self._entries += 1
+                if self._entries > self.limits.max_entries:
+                    yield self._skip(root.source, rel, ReadStatus.SKIPPED_LIMIT, "MAX_ENTRIES")
+                    return
                 if len(os.fsencode(rel)) > self.limits.max_path_bytes:
                     yield self._skip(root.source, rel, ReadStatus.SKIPPED_LIMIT, "MAX_PATH_BYTES")
                     continue
@@ -321,8 +330,8 @@ class Session:
                     if len(here) > self.limits.max_depth:
                         os.close(fd)
                         yield self._skip(root.source, rel, ReadStatus.SKIPPED_LIMIT, "MAX_DEPTH")
-                    elif failure := self._enter(frames, fd, here, root.source):
-                        yield failure
+                    elif note := self._enter(frames, fd, here, root.source):
+                        yield note
                     continue
                 try:
                     if stat.S_ISREG(info.st_mode):
@@ -332,20 +341,26 @@ class Session:
                 finally:
                     os.close(fd)
                 yield record
-                if record.reason == "MAX_FILES":
+                if record.reason == "MAX_FILES":  # dalsze pliki i tak byłyby pominięte
                     return
         finally:
             for dir_fd, _, _ in frames:
                 os.close(dir_fd)
 
     def _enter(self, frames: list, fd: int, parts: tuple[str, ...], source: str) -> Evidence | None:
-        """Listuje otwarty katalog i odkłada go na stos; przy błędzie zamyka deskryptor i zwraca wpis ERROR."""
+        """Listuje otwarty katalog i odkłada go na stos. Lista jest ograniczona pozostałym budżetem wpisów, żeby
+        miliony dowiązań lub pustych katalogów nie ominęły limitu plików ani nie rozdęły rejestru i raportu. Zwraca wpis do raportu: ERROR, gdy katalogu nie da się
+        wylistować (deskryptor jest wtedy zamykany), albo SKIPPED_LIMIT, gdy lista została obcięta budżetem wpisów."""
+        where = "/".join(parts) or ROOT
+        budget = max(self.limits.max_entries - self._entries, 0)
         try:
-            names = _sorted_names(fd)
+            names = _sorted_names(fd, budget)
         except OSError as exc:
             os.close(fd)
-            return self._skip(source, "/".join(parts) or ROOT, ReadStatus.ERROR, _error_name(exc))
-        frames.append((fd, iter(names), parts))
+            return self._skip(source, where, ReadStatus.ERROR, _error_name(exc))
+        frames.append((fd, iter(names[:budget]), parts))
+        if len(names) > budget:
+            return self._skip(source, where, ReadStatus.SKIPPED_LIMIT, "MAX_ENTRIES")
         return None
 
     def _read_regular(self, fd: int, info: os.stat_result, root: _Root, parts: tuple[str, ...], rel: str,
@@ -399,6 +414,8 @@ class Session:
         if status is ReadStatus.SKIPPED_LIMIT:
             return {
                 "MAX_FILES": f"Limit {limits.max_files} plików; analiza katalogu niepełna (pierwszy pominięty wpis: {where})",
+                "MAX_ENTRIES": f"Limit {self.limits.max_entries} wpisów (pliki, katalogi, dowiązania) wyczerpany; "
+                               f"analiza niepełna od: {where}",
                 "MAX_FILE_BYTES": f"Plik większy niż limit {limits.max_file_bytes} B pominięty bez obliczania skrótu: {where}",
                 "MAX_TOTAL_BYTES": f"Limit łącznego rozmiaru {limits.max_total_bytes} B wyczerpany; plik pominięty: {where}",
                 "MAX_PATH_BYTES": f"Ścieżka dłuższa niż {limits.max_path_bytes} bajtów pominięta: {where[:200]}…",

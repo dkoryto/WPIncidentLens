@@ -32,6 +32,7 @@ Materiał dowodowy otwiera wyłącznie moduł `wptrace/ingest.py`: względem des
 | `--allow-hardlinks` | wyłączona | czytaj pliki z wieloma dowiązaniami twardymi; raport podaje ich liczbę |
 | `--no-reverify` | wyłączona | pomiń ponowną weryfikację skrótów po analizie (odnotowane jako luka) |
 | `--max-files` | 200000 | limit liczby plików |
+| `--max-entries` | 1000000 | limit wszystkich wpisów (pliki, katalogi, dowiązania, pliki specjalne) |
 | `--max-file-bytes` | 2147483648 (2 GiB) | większy plik jest pomijany bez liczenia skrótu |
 | `--max-total-bytes` | 21474836480 (20 GiB) | limit łącznego rozmiaru czytanych plików |
 | `--max-seconds` | 1800 | limit czasu całej analizy, sprawdzany między plikami |
