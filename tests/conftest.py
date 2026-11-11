@@ -94,6 +94,21 @@ def strip_time(report: dict) -> dict:
     return {key: value for key, value in report.items() if key != "analyzed_at_utc"}
 
 
+def replace_at(document: dict, path: tuple, value) -> None:
+    """Podmienia (albo dodaje) wartość w zagnieżdżonym dokumencie; ``path`` to kolejne klucze i indeksy."""
+    *parents, last = path
+    for step in parents:
+        document = document[step]
+    document[last] = value
+
+
+def remove_at(document: dict, path: tuple) -> None:
+    *parents, last = path
+    for step in parents:
+        document = document[step]
+    del document[last]
+
+
 class TimeBudgetExceeded(AssertionError):
     """Nie ``TimeoutError``: to podklasa ``OSError``, którą odczyt dowodów zamienia w lukę — zawieszenie zostałoby ukryte."""
 
