@@ -588,6 +588,7 @@ SKIPPED_SQL = {
     "executable-comment-without-space-after-version": (f"/*!50001REPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}') */;\n",
                                                        "PARTIAL", "nieobsługiwanej składni"),
     "client-delimiter-command": (f"\\d ;;\nREPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}') ;;\n", "PARTIAL", "nieobsługiwanej składni"),
+    "client-terminator-inside-a-statement": (f"SELECT 1 \\g REPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}');\n", "PARTIAL", "nieobsługiwanej składni"),
     "delimiter-directive": (f"DELIMITER ;;\nREPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}') ;;\nDELIMITER ;\n", "PARTIAL", "nieobsługiwanej składni"),
     "second-statement-on-the-same-line": (f"INSERT INTO `wp_options` VALUES (1,'a','b'); REPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}');\n",
                                           "PARTIAL", "nieobsługiwanej składni"),
@@ -632,8 +633,9 @@ def test_dump_without_wordpress_tables_is_not_an_analyzed_database(complete_case
     "-- REPLACE INTO `wp_options` VALUES (1,'a','b');\nINSERT INTO `wp_options` VALUES (5,'note','x');\n",
     "/* INSERT IGNORE INTO t VALUES (1); */ INSERT INTO `wp_options` VALUES (5,'note','x');\n",
     "/*!40000 ALTER TABLE `wp_options` DISABLE KEYS */;\nINSERT INTO `wp_options` VALUES (5,'note','x');\n/*!40101 SET NAMES utf8 */;\n",
+    "INSERT INTO `wp_options` VALUES (5,'note','C:\\\\path\\\\file and it\\'s fine');\n",
 ], ids=["keyword-inside-a-value", "multi-row", "lower-case", "statement-text-inside-a-value", "statement-in-a-line-comment",
-        "statement-in-a-block-comment", "mysqldump-version-comments"])
+        "statement-in-a-block-comment", "mysqldump-version-comments", "backslashes-inside-a-value"])
 def test_supported_inserts_keep_database_coverage_complete(complete_case, evidence, analyze, prose):
     database = write(evidence / "plain.sql", admin_sql("siteadmin") + prose)
 
