@@ -55,16 +55,18 @@ def finding(severity: str = "high", confidence: str = "medium", observation: str
 
 
 def parts() -> dict:
-    """Składniki poprawnego raportu: plik z ustaleniem, wiersz logu z czasem i zdarzenie osi czasu."""
+    """Składniki poprawnego raportu: plik z ustaleniem, wiersz logu z czasem, zdarzenie osi czasu i po jednym dowodzie każdego źródła."""
     upload = Evidence("file", "files/wp-content/uploads/a.php", "READ", sha256=SHA, size_bytes=3, mtime_ns=1_700_000_000_000_000_000)
     log = Evidence("log", "logs/access.log", "READ", sha256=OTHER_SHA, size_bytes=90, mtime_ns=1)
+    dump = Evidence("sql_dump", "database/db.sql", "READ", sha256=SHA, size_bytes=120, mtime_ns=2)
+    trusted = Evidence("baseline", "baseline/baseline.json", "READ", sha256=OTHER_SHA, size_bytes=40, mtime_ns=3)
     in_uploads = Observation(upload.id, "PHP_FILE_IN_UPLOADS", Location(path="wp-content/uploads/a.php"))
     request = Observation(log.id, "HTTP_REQUEST_FOR_PHP_IN_UPLOADS", Location(path="access.log", line=1), {"status": 200},
                           timestamp_raw="09/Nov/2026:02:14:01 +0100", timestamp_utc=LOG_TIME, time_source="log")
     found = finding(observation=in_uploads.id)
     event = TimelineEvent(LOG_TIME, "log", "HTTP access log", "HTTP_EXECUTABLE_IN_UPLOADS", "access.log:1", "medium", log.id, request.id)
     return {"case_id": "SYNTH-1", "tool": "WPTrace PoC", "tool_version": "test", "analyzed_at_utc": "2026-11-11T10:00:00+00:00",
-            "assessment": "SUSPICIOUS", "disclaimer": "syntetyczne", "evidence": (upload, log), "observations": (in_uploads, request),
+            "assessment": "SUSPICIOUS", "disclaimer": "syntetyczne", "evidence": (upload, log, dump, trusted), "observations": (in_uploads, request),
             "findings": (found,), "coverage": all_coverage(), "coverage_gaps": (), "timeline": (event,)}
 
 
@@ -382,6 +384,107 @@ def test_coverage_counters_must_name_every_read_status(entries):
 def test_unknown_coverage_source_is_rejected():
     with pytest.raises(ModelError, match="nieznane źródło 'memory'"):
         Coverage("memory", "ANALYZED", {**NO_ENTRIES, "READ": 1})
+
+
+# --- liczniki pokrycia a dowody -----------------------------------------------------------------
+
+def _entries(source: str, status: str, **counts: int) -> dict:
+    """Zmiana raportu: pokrycie ``source`` z podanymi licznikami (reszta zerowa) i powodem, jeśli status go wymaga."""
+    reasons = () if status == "ANALYZED" else (f"powód {source}",)
+    return {"coverage": {**all_coverage(), source: Coverage(source, status, {**NO_ENTRIES, **counts}, reasons)}, "coverage_gaps": reasons}
+
+
+def _more_evidence(*added: Evidence) -> dict:
+    return {"evidence": (*parts()["evidence"], *added)}
+
+
+def _less_evidence(logical_path: str) -> dict:
+    return {"evidence": tuple(item for item in parts()["evidence"] if item.logical_path != logical_path)}
+
+
+SECOND_LOG = Evidence("log", "logs/b/access.log", "READ", sha256=SHA, size_bytes=1)
+SKIPPED_LINK = Evidence("file", "files/link.php", "SKIPPED_SYMLINK", read_reason="SYMLINK")
+CHANGED_FILE = Evidence("file", "files/changed.php", "CHANGED", sha256=OTHER_SHA, read_reason="REVERIFY_SHA256")
+
+COUNTERS_CONTRADICTING_EVIDENCE = {
+    "analyzed-source-without-evidence": (_less_evidence("database/db.sql"), "coverage.database.entries.READ: licznik 1 bez żadnego dowodu"),
+    "more-evidence-than-counted": (_more_evidence(SECOND_LOG), "coverage.logs.entries.READ: licznik 1 jest mniejszy niż liczba dowodów"),
+    "skipped-evidence-not-counted": (_more_evidence(SKIPPED_LINK), "coverage.files.entries.SKIPPED_SYMLINK: licznik 0 jest mniejszy"),
+    "changed-evidence-counted-as-read": ({**_more_evidence(CHANGED_FILE), **_entries("files", "ANALYZED", READ=2)},
+                                         "coverage.files.entries.CHANGED: licznik 0 jest mniejszy"),
+    "counted-skip-without-evidence": (_entries("files", "PARTIAL", READ=1, SKIPPED_LIMIT=1),
+                                      "coverage.files.entries.SKIPPED_LIMIT: licznik 1 bez żadnego dowodu"),
+    "evidence-of-a-source-not-provided": ({**_entries("baseline", "NOT_PROVIDED")}, "coverage.baseline.entries.READ: licznik 0 jest mniejszy"),
+}
+
+
+@pytest.mark.parametrize("changes, message", COUNTERS_CONTRADICTING_EVIDENCE.values(), ids=COUNTERS_CONTRADICTING_EVIDENCE.keys())
+def test_coverage_counters_contradicting_the_evidence_list_are_rejected(changes, message):
+    with pytest.raises(ModelError, match=message):
+        report(**changes)
+
+
+def test_hand_edited_report_claiming_an_analyzed_database_without_its_evidence_is_rejected():
+    edited = report_dict()
+    edited["evidence"] = [item for item in edited["evidence"] if item["origin_kind"] != "sql_dump"]
+
+    with pytest.raises(ModelError, match="coverage.database.entries.READ"):
+        validate_report(edited)
+
+
+@pytest.mark.parametrize("changes", [
+    _entries("logs", "ANALYZED", READ=2),
+    {**_entries("files", "PARTIAL", READ=1, CHANGED=1)},
+    {**_more_evidence(SKIPPED_LINK), **_entries("files", "PARTIAL", READ=1, SKIPPED_SYMLINK=2)},
+], ids=["identical-entries-merged-into-one-evidence", "read-and-changed-entry-sharing-one-identifier", "identical-skips-merged"])
+def test_counters_may_exceed_the_evidence_list_only_where_identical_entries_merge(changes):
+    """Rejestr odczytu liczy wpisy, a raport scala wpisy o tej samej tożsamości (ADR 0003 §2, §4)."""
+    assert validate_report(json.loads(json.dumps(report(**changes).to_dict()))) == report(**changes)
+
+
+def test_migrated_report_is_not_held_to_the_counter_rule():
+    """Raport 0.1.0 nie niósł kompletu dowodów: migracja nie ma z czego odtworzyć liczników."""
+    assert report(migrated_from="0.1.0", **_less_evidence("database/db.sql")).migrated_from == "0.1.0"
+
+
+# --- tekst, którego nie da się zapisać w UTF-8 ----------------------------------------------------
+
+LONE_SURROGATE = "a\ud800b"
+UNENCODABLE_FIELDS = {
+    "case-id": (("case_id",), "case_id"),
+    "tool": (("tool",), "tool"),
+    "disclaimer": (("disclaimer",), "disclaimer"),
+    "coverage-gap": (("coverage_gaps",), "coverage_gaps"),
+    "finding-reason": (("findings", 0, "reason"), r"findings\[0\]: finding.reason"),
+    "evidence-path": (("evidence", 0, "logical_path"), r"evidence\[0\]: evidence.logical_path"),
+    "evidence-read-reason": (("evidence", 0, "read_reason"), r"evidence\[0\]: evidence.read_reason"),
+    "location-path": (("observations", 0, "location", "path"), r"observations\[0\].location: location.path"),
+    "location-key": (("observations", 0, "location", "key"), r"observations\[0\].location: location.key"),
+    "attribute-value": (("observations", 0, "attributes", "uri"), r"observations\[0\]: observation.attributes.uri"),
+    "attribute-name": (("observations", 0, "attributes", LONE_SURROGATE), r"observations\[0\]: observation.attributes \(nazwa\)"),
+    "timestamp-raw": (("observations", 0, "timestamp_raw"), r"observations\[0\]: observation.timestamp_raw"),
+    "timeline-source": (("timeline", 0, "source"), r"timeline\[0\]: timeline.source"),
+    "timeline-basis": (("timeline", 0, "timestamp_basis"), r"timeline\[0\]: timeline.timestamp_basis"),
+}
+
+
+@pytest.mark.parametrize("path, field", UNENCODABLE_FIELDS.values(), ids=UNENCODABLE_FIELDS.keys())
+def test_text_that_cannot_be_written_as_utf8_is_rejected_with_the_field_name(path, field):
+    broken = _changed(path, [LONE_SURROGATE] if path == ("coverage_gaps",) else LONE_SURROGATE)
+
+    with pytest.raises(ModelError, match=f"{field}: tekst nie daje się zapisać w UTF-8"):
+        validate_report(broken)
+
+
+def test_unencodable_coverage_reason_is_rejected_when_the_coverage_is_built():
+    with pytest.raises(ModelError, match="coverage.files.reasons: tekst nie daje się zapisać w UTF-8"):
+        Coverage("files", "PARTIAL", {**NO_ENTRIES, "READ": 1, "ERROR": 1}, (LONE_SURROGATE,))
+
+
+def test_valid_report_is_always_writable_as_utf8_json():
+    paired = _changed(("case_id",), "zażółć \U0001f600 \\ud800")
+
+    assert json.dumps(validate_report(paired).to_dict(), ensure_ascii=False).encode("utf-8")
 
 
 # --- reguła oceny -------------------------------------------------------------------------------

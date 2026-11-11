@@ -75,10 +75,14 @@ class _Evidence:
             if origin is None or "/" not in path:
                 raise MigrationError(f"evidence_manifest[{index}].source: nieznane źródło w ścieżce {path[:80]!r}")
             try:
-                self.by_path[path] = models.Evidence(origin, path, models.UNKNOWN_LEGACY, sha256=entry.get("sha256"),
-                                                     size_bytes=entry.get("size"), mtime_ns=entry.get("mtime_ns"))
+                record = models.Evidence(origin, path, models.UNKNOWN_LEGACY, sha256=entry.get("sha256"),
+                                         size_bytes=entry.get("size"), mtime_ns=entry.get("mtime_ns"))
             except models.ModelError as invalid:
                 raise MigrationError(f"evidence_manifest[{index}]: {invalid}") from None
+            # Dwa różne opisy jednej ścieżki: nie wiadomo, który plik widziały reguły, więc nie wybieramy żadnego.
+            if self.by_path.setdefault(path, record) != record:
+                differs = "skrótem sha256" if self.by_path[path].sha256 != record.sha256 else "rozmiarem lub mtime"
+                raise MigrationError(f"evidence_manifest[{index}].source: ścieżka {path[:80]!r} powtórzona z innym {differs}")
 
     def entry_for(self, origin: models.OriginKind, name: str) -> models.Evidence:
         """Dowód o ścieżce ``<źródło>/<name>``; gdy manifest go nie zawiera, powstaje wpis bez skrótu."""
@@ -121,6 +125,18 @@ def _finding(entry: Any, where: str, evidence: _Evidence) -> tuple[models.Observ
         raise MigrationError(f"{where}: {invalid}") from None
 
 
+def _stricter(kept: models.Finding, repeated: models.Finding) -> models.Finding:
+    """Jedno ustalenie z dwóch o tym samym identyfikatorze (reguła, źródło, metadane), lecz innej ocenie lub wyjaśnieniu.
+
+    Waga i pewność są wybierane niezależnie, każda najwyższa: wynik nigdy nie zaniża żadnej z ocen starego raportu.
+    Migracja nie odmawia, bo powtórzony wpis nie czyni reszty raportu nieczytelną; konflikt trafia do ``coverage_gaps``.
+    """
+    return models.Finding(kept.rule_id, kept.category,
+                          max(kept.severity, repeated.severity, key=list(models.Severity).index),
+                          max(kept.confidence, repeated.confidence, key=list(models.Confidence).index),
+                          kept.reason, kept.observations)
+
+
 def _timeline(events: list, evidence: _Evidence, notes: list[str]) -> list[models.TimelineEvent]:
     timeline = []
     for index, event in enumerate(events):
@@ -161,13 +177,23 @@ def migrate_0_1_0(report: dict) -> dict:
         evidence = _Evidence(_list(report["evidence_manifest"], "evidence_manifest"))
         notes = [MIGRATION_NOTE]
         observations, findings = {}, {}
-        legacy_findings = _list(report["findings"], "findings")
-        for index, entry in enumerate(legacy_findings):
+        identical = conflicting = 0
+        for index, entry in enumerate(_list(report["findings"], "findings")):
             observation, finding = _finding(entry, f"findings[{index}]", evidence)
             observations[observation.id] = observation
-            findings[finding.id] = finding
-        if len(findings) != len(legacy_findings):
-            notes.append(f"Migracja z 0.1.0: scalono {len(legacy_findings) - len(findings)} powtórzonych, identycznych ustaleń")
+            kept = findings.setdefault(finding.id, finding)
+            if kept is finding:
+                continue
+            if kept == finding:
+                identical += 1
+            else:
+                conflicting += 1
+                findings[finding.id] = _stricter(kept, finding)
+        if identical:
+            notes.append(f"Migracja z 0.1.0: scalono {identical} powtórzonych, identycznych ustaleń")
+        if conflicting:
+            notes.append(f"Migracja z 0.1.0: {conflicting} ustaleń o tej samej regule, źródle i metadanych co wcześniejsze różniło się "
+                         "wagą, pewnością lub wyjaśnieniem; zachowano najwyższą wagę, najwyższą pewność i pierwsze wyjaśnienie")
         timeline = _timeline(_list(report.get("timeline", []), "timeline"), evidence, notes)
         analyzed_at = _utc(report["analyzed_at_utc"])
         if analyzed_at is None:

@@ -6,7 +6,10 @@ prawdziwy wyścig wątków nie jest uruchamiany.
 import ast
 import errno
 import hashlib
+import itertools
 import os
+import random
+import re
 import socket
 from pathlib import Path
 
@@ -648,6 +651,82 @@ def test_non_utf8_filename_is_read_and_reported_under_an_encodable_name(site):
     assert record.status is ReadStatus.READ
     assert record.rel.encode("utf-8") == b"\\xff.php"
     assert any("UTF-8" in gap for gap in record.gaps)
+
+
+@pytest.mark.parametrize("raw, shown", [
+    (b"wp-content/uploads/a.php", "wp-content/uploads/a.php"),
+    ("za\u017c\u00f3\u0142\u0107/\u00fc.php".encode(), "za\u017c\u00f3\u0142\u0107/\u00fc.php"),
+    (b"dir\\file.php", "dir\\file.php"),
+    (b"\\xFF.php", "\\xFF.php"),
+    (b"\\xf.php", "\\xf.php"),
+    (b"\xff.php", "\\xff.php"),
+    (b"\\xff.php", "\\\\xff.php"),
+    (b"\\\xff.php", "\\\\\\xff.php"),
+    (b"a\\b/\\x41.php", "a\\\\b/\\\\x41.php"),
+    (b"\xed\xa0\x80", "\\xed\\xa0\\x80"),
+], ids=["ascii", "utf8", "backslash-without-escape-form", "upper-case-hex", "one-hex-digit", "raw-byte", "literal-escape-form",
+        "backslash-before-raw-byte", "every-backslash-doubled", "utf8-encoded-surrogate"])
+def test_printable_name_changes_only_names_that_could_be_mistaken_for_a_substitute_form(raw, shown):
+    assert ingest._printable(os.fsdecode(raw)) == shown
+
+
+def _original_name(shown: str) -> bytes:
+    """Odwrotność postaci zastępczej: bez sekwencji ``\\xNN`` nazwa jest dosłowna, inaczej ``\\\\`` to ukośnik, a ``\\xNN`` to bajt."""
+    if not re.search(r"\\x[0-9a-f]{2}", shown):
+        return shown.encode("utf-8")
+    return re.sub(rb"\\(\\|x[0-9a-f]{2})", lambda m: b"\\" if m[1] == b"\\" else bytes([int(m[1][1:], 16)]), shown.encode("utf-8"))
+
+
+def _exhaustive_names() -> list[bytes]:
+    """Wszystkie nazwy do 6 bajtów z alfabetu, z którego składa się kolizja: ukośnik, ``x``, cyfra szesnastkowa, bajt spoza UTF-8."""
+    return [bytes(name) for length in range(1, 7) for name in itertools.product(b"\\xf\xffa", repeat=length)]
+
+
+def _random_names() -> list[bytes]:
+    """Powtarzalne (stałe ziarno) nazwy bajtowe z przewagą znaków postaci zastępczej; bez NUL, którego nazwa pliku nie zawiera."""
+    rng = random.Random(18)
+    alphabet = b"\\\\\\xxff09aA/." + bytes(range(0x80, 0x100)) + "\u017c\u00e9".encode()
+    return list({bytes(rng.choices(alphabet, k=rng.randint(1, 24))) for _ in range(20_000)})
+
+
+@pytest.mark.parametrize("names", [_exhaustive_names, _random_names], ids=["exhaustive-short", "random-seeded"])
+def test_two_different_byte_names_never_share_a_printable_form(names):
+    names = names()
+
+    assert len({ingest._printable(os.fsdecode(name)) for name in names}) == len(names)
+
+
+@pytest.mark.parametrize("names", [_exhaustive_names, _random_names], ids=["exhaustive-short", "random-seeded"])
+def test_printable_form_is_encodable_and_gives_back_the_original_bytes(names):
+    assert all(_original_name(ingest._printable(os.fsdecode(name))) == name for name in names())
+
+
+def test_valid_name_spelling_out_an_escape_is_reported_with_doubled_backslashes(site):
+    write(site / "\\xff.php")
+
+    record = next(record for record in read(site) if record.rel != "index.php")
+
+    assert (record.status, record.rel) == (ReadStatus.READ, "\\\\xff.php")
+    assert len(record.gaps) == 1 and "podwojonymi" in record.gaps[0] and "spoza UTF-8" not in record.gaps[0]
+
+
+def test_valid_name_with_a_plain_backslash_is_reported_unchanged_and_without_a_gap(site):
+    write(site / "dir\\file.php")
+
+    record = next(record for record in read(site) if record.rel != "index.php")
+
+    assert (record.rel, record.gaps) == ("dir\\file.php", ())
+
+
+def test_raw_byte_name_and_its_spelled_out_twin_are_two_entries(site):
+    """Tylko tam, gdzie system plików przyjmuje nazwy spoza UTF-8 (Linux); APFS je odrzuca."""
+    write(site / "\\xff.php")
+    try:
+        os.close(os.open(os.fsencode(site) + b"/\xff.php", os.O_CREAT | os.O_WRONLY))
+    except OSError:
+        pytest.skip("system plików odrzuca nazwy spoza UTF-8 (np. APFS)")
+
+    assert sorted(rels(read(site))) == ["\\\\xff.php", "\\xff.php", "index.php"]
 
 
 # --- B8: komunikaty bez ścieżek hosta ---------------------------------------------------------------
