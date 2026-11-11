@@ -14,7 +14,10 @@ from conftest import sha256, tamper_before_reverification, write
 
 from wptrace import cli, report
 
-OUTPUTS = ("report.json", "report.html")
+OUTPUTS = ("report.json", "report.html", "case.json")
+# Opis sprawy sprzed analizy w kształcie ``CaseContext.describe()``; pisarz przenosi go do case.json bez interpretacji.
+DESCRIBED = {"schema_version": "case-poc-1", "case_id": "T101-SYNTH", "operator_id": None,
+             "created_at_utc": "2026-11-11T00:00:00+00:00", "sources": {}, "limits": {}, "flags": {}}
 
 
 def run(site: Path, out: Path) -> int:
@@ -22,7 +25,7 @@ def run(site: Path, out: Path) -> int:
 
 
 def publish(directory: Path, document: dict) -> None:
-    report.write(directory, document)
+    report.write(directory, document, DESCRIBED, cli.exit_code(document))
 
 
 @pytest.fixture
@@ -77,6 +80,19 @@ def test_dangling_symlink_named_like_a_result_does_not_create_its_target(site, o
     run(site, out)
 
     assert not (tmp_path / "planted.json").exists()
+
+
+def test_output_directory_given_as_symlink_is_refused_before_anything_is_written(site, out, tmp_path, capsys):
+    real = tmp_path / "real-out"
+    real.mkdir()
+    out.symlink_to(real)
+
+    with pytest.raises(SystemExit) as refusal:
+        run(site, out)
+
+    assert refusal.value.code == 2
+    assert "--output" in capsys.readouterr().err
+    assert os.listdir(real) == []
 
 
 def test_output_directory_swapped_for_symlink_during_analysis_is_refused(site, out, tmp_path, monkeypatch, capsys):

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from . import ingest, models, report
+from . import case, ingest, models, report
 
 VERSION = "0.1.0-poc"
 DISCLAIMER = "Brak alertów nie dowodzi braku włamania. PoC, nie certyfikacja śledcza."
@@ -623,7 +623,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--logs", type=Path)
     parser.add_argument("--baseline", type=Path, help="Zaufany JSON: {files: {ścieżka: sha256}, known_admins: [...]} ")
     parser.add_argument("--known-admin", action="append", default=[])
-    parser.add_argument("--case-id", default="WPTRACE-DEMO")
+    parser.add_argument("--case-id", default="WPTRACE-DEMO",
+                        help="Identyfikator sprawy: 1–64 znaki A-Z a-z 0-9 . _ -, pierwszy znak inny niż kropka i łącznik (%(default)s)")
+    parser.add_argument("--operator-id", help="Pseudonim operatora zapisywany w case.json (te same znaki co --case-id); domyślnie brak")
     parser.add_argument("--output", type=Path, required=True)
     defaults = ingest.Limits()
     parser.add_argument("--allow-hardlinks", action="store_true",
@@ -636,41 +638,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-file-bytes", type=int, default=defaults.max_file_bytes, help="Limit rozmiaru jednego pliku (%(default)s)")
     parser.add_argument("--max-total-bytes", type=int, default=defaults.max_total_bytes, help="Limit łącznego rozmiaru czytanych plików (%(default)s)")
     parser.add_argument("--max-seconds", type=float, default=defaults.max_seconds, help="Limit czasu całej analizy w sekundach (%(default)s)")
+    parser.add_argument("--max-depth", type=int, default=defaults.max_depth, help="Limit głębokości katalogów (%(default)s)")
+    parser.add_argument("--max-path-bytes", type=int, default=defaults.max_path_bytes,
+                        help="Limit długości ścieżki względnej do źródła w bajtach (%(default)s)")
     args = parser.parse_args(argv)
-    given = [(flag, path, expect) for flag, path, expect in (
-        ("--files", args.files, "dir"), ("--database", args.database, "file"),
-        ("--logs", args.logs, "any"), ("--baseline", args.baseline, "file")) if path is not None]
-    for flag, path, expect in given:
-        try:
-            ingest.check_source(path, expect)
-        except ingest.IngestRefusal as refusal:
-            if refusal.reason not in ("EACCES", "EPERM"):  # brak uprawnień to luka pokrycia w raporcie, nie błąd wywołania
-                parser.error(f"{flag}: {refusal}")
     try:
-        out = ingest.resolve_output(args.output, [path for _, path, _ in given])
-    except ingest.IngestRefusal as refusal:
-        parser.error(f"--output: {refusal}")
-    try:
-        limits = ingest.Limits(max_files=args.max_files, max_entries=args.max_entries, max_file_bytes=args.max_file_bytes, max_total_bytes=args.max_total_bytes,
-                               max_scan_bytes=MAX_SCAN_BYTES, max_seconds=args.max_seconds)
-    except ValueError as invalid:
+        context = case.build(
+            files=args.files, database=args.database, logs=args.logs, baseline=args.baseline, output=args.output,
+            case_id=args.case_id, operator_id=args.operator_id, known_admins=args.known_admin,
+            allow_hardlinks=args.allow_hardlinks, reverify=not args.no_reverify,
+            limits={"max_files": args.max_files, "max_entries": args.max_entries, "max_file_bytes": args.max_file_bytes,
+                    "max_total_bytes": args.max_total_bytes, "max_scan_bytes": MAX_SCAN_BYTES, "max_seconds": args.max_seconds,
+                    "max_depth": args.max_depth, "max_path_bytes": args.max_path_bytes})
+    except case.CaseError as invalid:
         parser.error(str(invalid))
-    session = ingest.Session(limits, allow_hardlinks=args.allow_hardlinks, reverify=not args.no_reverify)
+    session = ingest.Session(context.limits, allow_hardlinks=context.allow_hardlinks, reverify=context.reverify)
     baseline = None
-    if args.baseline:
+    if context.baseline:
         try:
-            baseline = load_baseline(args.baseline, session)
+            baseline = case.check_baseline(load_baseline(context.baseline, session))
         except ValueError as invalid:
             parser.error(f"--baseline: {invalid}")
-    admins = set(args.known_admin) | set((baseline or {}).get("known_admins", []))
-    output = compose_report(args.files, args.database, args.logs, baseline, admins, args.case_id, session=session)
+    admins = set(context.known_admins) | set((baseline or {}).get("known_admins", []))
+    output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session)
+    code = exit_code(output)
     try:
-        report.write(out, output)
+        report.write(context.output, output, context.describe(), code)
     except report.OutputRefusal as refusal:
         parser.error(f"--output: {refusal}")
-    code = exit_code(output)
     print(json.dumps({"assessment": output["assessment"], "scope_complete": output["scope_complete"], "findings":len(output["findings"]),
-                      "coverage_gaps":len(output["coverage_gaps"]), "exit_code": code, "report":str(out / "report.html")}, ensure_ascii=False))
+                      "coverage_gaps":len(output["coverage_gaps"]), "exit_code": code, "report":str(context.output / "report.html")}, ensure_ascii=False))
     return code
 
 if __name__ == "__main__":

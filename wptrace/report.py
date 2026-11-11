@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import hashlib
 import html
 import json
 import os
@@ -23,6 +24,7 @@ from . import ingest, models
 
 REPORT_JSON = "report.json"
 REPORT_HTML = "report.html"
+CASE_JSON = "case.json"
 
 
 class OutputRefusal(Exception):
@@ -122,9 +124,26 @@ def write_html(report: dict, path: Path) -> None:
         os.close(dir_fd)
 
 
-def write(directory: Path, report: dict) -> None:
-    """Tworzy katalog wyników, jeśli go nie ma, i zapisuje w nim ``report.json`` oraz ``report.html``."""
-    files = {REPORT_JSON: _json(report), REPORT_HTML: _encode(render_html(report))}
+def case_record(case: dict, report: dict, report_sha256: str, exit_code: int) -> dict:
+    """Dokument ``case.json``: opis sprawy sprzed analizy (``CaseContext.describe()``) uzupełniony o jej wynik."""
+    return {
+        "schema_version": case["schema_version"], "case_id": case["case_id"], "operator_id": case["operator_id"],
+        "tool": report["tool"], "tool_version": report["tool_version"],
+        "created_at_utc": case["created_at_utc"], "analysis_finished_at_utc": report["analyzed_at_utc"],
+        "sources": case["sources"], "limits": case["limits"], "flags": case["flags"],
+        "report": {"file": REPORT_JSON, "sha256": report_sha256},
+        "assessment": report["assessment"], "exit_code": exit_code,
+    }
+
+
+def write(directory: Path, report: dict, case: dict, exit_code: int) -> None:
+    """Tworzy katalog wyników, jeśli go nie ma, i zapisuje w nim ``report.json``, ``report.html`` oraz ``case.json``.
+
+    ``case.json`` jest zamieniany jako ostatni i podaje SHA-256 zapisanego ``report.json``.
+    """
+    body = _json(report)
+    files = {REPORT_JSON: body, REPORT_HTML: _encode(render_html(report)),
+             CASE_JSON: _json(case_record(case, report, hashlib.sha256(body).hexdigest(), exit_code))}
     dir_fd = _open_directory(directory, create=True)
     try:
         _publish(dir_fd, files)
