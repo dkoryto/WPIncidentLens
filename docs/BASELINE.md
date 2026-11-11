@@ -1,5 +1,7 @@
 # Baseline PoC (T-001)
 
+> **Dokument historyczny.** Opisuje stan z zadania T-001 (commit `1fe3457`: jeden moduł `wptrace/cli.py`, 6 testów, raport 0.1.0) i nie jest aktualizowany. Wyniki, kody wyjścia, kształt raportu i przykładowe komendy poniżej **nie odpowiadają obecnemu kodowi**. Aktualny stan po etapie M1: [`docs/M1_GATE.md`](M1_GATE.md); aktualne wyniki testów: [`docs/TEST_MATRIX.md`](TEST_MATRIX.md).
+
 Stan na 2026-11-11, gałąź `agent/T-001-baseline-ci`, bazowy commit `1fe3457`. Dokument opisuje **faktycznie uruchomione** komendy. Baseline potwierdza tylko powtarzalność obecnego PoC; nie jest dowodem bezpieczeństwa ani gotowości do pracy na realnych danych.
 
 ## Środowisko
