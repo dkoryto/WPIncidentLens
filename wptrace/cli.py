@@ -227,8 +227,9 @@ def _write_statement_starts(sql: str):
             at_start = True
             continue
         # DELIMITER zmienia znak końca instrukcji: dalszego podziału po średniku nie można uznać za wiarygodny.
-        # Polecenie klienta zaczynające się od "\" (np. \d) też może zmienić znak końca instrukcji.
-        if at_start and ((token["word"] or "").upper() in ("INSERT", "REPLACE", "DELIMITER") or token.group() == "\\"):
+        # Ukośnik wsteczny poza łańcuchem i komentarzem to polecenie klienta (\d, \g, \G): może zakończyć
+        # instrukcję albo zmienić jej terminator w dowolnym miejscu, a poprawny zrzut go tam nie zawiera.
+        if token.group() == "\\" or (at_start and (token["word"] or "").upper() in ("INSERT", "REPLACE", "DELIMITER")):
             yield token.start()
         at_start = False
 
