@@ -23,6 +23,8 @@ Macierz nie jest dowodem bezpieczeństwa ani skuteczności detekcji. `PASS` znac
 
 Jedyny `skip` (macOS): `sec::test_s05_non_utf8_filename_does_not_break_the_report` — APFS odrzuca nazwy plików spoza UTF-8, więc scenariusza nie da się tam zbudować. Na Linuksie ten sam test wykonuje się i jest XFAIL (#5). CI (`ubuntu-24.04`) nie było uruchamiane w ramach tego zadania.
 
+Aktualizacja po naprawie ReDoS (#11), macOS: `python -m pytest -q` → **89 passed, 1 skipped, 29 xfailed**. Pozostałe wyniki w tej sekcji pochodzą z T-003 i nie były mierzone ponownie.
+
 Zestaw liczy 110 testów: 6 istniejących (`tests/test_cli.py`, bez zmian) i 104 nowe.
 
 ### Pokrycie kodu
@@ -112,7 +114,7 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | S-06 | Milion małych plików | budżet czasu/pamięci | — | — | NOT COVERED: nie tworzono miliona plików; zmierzono tylko mechanizm limitu |
 | S-07 | Plik > limitu (plik rzadki, realne progi 4/20/30 MiB + 1 B) | treść pominięta z luką; hash i rozmiar w manifeście | gap „Analiza treści pominięta” / „Eksport SQL większy niż” / „Log za duży” | `sec::test_s07_oversized_site_file_is_hashed_but_not_content_scanned`, `sec::test_s07_oversized_sql_dump_is_skipped_with_gap`, `sec::test_s07_oversized_log_is_skipped_with_gap` | PASS |
 | S-07 | 10 GB sparse file | budżet czasu hashowania | — | — | NOT COVERED: PoC hashuje cały plik bez limitu; test 10 GB trwałby zbyt długo dla zestawu jednostkowego. Do T-101 (#4) |
-| S-08 | Wejście wymuszające katastrofalny backtracking (SQL) | parser kończy w budżecie czasu | brak `TimeoutError` w 2 s | `sec::test_s08_crafted_insert_does_not_stall_the_sql_parser` | XFAIL (#7) |
+| S-08 | Wejście wymuszające katastrofalny backtracking (SQL) | parser kończy w budżecie czasu | brak `TimeoutError` w 2 s | `sec::test_s08_crafted_insert_does_not_stall_the_sql_parser` | PASS (naprawione w #11) |
 | S-08 | Powtarzalna treść PHP dla reguł plikowych | koniec w budżecie | zero ustaleń w 5 s | `sec::test_s08_repetitive_php_does_not_stall_the_file_rules` | PASS |
 | S-08 | Timeout YARA | — | — | — | NOT COVERED: brak YARA w PoC (#6) |
 | S-09 | INSERT wielowierszowy, `\'`, `''`, sekwencje ucieczki, `NULL`, instrukcja w łańcuchu | sparsowane jako dane | wynik `iter_insert_rows` | `sec::test_s09_escaped_and_multiline_inserts_are_parsed_as_data[…]`, `cli::test_sql_rows_and_prefix` | PASS |
@@ -143,10 +145,10 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | #4 (T-101) | 9 | niepoprawny baseline → traceback (3 warianty); `--database` jako symlink; hardlink; TOCTOU; FIFO w logach; nieczytelny log; `--output` w katalogu logów |
 | #5 (T-102) | 2 | brak `INCONCLUSIVE`; nazwa pliku spoza UTF-8 wywraca zapis `report.json` (tylko Linux) |
 | #6 (T-201) | 7 | wersja referencji; nowy plik spoza baseline; offset sygnatury; pusty `--files`; `NO_TRUSTED_REFERENCE`; brak/pusty baseline bez luki (2 warianty) |
-| #7 (T-301) | 9 | `NEW_SINCE_BASELINE`; meta-refresh; cytat z redakcją; inwentarz adminów; pominięte instrukcje bez luki; admin bez wiersza users; ReDoS; stratne dekodowanie; `b:0` |
+| #7 (T-301) | 8 | `NEW_SINCE_BASELINE`; meta-refresh; cytat z redakcją; inwentarz adminów; pominięte instrukcje bez luki; admin bez wiersza users; stratne dekodowanie; `b:0` |
 | #3 (bez własnego Issue) | 4 | pusty katalog logów bez luki; stratne dekodowanie logu; brak CSP; token z query stringu w `report.json` |
 
-Razem 31 (30 na macOS, bo jeden wariant jest tam pomijany).
+Razem 30 (29 na macOS, bo jeden wariant jest tam pomijany). Stan po naprawie ReDoS (#11); w T-003 było 31.
 
 ## Ograniczenia tej macierzy
 
