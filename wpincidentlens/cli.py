@@ -6,11 +6,13 @@ import io
 import json
 import re
 from collections import Counter
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from . import case, ingest, models, report
+from . import case, files, ingest, integrity, models, report
+from .analysis import Detection, SourceCoverage
+from .analysis import evidence_of as _evidence
+from .analysis import observe as _observe
 
 VERSION = "0.1.0-poc"
 DISCLAIMER = "Brak alertów nie dowodzi braku włamania. PoC, nie certyfikacja śledcza."
@@ -22,17 +24,11 @@ MAX_SCAN_BYTES = ingest.Limits().max_scan_bytes
 MAX_SQL_BYTES = 20 * 1024 * 1024
 MAX_LOG_BYTES = 30 * 1024 * 1024
 MAX_BASELINE_BYTES = 64 * 1024 * 1024
-CODE_SUFFIXES = {".php", ".phtml", ".phar", ".inc"}
 
 
 def _session() -> ingest.Session:
     """Sesja odczytu z limitami domyślnymi; stałe MAX_* są czytane w chwili wywołania."""
     return ingest.Session(ingest.Limits(max_files=MAX_FILES, max_scan_bytes=MAX_SCAN_BYTES))
-
-
-def _has_content_rules(rel: str) -> bool:
-    path = PurePosixPath(rel)
-    return path.suffix.lower() in CODE_SUFFIXES or path.name in (".htaccess", ".user.ini")
 
 
 def _text(content: bytes) -> io.TextIOWrapper:
@@ -47,123 +43,6 @@ def _is_lossy(content: bytes) -> bool:
     except UnicodeDecodeError:
         return True
     return False
-
-
-@dataclass(frozen=True)
-class Detection:
-    """Wykrycie parsera: fakt (``observation``) i ocena, jaką nadaje mu reguła PoC. Z niego powstaje ``Finding``."""
-    rule: str
-    severity: str
-    confidence: str
-    category: str
-    explanation: str
-    observation: models.Observation
-
-
-@dataclass
-class SourceCoverage:
-    """Roboczy zapis pokrycia jednego źródła. Status końcowy wynika z niego i z rejestru sesji (``_coverage``)."""
-    provided: bool = True
-    failed: bool = False   # źródło podano, ale nic z niego nie przeanalizowano
-    partial: bool = False  # część materiału pominięta przez limit albo nieobsługiwany format
-    reasons: list[str] = field(default_factory=list)
-
-    def note(self, *texts: str) -> None:
-        """Informacja o zakresie (np. stałe ograniczenie parsera); sama nie obniża statusu."""
-        self.reasons.extend(texts)
-
-    def degrade(self, text: str) -> None:
-        self.partial = True
-        self.reasons.append(text)
-
-    def fail(self, text: str) -> None:
-        self.failed = True
-        self.reasons.append(text)
-
-
-def _evidence(record: ingest.Evidence) -> models.Evidence:
-    """Wpis rejestru SecureIngest jako dowód raportu; ścieżka logiczna jest względna do źródła."""
-    return models.Evidence(models.ORIGIN_OF_SOURCE[record.source], f"{record.source}/{record.rel}", str(record.status),
-                           sha256=record.sha256, size_bytes=record.size, mtime_ns=record.mtime_ns,
-                           read_reason=record.reason or None, hardlinked=record.hardlinked)
-
-
-def _observe(evidence: ingest.Evidence, kind: str, location: models.Location, **facts: str | int | None) -> models.Observation:
-    """Fakt bez czasu własnego, stwierdzony w podanym wpisie materiału."""
-    return models.Observation(_evidence(evidence).id, kind, location, facts)
-
-
-def _baseline_record(session: ingest.Session) -> ingest.Evidence | None:
-    return next((record for record in session.ledger if record.source == "baseline" and record.sha256 is not None), None)
-
-
-def _is_code_in_uploads(rel: str) -> bool:
-    return rel.startswith("wp-content/uploads/") and PurePosixPath(rel).suffix.lower() in CODE_SUFFIXES
-
-
-def scan_files(root: Path, baseline: dict | None,
-               session: ingest.Session | None = None) -> tuple[list[Detection], SourceCoverage]:
-    """Statusy pominiętych wpisów obniżają pokrycie na podstawie rejestru sesji; tutaj trafiają tylko ich opisy."""
-    session = session or _session()
-    discoveries, cover = [], SourceCoverage()
-    ref = (baseline or {}).get("files", {})
-    scan_limit = session.limits.max_scan_bytes
-    observed, unread, complete = set(), set(), True  # przeczytane; widziane, lecz nieprzeczytane; czy przejście objęło całe drzewo
-
-    def seen_in(item: ingest.Evidence, kind: str, **facts: str) -> models.Observation:
-        return _observe(item, kind, models.Location(path=item.rel), **facts)
-
-    for item in session.read(root, "files", expect="dir", wanted=_has_content_rules):
-        cover.note(*item.gaps)
-        if item.sha256 is None:
-            unread.add(item.rel)
-            complete = complete and item.rel != ingest.ROOT and item.reason not in ("MAX_FILES", "MAX_ENTRIES")
-            if _is_code_in_uploads(item.rel):
-                # Reguła zależy tylko od ścieżki: pominięcie odczytu (hardlink, symlink, błąd) nie może jej wyłączyć.
-                discoveries.append(Detection("EXECUTABLE_IN_UPLOADS", "high", "low", "file",
-                    "Plik wykonywalny PHP w uploads; treść nieodczytana, wymaga ręcznej analizy.", seen_in(item, "PHP_FILE_IN_UPLOADS")))
-            continue
-        rel = item.rel
-        observed.add(rel)
-        if rel in ref and ref[rel] != item.sha256:
-            discoveries.append(Detection("BASELINE_FILE_CHANGED", "medium", "high", "file",
-                "Plik zmieniony względem zaufanej migawki (zmiana nie przesądza o ataku).",
-                seen_in(item, "FILE_DIFFERS_FROM_BASELINE", baseline_sha256=ref[rel])))
-        if _is_code_in_uploads(rel):
-            discoveries.append(Detection("EXECUTABLE_IN_UPLOADS", "high", "medium", "file",
-                "Plik wykonywalny PHP w uploads; wymaga analizy kontekstu.", seen_in(item, "PHP_FILE_IN_UPLOADS")))
-        if item.size > scan_limit:
-            text = f"Analiza treści pominięta, plik > {scan_limit} B: {rel}"
-            if _has_content_rules(rel):
-                cover.degrade(text)
-            else:  # reguły treści dotyczą tylko plików kodu; taki plik nie byłby skanowany także poniżej limitu
-                cover.note(text)
-            continue
-        if item.content is None:
-            continue
-        raw = item.content.lower()
-        if re.search(rb"eval\s*\(\s*base64_decode\s*\(", raw):
-            discoveries.append(Detection("SUSPICIOUS_PHP_EVAL_DECODE", "high", "medium", "file",
-                "Wykryto łańcuch eval(base64_decode(...)); to heurystyka, nie dowód malware.", seen_in(item, "EVAL_BASE64_DECODE_PATTERN")))
-        if re.search(rb"\$_(?:post|get|request)\s*\[.{0,120}\].{0,150}(?:shell_exec|system|passthru)\s*\(", raw, re.DOTALL):
-            discoveries.append(Detection("REQUEST_TO_COMMAND_EXEC", "high", "medium", "file",
-                "Potencjalne powiązanie danych żądania z wykonaniem komendy; wymaga ręcznej weryfikacji.",
-                seen_in(item, "REQUEST_INPUT_NEAR_COMMAND_EXEC_PATTERN")))
-    if ref and (unreferenced := sorted(observed - ref.keys())):
-        # Plik bez wpisu w baseline nie jest porównywany: bez tej noty nowy plik znikałby z raportu bez śladu.
-        examples = ", ".join(unreferenced[:3]) + (", …" if len(unreferenced) > 3 else "")
-        cover.note(f"NO_TRUSTED_REFERENCE: {len(unreferenced)} odczytanych plików nie ma wpisu w baseline, "
-                   f"więc ich zmiany lub pojawienia się nie da się ocenić ({examples})")
-    if baseline and ref and complete:  # po przerwanym przejściu nie wiadomo, czego w materiale brakuje
-        reference = _baseline_record(session)  # dowodem braku pliku jest baseline, który ten plik wymienia
-        for rel in sorted(ref.keys() - observed):
-            parts = rel.split("/")
-            if any("/".join(parts[:depth]) in unread for depth in range(1, len(parts) + 1)):
-                continue  # plik (lub jego katalog) istnieje, tylko nie został przeczytany — luka, nie „brak pliku”
-            discoveries.append(Detection("BASELINE_FILE_MISSING", "low", "high", "file",
-                "Plik obecny w migawce bazowej nie występuje w materiale wejściowym.",
-                _observe(reference, "BASELINE_ENTRY_NOT_IN_FILES", models.Location(path=rel))))
-    return discoveries, cover
 
 
 def _iter_row_groups(values: str):
@@ -577,10 +456,11 @@ def _timeline(detections: list[Detection], evidence: dict[str, models.Evidence])
 
 
 def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline: dict | None, known_admins: set[str],
-                  session: ingest.Session) -> tuple[list[Detection], dict[str, SourceCoverage]]:
-    """Uruchamia skanery podanych źródeł; źródło niepodane dostaje powód zamiast skanu."""
+                  session: ingest.Session) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation]]:
+    """Uruchamia skanery podanych źródeł; źródło niepodane dostaje powód zamiast skanu. Trzeci wynik: fakty bez ustalenia."""
     cover = {source: SourceCoverage(provided=False) for source in models.SOURCES}
-    detections, cover["files"] = scan_files(root, baseline, session)
+    scan = files.scan_files(root, baseline, session)
+    detections, cover["files"] = scan.detections, scan.cover
     if database:
         found, cover["database"] = scan_database(database, known_admins, session)
         detections.extend(found)
@@ -598,7 +478,7 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
         cover["baseline"].note(*(gap for record in session.ledger if record.source == "baseline" for gap in record.gaps))
         if not baseline.get("files"):
             cover["baseline"].note("Baseline nie zawiera skrótów plików (files): porównanie plików z referencją niewykonane")
-    return detections, cover
+    return detections, cover, scan.observations
 
 
 def _findings(detections: list[Detection]) -> list[models.Finding]:
@@ -623,9 +503,9 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
                    session: ingest.Session | None = None) -> dict:
     """Zwraca raport ``poc-1`` jako słownik gotowy do zapisu. ``baseline`` musi pochodzić z ``load_baseline`` tej samej sesji."""
     session = session or _session()
-    if baseline is not None and _baseline_record(session) is None:
+    if baseline is not None and integrity.baseline_record(session) is None:
         raise ValueError("baseline musi być wczytany przez load_baseline w tej samej sesji odczytu")
-    detections, cover = _scan_sources(root, database, logs, baseline, known_admins, session)
+    detections, cover, facts = _scan_sources(root, database, logs, baseline, known_admins, session)
     session_gaps = session.finish()  # od tej chwili rejestr sesji ma ostateczne statusy (także CHANGED z ponownej weryfikacji)
     for source, text in session.integrity_notes:
         for name in [source] if source else [name for name in models.SOURCES if cover[name].provided]:
@@ -639,7 +519,7 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
     return models.Report(
         case_id=case_id, tool="WPIncidentLens PoC", tool_version=VERSION, analyzed_at_utc=models.utc_iso(datetime.now(timezone.utc)),
         assessment=models.assess(findings.values(), coverage), disclaimer=DISCLAIMER,
-        evidence=tuple(evidence.values()), observations=tuple({found.observation.id: found.observation for found in detections}.values()),
+        evidence=tuple(evidence.values()), observations=tuple({item.id: item for item in [*(found.observation for found in detections), *facts]}.values()),
         findings=tuple(findings.values()), coverage=coverage, coverage_gaps=tuple(gaps), timeline=tuple(timeline)).to_dict()
 
 
