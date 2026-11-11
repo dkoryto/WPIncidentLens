@@ -21,8 +21,8 @@ Uruchomione przez agenta aktualizującego ten dokument, w świeżym środowisku 
 | Komenda | Środowisko | Wynik |
 |---|---|---|
 | `python -m ruff check .` | macOS 27.0.1 (Darwin 27.0.0, arm64), ruff 0.8.6 | **All checks passed** (reguły `E9`, `F`) |
-| `python -m pytest -q` | jw., Python 3.12.11, pytest 8.4.2, jsonschema 4.26.0 | **1853 passed, 5 skipped, 13 xfailed** (19,75 s) |
-| `python -m pytest -q --cov=wptrace --cov-report=term-missing` | jw., pytest-cov 6.3.0, coverage 7.17.2 | **1853 passed, 5 skipped, 13 xfailed; pokrycie 99%** (tabela niżej) |
+| `python -m pytest -q` | jw., Python 3.12.11, pytest 8.4.2, jsonschema 4.26.0 | **1864 passed, 5 skipped, 10 xfailed** (19,75 s) |
+| `python -m pytest -q --cov=wptrace --cov-report=term-missing` | jw., pytest-cov 6.3.0, coverage 7.17.2 | **1864 passed, 5 skipped, 10 xfailed; pokrycie 99%** (tabela niżej) |
 | `python -m pytest -v` | jw. | ten sam wynik; trzeci przebieg, w tym oba testy wyścigu |
 | `python -m wptrace --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output <tmp> --case-id DEMO-001` | jw. | kod 0; `SUSPICIOUS`, `scope_complete: true`, 6 ustaleń, 2 luki; powstały `report.json`, `report.html`, `case.json`, wszystkie z trybem `0600` |
 | `python -m wptrace --files fixtures/site --output <tmp>` | jw. | kod 3; `SUSPICIOUS`, `scope_complete: false` |
@@ -98,7 +98,7 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | N7 | Błędna strefa czasu w logu | brak zdarzenia na osi czasu, jawna nota | brak wpisu HTTP w `timeline`, gap „Nie można znormalizować czasu logu” | `neg::test_n7_unusable_log_timezone_yields_gap_instead_of_timeline_event[no-zone, impossible-zone, garbage]` | PASS |
 | N7 | Poprawna strefa | UTC + adnotacja o niezweryfikowanym zegarze | `time_utc`, `timestamp_basis` | `neg::test_n7_log_event_time_is_marked_as_unverified_clock` | PASS |
 | N7 | Brak fałszywej **ścisłej** korelacji czasowej | — | — | — | NOT COVERED: korelacja PoC łączy plik z logiem wyłącznie po ścieżce i nie używa czasu (#13) |
-| N8 | Wtyczka premium bez sum kontrolnych | `NO_TRUSTED_REFERENCE` | status w raporcie | `neg::test_n8_premium_plugin_without_checksums_has_no_trusted_reference` | XFAIL (#6) |
+| N8 | Wtyczka premium bez sum kontrolnych | `NO_TRUSTED_REFERENCE` | status w raporcie | `neg::test_n8_premium_plugin_without_checksums_has_no_trusted_reference` | PASS (nota `NO_TRUSTED_REFERENCE`) |
 
 ### Luki pokrycia i wiarygodność baseline (poza numeracją N)
 
@@ -163,8 +163,8 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | S-09 | INSERT wielowierszowy, `\'`, `''`, sekwencje ucieczki, `NULL`, instrukcja w łańcuchu | sparsowane jako dane | wynik `iter_insert_rows` | `sec::test_s09_escaped_and_multiline_inserts_are_parsed_as_data` (6 wariantów), `sec::test_sql_row_groups_are_split_outside_quotes` (8 wariantów), `cli::test_sql_rows_and_prefix` | PASS |
 | S-09 | Urwany INSERT | brak wierszy | wynik `iter_insert_rows` | `sec::test_s09_truncated_insert_yields_no_rows[open-string, no-terminator]` | PASS |
 | S-10 | Uszkodzone UTF-8 w pliku PHP / SQL / logu | wskaźnik nadal wykryty, raport poprawny | odpowiednia reguła w `findings` | `sec::test_s10_invalid_utf8_does_not_hide_indicators[php-file, sql-dump, access-log]` | PASS |
-| S-10 | Stratne dekodowanie SQL | luka pokrycia | gap o kodowaniu | `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[sql-dump]` | XFAIL (#7) |
-| S-10 | Stratne dekodowanie logu | luka pokrycia | gap o kodowaniu | `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[access-log]` | XFAIL (#3 — zamknięte) |
+| S-10 | Stratne dekodowanie SQL | luka pokrycia | gap o kodowaniu | `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[sql-dump]` | PASS |
+| S-10 | Stratne dekodowanie logu | luka pokrycia | gap o kodowaniu | `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[access-log]` | PASS |
 | S-11 | Zserializowany obiekt PHP w opcji | traktowany jako tekst, nie trafia do raportu | zero ustaleń, brak nazwy klasy w wyjściu | `sec::test_s11_serialized_php_object_is_inert_text` | PASS |
 | S-11 | `administrator` z `b:0` | nie jest adminem | zero ustaleń | `sec::test_s11_revoked_administrator_capability_is_not_an_admin` | XFAIL (#7) |
 | S-12 | HTML z `onerror` w ścieżce pliku, nazwie opcji, nazwie pliku logu, polu czasu logu, nazwie symlinka | escapowany w `report.html` | brak surowego znacznika, obecna postać `&lt;img…` | `sec::test_s12_markup_from_evidence_is_escaped_in_html_report[finding-file-path, finding-option-name, finding-log-file-name, gap-log-timestamp, gap-symlink-name]`, `con::test_html_report_escapes_every_new_field` | PASS |
@@ -250,22 +250,19 @@ Ograniczenie opisane w samym pliku testów: katalog przejrzany bez przeszkód ni
 | 1 | `pos::test_p2_checksum_mismatch_names_reference_version` | finding nie niesie wersji referencji; baseline nie ma kontraktu wersji | #6 — otwarte |
 | 2 | `pos::test_p5_mu_plugin_added_since_baseline_is_reported` | plik nieobecny w baseline (nowy mu-plugin) nie daje żadnego ustalenia | #6 — otwarte |
 | 3 | `pos::test_p6_signature_finding_carries_match_offset` | brak YARA-X; trafienie sygnatury nie ma offsetu ani wersji reguły | #6 — otwarte |
-| 4 | `neg::test_n8_premium_plugin_without_checksums_has_no_trusted_reference` | plik bez wpisu w baseline jest pomijany milcząco; brak `NO_TRUSTED_REFERENCE` | #6 — otwarte |
 | 5 | `pos::test_p3_admin_added_since_baseline_is_new_since_baseline` | brak porównania dwóch migawek DB i reguły `NEW_SINCE_BASELINE` | #7 — otwarte |
 | 6 | `pos::test_p4_option_with_redirect_markup_is_a_database_finding[meta-refresh]` | redirect meta-refresh nie jest objęty regułą opcji | #7 — otwarte |
 | 7 | `pos::test_p4_finding_quotes_option_value_with_secret_redacted` | finding DB nie zawiera cytatu wartości, więc nie ma też redakcji | #7 — otwarte |
 | 8 | `neg::test_n3_admin_without_trusted_list_appears_in_inventory` | raport nie zawiera inwentarza kont administratorów | #7 — otwarte |
-| 9 | `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[sql-dump]` | stratne dekodowanie SQL (`errors=replace`) nie jest raportowane jako luka | #7 — otwarte |
 | 10 | `sec::test_s11_revoked_administrator_capability_is_not_an_admin` | rola wykrywana podłańcuchem `administrator` bez parsowania serializacji PHP: `b:0` liczy się jak `b:1` | #7 — otwarte |
-| 11 | `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[access-log]` | stratne dekodowanie logu (`errors=replace`) nie jest raportowane jako luka | #3 — **zamknięte** |
-| 12 | `sec::test_s12_html_report_declares_content_security_policy` | raport HTML nie deklaruje Content-Security-Policy | #3 — **zamknięte** |
-| 13 | `sec::test_s13_canary_secret_never_reaches_any_output[log-query-token]` | query string z logu trafia bez redakcji do `metadata.uri` w `report.json` | #3 — **zamknięte** |
+| 12 | `sec::test_s12_html_report_declares_content_security_policy` | raport HTML nie deklaruje Content-Security-Policy | #14 |
+| 13 | `sec::test_s13_canary_secret_never_reaches_any_output[log-query-token]` | query string z logu trafia bez redakcji do `metadata.uri` w `report.json` | #14 |
 
 | Issue | Liczba | Stan |
 |---|---|---|
-| #6 (T-201) | 4 | otwarte |
-| #7 (T-301) | 6 | otwarte |
-| #3 (T-003) | 3 | zamknięte — znaczniki wskazują Issue, które już nie śledzi tych luk |
+| #6 (T-201) | 3 | otwarte |
+| #7 (T-301) | 5 | otwarte |
+| #14 (T-501) | 2 | znaczniki przeniesione z zamkniętego #3 (CSP, redakcja query stringu) |
 | #4, #5 | 0 | wszystkie znaczniki zdjęte |
 
 Trzy luki z wierszy 11–13 nie mają dziś otwartego Issue wskazanego w kodzie. `docs/PROGRESS.md` podaje, że luki bez własnego Issue przeniesiono do #13 (logi) i #14 (reguły, HTML, redakcja); #13 jest otwarte, **#14 jest zamknięte**. Zmiana numerów w znacznikach wymaga edycji testów i nie należała do tej aktualizacji.

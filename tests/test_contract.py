@@ -583,6 +583,12 @@ def test_schema_fields_match_the_fields_the_model_writes(schema, demo_case, anal
 
 MARKUP = "<script src=//example.invalid/x.js></script>"
 SKIPPED_SQL = {
+    "update-statement": ("UPDATE `wp_users` SET user_pass='x' WHERE ID=1;\n", "PARTIAL", "nie analizuje: UPDATE ×1"),
+    "delete-statement": ("delete from `wp_options` where option_id=1;\n", "PARTIAL", "nie analizuje: DELETE ×1"),
+    "create-trigger": ("CREATE TRIGGER t BEFORE INSERT ON `wp_users` FOR EACH ROW SET NEW.user_pass='x';\n", "PARTIAL", "CREATE TRIGGER ×1"),
+    "drop-view": ("DROP VIEW IF EXISTS v;\n", "PARTIAL", "DROP VIEW ×1"),
+    "call-procedure": ("CALL synthetic();\n", "PARTIAL", "CALL ×1"),
+    "statement-not-starting-with-a-keyword": ("(SELECT 1);\n", "PARTIAL", "nie analizuje"),
     "executable-comment": (f"/*!50001 REPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}') */;\n", "PARTIAL", "nieobsługiwanej składni"),
     "mariadb-executable-comment": (f"/*M!100100 replace into `wp_options` VALUES (2,'c','{MARKUP}') */;\n", "PARTIAL", "nieobsługiwanej składni"),
     "executable-comment-without-space-after-version": (f"/*!50001REPLACE INTO `wp_options` VALUES (2,'c','{MARKUP}') */;\n",
@@ -634,8 +640,10 @@ def test_dump_without_wordpress_tables_is_not_an_analyzed_database(complete_case
     "/* INSERT IGNORE INTO t VALUES (1); */ INSERT INTO `wp_options` VALUES (5,'note','x');\n",
     "/*!40000 ALTER TABLE `wp_options` DISABLE KEYS */;\nINSERT INTO `wp_options` VALUES (5,'note','x');\n/*!40101 SET NAMES utf8 */;\n",
     "INSERT INTO `wp_options` VALUES (5,'note','C:\\\\path\\\\file and it\\'s fine');\n",
+    "DROP TABLE IF EXISTS `wp_options`;\nCREATE TABLE `wp_options` (`option_id` bigint, `option_name` varchar(191));\n"
+    "LOCK TABLES `wp_options` WRITE;\nALTER TABLE `wp_options` DISABLE KEYS;\nSET NAMES utf8;\nUNLOCK TABLES;\nCOMMIT;\n",
 ], ids=["keyword-inside-a-value", "multi-row", "lower-case", "statement-text-inside-a-value", "statement-in-a-line-comment",
-        "statement-in-a-block-comment", "mysqldump-version-comments", "backslashes-inside-a-value"])
+        "statement-in-a-block-comment", "mysqldump-version-comments", "backslashes-inside-a-value", "mysqldump-table-definition"])
 def test_supported_inserts_keep_database_coverage_complete(complete_case, evidence, analyze, prose):
     database = write(evidence / "plain.sql", admin_sql("siteadmin") + prose)
 

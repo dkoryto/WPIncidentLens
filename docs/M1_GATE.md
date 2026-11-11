@@ -25,6 +25,22 @@ Powiązane dokumenty: `docs/TEST_MATRIX.md` (wyniki i lista testów), `docs/THRE
 
 Linuksa, Windows i kontenera nie uruchamiano. Wynik z Linuksa znany jest wyłącznie z opisu PR #27 („1856 passed, 2 skipped, 13 xfailed”, kontener `python:3.12-slim`, `--network none`, uid 1000 — pomiar agenta prowadzącego, tutaj nieodtworzony). Wyniku CI dla PR #27 nie sprawdzano.
 
+## 0. Aktualizacja po raporcie (2026-11-11)
+
+Raport poniżej opisuje stan sprzed poprawek wywołanych jego własnym werdyktem dla K3. Po nim agent prowadzący zmienił kod tak, żeby cztery z sześciu rodzajów treści pomijanych bez luki (§2.3) zostawiały ślad:
+
+| Nr z §2.3 | Sytuacja | Stan po poprawce | Test |
+|---|---|---|---|
+| 1, 2 | Stratne dekodowanie SQL i logu | pokrycie źródła `PARTIAL` z nazwanym powodem | `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[sql-dump, access-log]` — PASS |
+| 3 | Plik obecny w materiale, nieobecny w baseline | nota `NO_TRUSTED_REFERENCE` z liczbą i przykładami w `coverage_gaps`; **nie** obniża pokrycia (pliki spoza baseline to norma, np. uploads) i nadal nie daje ustalenia | `neg::test_n8_premium_plugin_without_checksums_has_no_trusted_reference` — PASS |
+| 5 | Instrukcje SQL inne niż `INSERT`/`REPLACE` (`UPDATE`, `DELETE`, `CREATE TRIGGER`, `CALL`…) | pokrycie bazy `PARTIAL`, powód wymienia słowa kluczowe i liczby; definicje tabel i ustawienia sesji z mysqldump nie obniżają pokrycia | `contract::test_sql_that_the_parser_skipped_lowers_database_coverage[update-statement, delete-statement, create-trigger, drop-view, call-procedure, …]` — PASS |
+
+Pozostają bez zmian: rola administratora cofnięta w serializacji (`b:0`, #7) i brak jakiejkolwiek reguły dla `.htaccess` / `.user.ini` (#6). Oba to braki detekcji, nie odczytu.
+
+Wynik po poprawkach (pomiar agenta prowadzącego): macOS — 1864 passed, 5 skipped, 10 xfailed; Linux w kontenerze `python:3.12-slim`, `--network none`, uid 1000 — 1867 passed, 2 skipped, 10 xfailed. Liczby w §1 i §5.1 pochodzą sprzed poprawek.
+
+**Werdykt K3 po poprawkach: SPEŁNIONE Z ZASTRZEŻENIAMI** — każda sytuacja, o której wiadomo, że narzędzie jej nie obsługuje na poziomie odczytu i parserów, zostawia lukę; zastrzeżeniem są dwa braki detekcji powyżej oraz to, że wykrywanie nieanalizowanych instrukcji SQL jest heurystyką nałożoną na parser PoC (ścisły parser: #7).
+
 ## 2. Werdykt agenta
 
 | Nr | Kryterium bramki | Werdykt | Jedno zdanie |

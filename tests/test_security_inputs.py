@@ -539,10 +539,7 @@ def test_s10_invalid_utf8_does_not_hide_indicators(site, evidence, analyze, buil
     assert rule in run.rules
 
 
-@pytest.mark.parametrize("build", [
-    pytest.param(_broken_sql, marks=pytest.mark.xfail(strict=True, reason="stratne dekodowanie SQL (errors=replace) nie jest raportowane jako luka (#7)")),
-    pytest.param(_broken_log, marks=pytest.mark.xfail(strict=True, reason="stratne dekodowanie logu (errors=replace) nie jest raportowane jako luka (#3)")),
-], ids=["sql-dump", "access-log"])
+@pytest.mark.parametrize("build", [_broken_sql, _broken_log], ids=["sql-dump", "access-log"])
 def test_s10_lossy_decoding_is_reported_as_coverage_gap(site, evidence, analyze, build):
     run = analyze(site, **build(site, evidence))
 
@@ -614,7 +611,7 @@ def test_s12_markup_in_case_id_of_a_composed_report_is_escaped_in_html_report(si
     assert XSS not in page
 
 
-@pytest.mark.xfail(strict=True, reason="raport HTML nie deklaruje Content-Security-Policy (#3)")
+@pytest.mark.xfail(strict=True, reason="raport HTML nie deklaruje Content-Security-Policy (#14)")
 def test_s12_html_report_declares_content_security_policy(site, analyze):
     assert "Content-Security-Policy" in analyze(site).html
 
@@ -636,7 +633,7 @@ def _canary_log_query(site, evidence):
 
 @pytest.mark.parametrize("build", [
     _canary_wp_config, _canary_password_hash,
-    pytest.param(_canary_log_query, marks=pytest.mark.xfail(strict=True, reason="query string z logu trafia bez redakcji do metadata.uri w report.json (#3)")),
+    pytest.param(_canary_log_query, marks=pytest.mark.xfail(strict=True, reason="query string z logu trafia bez redakcji do metadata.uri w report.json (#14)")),
 ], ids=["wp-config-password", "user-pass-column", "log-query-token"])
 def test_s13_canary_secret_never_reaches_any_output(site, evidence, analyze, build):
     run = analyze(site, **build(site, evidence))
@@ -677,7 +674,7 @@ def test_report_never_contains_an_absolute_host_path(evidence, tmp_path, analyze
     finally:
         locked.chmod(0o600)
 
-    assert len(run.gaps) == 6 and run.findings  # EACCES, FIFO, hardlink, symlink ×2, zmiana po odczycie
+    assert len(run.gaps) == 7 and run.findings  # EACCES, FIFO, hardlink, symlink ×2, zmiana po odczycie, plik bez wpisu w baseline
     assert str(tmp_path) not in run.json_text + run.html
     assert not re.search(r"/(private|var|tmp|home|Users)/", run.json_text + run.html)
 
