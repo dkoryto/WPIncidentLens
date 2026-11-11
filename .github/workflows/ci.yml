@@ -30,4 +30,4 @@ jobs:
       - name: Tests
         run: python -m pytest -q
       - name: CLI smoke
-        run: python -m wptrace --help
+        run: python -m wpincidentlens --help

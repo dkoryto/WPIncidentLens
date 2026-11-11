@@ -1,4 +1,4 @@
-"""SecureIngest: jedyny punkt, w którym WPTrace otwiera nieufny materiał dowodowy (ADR 0002: B2–B6, B8).
+"""SecureIngest: jedyny punkt, w którym WPIncidentLens otwiera nieufny materiał dowodowy (ADR 0002: B2–B6, B8).
 
 Moduł niczego nie interpretuje i nigdzie nie pisze. Każdy wpis jest otwierany względem deskryptora
 katalogu z ``O_NOFOLLOW``, a jego typ ustala ``fstat`` na już otwartym deskryptorze — nie ma kroku

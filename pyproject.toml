@@ -3,10 +3,10 @@ requires = ["setuptools>=77,<82"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wptrace"
-# PEP 440 nie dopuszcza "0.1.0-poc"; wersja narzędzia w raporcie pozostaje w wptrace/cli.py (VERSION).
+name = "wpincidentlens"
+# PEP 440 nie dopuszcza "0.1.0-poc"; wersja narzędzia w raporcie pozostaje w wpincidentlens/cli.py (VERSION).
 version = "0.1.0"
-description = "WPIncidentLens (WPTrace PoC): offline, statyczna analiza powłamaniowa kopii WordPressa"
+description = "WPIncidentLens: offline, statyczna analiza powłamaniowa kopii WordPressa"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = []  # silnik analizy używa wyłącznie biblioteki standardowej
@@ -17,10 +17,10 @@ test = ["pytest>=8.3,<9", "pytest-cov>=5,<7", "jsonschema>=4.21,<5"]
 dev = ["pytest>=8.3,<9", "pytest-cov>=5,<7", "jsonschema>=4.21,<5", "ruff>=0.8,<0.9"]
 
 [project.scripts]
-wptrace = "wptrace.cli:main"
+wpincidentlens = "wpincidentlens.cli:main"
 
 [tool.setuptools]
-packages = ["wptrace"]
+packages = ["wpincidentlens"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

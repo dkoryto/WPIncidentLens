@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 from conftest import CANARY, XSS, analyze_demo, case_schema_errors, replace_at, sha256, write
 
-from wptrace import case, cli, ingest
+from wpincidentlens import case, cli, ingest
 
-VALID_IDENTIFIERS = ["A", "0", "_x", "WPTRACE-DEMO", "case_1.2-x", "a" * 64]
+VALID_IDENTIFIERS = ["A", "0", "_x", "WPINCIDENTLENS-DEMO", "case_1.2-x", "a" * 64]
 INVALID_IDENTIFIERS = {
     "empty": "", "too-long": "a" * 65, "leading-dot": ".hidden", "leading-dash": "-x", "parent-directory": "../x",
     "slash": "a/b", "backslash": "a\\b", "space": "a b", "newline": "a\nb", "trailing-newline": "a\n", "nul": "a\x00b",
@@ -73,7 +73,7 @@ def test_refusal_does_not_echo_the_rejected_identifier(site, refuse, flag):
 def test_case_id_keeps_its_default(site, tmp_path):
     cli.main(["--files", str(site), "--output", str(tmp_path / "out")])
 
-    assert json.loads((tmp_path / "out" / "case.json").read_text(encoding="utf-8"))["case_id"] == "WPTRACE-DEMO"
+    assert json.loads((tmp_path / "out" / "case.json").read_text(encoding="utf-8"))["case_id"] == "WPINCIDENTLENS-DEMO"
 
 
 def test_operator_id_is_null_unless_given(site, analyze):

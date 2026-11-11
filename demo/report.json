@@ -1,6 +1,6 @@
 {
   "schema_version": "poc-1",
-  "tool": "WPTrace PoC",
+  "tool": "WPIncidentLens PoC",
   "tool_version": "0.1.0-poc",
   "case_id": "DEMO-001",
   "analyzed_at_utc": "2026-11-11T17:36:16.628184+00:00",

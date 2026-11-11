@@ -18,9 +18,9 @@ Nie sprzedawaj „100% wykrywania”, „strona bezpieczna”, „wykryto wektor
 
 ## Źródła prawdy i stan wyjściowy
 
-- Przeczytaj **w całości**: `AGENTS.md`, `README.md`, `docs/WPTrace_Specyfikacja_Senior_PoC_2026-11-09.md`, `docs/WPTrace_Specyfikacja_Techniczna.md`, `docs/WPTrace_Przeglad_Inzynierski.md`, `docs/MIGRATION_2026-11-11.md`, plan PDF z 11 listopada, obecne `wptrace/`, `tests/`, `fixtures/`, `docker/` i wszystkie otwarte Issues.
-- `WPIncidentLens` jest nazwą produktu i repo. `WPTrace` oraz pakiet Python `wptrace` są **historycznymi nazwami** zachowanymi dla kompatybilności.
-- Obecnie istnieje skromny CLI Python (`wptrace/cli.py`), sześć testów syntetycznych, manifest SHA-256, podstawowe heurystyki plików, ograniczony parser INSERT, logi Apache/Nginx combined oraz raport JSON/HTML. To **nie** jest zbadane narzędzie produkcyjne; Docker nie został wiarygodnie zweryfikowany w obecnej dokumentacji.
+- Przeczytaj **w całości**: `AGENTS.md`, `README.md`, `docs/WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.md`, `docs/WPIncidentLens_Specyfikacja_Techniczna.md`, `docs/WPIncidentLens_Przeglad_Inzynierski.md`, `docs/MIGRATION_2026-11-11.md`, plan PDF z 11 listopada, obecne `wpincidentlens/`, `tests/`, `fixtures/`, `docker/` i wszystkie otwarte Issues.
+- `WPIncidentLens` jest nazwą produktu, repo i pakietu Python (`wpincidentlens`). Dawna nazwa WPTrace została usunięta 11.11.2026 (ADR 0004) i występuje już tylko w materiałach historycznych.
+- Obecnie istnieje skromny CLI Python (`wpincidentlens/cli.py`), sześć testów syntetycznych, manifest SHA-256, podstawowe heurystyki plików, ograniczony parser INSERT, logi Apache/Nginx combined oraz raport JSON/HTML. To **nie** jest zbadane narzędzie produkcyjne; Docker nie został wiarygodnie zweryfikowany w obecnej dokumentacji.
 - Dokumentacja opisuje **docelowy** kontrakt PoC, a nie istniejące możliwości. Mapa IMPLEMENTED/PARTIAL/MISSING/UNVERIFIED musi być częścią Sprintu 0.
 - Nie przyjmuj historycznej deklaracji „6/6 PASS” jako wyniku własnej sesji. Uruchom testy i zapisz wynik, wersje i ograniczenia.
 
@@ -39,7 +39,7 @@ Nie sprzedawaj „100% wykrywania”, „strona bezpieczna”, „wykryto wektor
 
 ## Operacyjny cykl autonomicznej pracy
 
-1. Otwórz repo. Ustal `git status`, gałąź, commit HEAD, istniejące Issues/PR, CI i zależności. Zacznij od `python -m pytest -q` i `python -m wptrace --help`. Jeśli narzędzie nie istnieje — zapisz „NOT RUN” i przyczynę.
+1. Otwórz repo. Ustal `git status`, gałąź, commit HEAD, istniejące Issues/PR, CI i zależności. Zacznij od `python -m pytest -q` i `python -m wpincidentlens --help`. Jeśli narzędzie nie istnieje — zapisz „NOT RUN” i przyczynę.
 2. Wybierz **pierwsze niezablokowane** Issue wg zależności; początkowo **T-001**, następnie T-002 i T-003. Nie traktuj liczby tygodni jako możliwości pomijania bramek.
 3. Przed zmianą napisz krótki plan: funkcje i pliki, wejścia/wyjścia, zagrożenia, testy pozytywne/negatywne, kompatybilność i sposób rollbacku.
 4. Utwórz gałąź `agent/T-XXX-krótki-opis`. **Nigdy nie commituj bezpośrednio na main i nie wykonuj automerge.**

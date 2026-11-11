@@ -104,9 +104,9 @@ def render_html(report: dict) -> str:
         f"<tr><td>{esc(source)}</td><td>{esc(entry['status'])}</td>" + "".join(f"<td>{esc(count)}</td>" for count in counted(entry["entries"])) + "</tr>"
         for source, entry in report.get("coverage", {}).items())
     scope = {True: "pełny", False: "niepełny"}.get(report.get("scope_complete"), "nieokreślony")
-    return f"""<!doctype html><html lang=\"pl\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>WPTrace · {esc(report['case_id'])}</title>
+    return f"""<!doctype html><html lang=\"pl\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>WPIncidentLens · {esc(report['case_id'])}</title>
 <style>body{{font:16px/1.5 system-ui,sans-serif;margin:3em auto;max-width:1100px;padding:0 1em;color:#192938}}h1{{font-size:2em}}h2{{margin-top:2em}}table{{border-collapse:collapse;width:100%}}td,th{{border-bottom:1px solid #cbd5e1;padding:.65em;text-align:left;vertical-align:top}}th{{background:#edf2f7}}small{{color:#48596c}}code{{word-break:break-all}}</style>
-<h1>WPTrace — raport analityczny</h1><p>Sprawa: <b>{esc(report['case_id'])}</b> · {esc(report['analyzed_at_utc'])}</p>
+<h1>WPIncidentLens — raport analityczny</h1><p>Sprawa: <b>{esc(report['case_id'])}</b> · {esc(report['analyzed_at_utc'])}</p>
 <p>Stan: <strong>{esc(report['assessment'])}</strong>. Zakres analizy: <strong>{esc(scope)}</strong>. {esc(report['disclaimer'])}</p>
 <h2>Ustalenia ({len(report['findings'])})</h2><table><thead><tr><th>Waga</th><th>Pewność</th><th>Reguła</th><th>Źródło</th><th>Wyjaśnienie</th></tr></thead><tbody>{rows}</tbody></table>
 <h2>Pokrycie źródeł</h2><table><thead><tr><th>Źródło</th><th>Status</th><th>Wpisy odczytane</th><th>Wpisy pominięte lub zmienione</th></tr></thead><tbody>{coverage_rows}</tbody></table>

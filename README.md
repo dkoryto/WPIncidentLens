@@ -13,14 +13,14 @@ python3.12 -m venv .venv && . .venv/bin/activate
 python -m pip install -e ".[dev]"
 python -m ruff check .
 python -m pytest -q
-python -m wptrace --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output results --case-id DEMO-001
+python -m wpincidentlens --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output results --case-id DEMO-001
 ```
 
 Otwórz `results/report.html`. Kod wyjścia opisuje pełność analizy, nie wynik: `0` — zakres pełny, `3` — analiza częściowa (np. brak bazy lub logów), `4` — podane źródło nieprzetworzone, `2` — błąd wywołania. Ocenę podaje pole `assessment` w `report.json`.
 
 ## Bezpieczny odczyt dowodów (T-101)
 
-Materiał dowodowy otwiera wyłącznie moduł `wptrace/ingest.py`: względem deskryptora katalogu, z `O_NOFOLLOW`, czytając tylko zwykłe pliki i katalogi (Linux i macOS; na platformie bez `dir_fd`/`O_NOFOLLOW` narzędzie odmawia pracy). Skrót SHA-256 i analizowana treść pochodzą z jednego odczytu, a po analizie dowody są weryfikowane ponownie. Zmiany zachowania względem wcześniejszego PoC:
+Materiał dowodowy otwiera wyłącznie moduł `wpincidentlens/ingest.py`: względem deskryptora katalogu, z `O_NOFOLLOW`, czytając tylko zwykłe pliki i katalogi (Linux i macOS; na platformie bez `dir_fd`/`O_NOFOLLOW` narzędzie odmawia pracy). Skrót SHA-256 i analizowana treść pochodzą z jednego odczytu, a po analizie dowody są weryfikowane ponownie. Zmiany zachowania względem wcześniejszego PoC:
 
 - Ścieżka `--files`, `--database`, `--logs` lub `--baseline` będąca dowiązaniem symbolicznym jest **odrzucana** (kod wyjścia 2) — podaj ścieżkę rzeczywistą. Symlinki wewnątrz drzewa są nadal pomijane z luką.
 - Pliki z wieloma dowiązaniami twardymi (`st_nlink > 1`) są domyślnie **pomijane** z luką `SKIPPED_HARDLINK`. Kopie z deduplikacją (np. `rsync --link-dest`) wymagają `--allow-hardlinks`.
@@ -43,9 +43,9 @@ Każdy limit musi być dodatni i skończony, inaczej wywołanie jest odrzucane (
 
 ## Sprawa i zapis wyników (T-101)
 
-Wywołanie waliduje `wptrace/case.py` (CaseManager), zanim zostanie przeczytany jakikolwiek dowód; wyniki zapisuje wyłącznie `wptrace/report.py` (Reporter).
+Wywołanie waliduje `wpincidentlens/case.py` (CaseManager), zanim zostanie przeczytany jakikolwiek dowód; wyniki zapisuje wyłącznie `wpincidentlens/report.py` (Reporter).
 
-- `--case-id` (domyślnie `WPTRACE-DEMO`) i opcjonalny `--operator-id`: 1–64 znaki `A-Z a-z 0-9 . _ -`, pierwszy znak inny niż kropka i łącznik. Inna wartość (separator ścieżki, spacja, znak sterujący, znak spoza ASCII) to błąd wywołania (kod 2).
+- `--case-id` (domyślnie `WPINCIDENTLENS-DEMO`) i opcjonalny `--operator-id`: 1–64 znaki `A-Z a-z 0-9 . _ -`, pierwszy znak inny niż kropka i łącznik. Inna wartość (separator ścieżki, spacja, znak sterujący, znak spoza ASCII) to błąd wywołania (kod 2).
 - `--operator-id` to pseudonim podany przez operatora. Narzędzie nie odczytuje nazwy użytkownika systemu, nazwy hosta ani zmiennych środowiskowych; bez flagi pole ma wartość `null`.
 - Wartość `--known-admin` oraz ścieżki, skróty i loginy w baseline, których nie da się zapisać w UTF-8, są odrzucane (kod 2) przed analizą.
 - `--output` wskazujący dowiązanie symboliczne albo wpis niebędący katalogiem jest odrzucany (kod 2). Sprawdzany jest ostatni składnik ścieżki, nie katalogi nadrzędne.
@@ -70,7 +70,7 @@ Wywołanie waliduje `wptrace/case.py` (CaseManager), zanim zostanie przeczytany 
 
 ```bash
 mkdir -p results && chmod 777 results  # TYLKO jednorazowy lokalny PoC; nigdy na rzeczywistych dowodach!
-cd docker && docker compose run --build --rm wptrace
+cd docker && docker compose run --build --rm wpincidentlens
 ```
 
 Tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability, non-root. Wymaga poprawnych uprawnień do odczytu dowodów i zapisu wyniku przez UID 65532. Pliki wyników mają uprawnienia `0600` i właściciela UID 65532, więc inny użytkownik hosta odczyta je dopiero po zmianie właściciela lub uprawnień.
@@ -88,7 +88,7 @@ Tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability, non-r
 
 ## Schemat JSON
 
-`report.json` ma schemat **`poc-1`**: kontrakt w `wptrace/models.py`, opublikowany JSON Schema w [docs/schema/report-poc-1.schema.json](docs/schema/report-poc-1.schema.json), decyzje w [ADR 0003](docs/adr/0003-schemat-poc-1-i-migracja.md). Przykład: [demo/report.json](demo/report.json).
+`report.json` ma schemat **`poc-1`**: kontrakt w `wpincidentlens/models.py`, opublikowany JSON Schema w [docs/schema/report-poc-1.schema.json](docs/schema/report-poc-1.schema.json), decyzje w [ADR 0003](docs/adr/0003-schemat-poc-1-i-migracja.md). Przykład: [demo/report.json](demo/report.json).
 
 | Pole | Zawartość |
 |---|---|
@@ -111,16 +111,16 @@ Identyfikatory (`ev_…`, `obs_…`, `fnd_…`) są skrótami treści: ten sam m
 | `NO_INDICATORS_IN_ANALYZED_SCOPE` | brak ustaleń przy pełnym zakresie (`scope_complete`) |
 | `INCONCLUSIVE` | brak ustaleń przy niepełnym zakresie: brak bazy lub logów, pominięte lub zmienione wpisy, przekroczony limit, nieobsługiwany format |
 
-Raporty w starszym schemacie 0.1.0 przenosi czysta funkcja `wptrace.migrate.migrate_0_1_0(report: dict) -> dict`. Stary raport nie niósł pokrycia ani statusów odczytu, więc wynik oznacza je jako `UNKNOWN_LEGACY`, ustalenia opiera na obserwacjach syntetycznych `LEGACY_FINDING`, a ocenę przenosi ostrożnie: `INDICATORS_FOUND` → `SUSPICIOUS`, `NO_INDICATORS_IN_ANALYZED_SCOPE` → `INCONCLUSIVE`. Migracja nie ma wejścia w CLI; narzędzie zapisuje wyłącznie `poc-1`.
+Raporty w starszym schemacie 0.1.0 przenosi czysta funkcja `wpincidentlens.migrate.migrate_0_1_0(report: dict) -> dict`. Stary raport nie niósł pokrycia ani statusów odczytu, więc wynik oznacza je jako `UNKNOWN_LEGACY`, ustalenia opiera na obserwacjach syntetycznych `LEGACY_FINDING`, a ocenę przenosi ostrożnie: `INDICATORS_FOUND` → `SUSPICIOUS`, `NO_INDICATORS_IN_ANALYZED_SCOPE` → `INCONCLUSIVE`. Migracja nie ma wejścia w CLI; narzędzie zapisuje wyłącznie `poc-1`.
 
 ## Dokumentacja projektu
 
-Szczegóły architektury, zagrożeń, warunków akceptacji, roadmapy i przeglądu inżynierskiego znajdują się w `docs/WPTrace_Specyfikacja_Techniczna.md`, `docs/WPTrace_Specyfikacja_Senior_PoC_2026-11-09.md`, `docs/WPTrace_Plan_Realizacji_Kamienie_Milowe_2026-11-11.pdf` i plikach DOCX w katalogu `docs/`.
+Szczegóły architektury, zagrożeń, warunków akceptacji, roadmapy i przeglądu inżynierskiego znajdują się w `docs/WPIncidentLens_Specyfikacja_Techniczna.md`, `docs/WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.md`, `docs/WPIncidentLens_Plan_Realizacji_Kamienie_Milowe_2026-11-11.pdf` i plikach DOCX w katalogu `docs/`.
 
 
 ## Zmiana nazwy
 
-Repozytorium i nazwa projektu to **WPIncidentLens**. W prototypie z 9 listopada 2026 zachowano historyczną nazwę `WPTrace`, moduł Python `wptrace` oraz nazwy plików specyfikacji, aby nie łamać istniejących poleceń i testów. Zmiana nazwy pakietu programistycznego wymaga osobnego zadania.
+Projekt, pakiet Pythona i polecenie nazywają się **WPIncidentLens** (`wpincidentlens`). Prototyp z 9 listopada 2026 nosił nazwę WPTrace; 11 listopada 2026 usunięto ją z kodu, poleceń, raportu i nazw dokumentów (`docs/adr/0004-zmiana-nazwy-na-wpincidentlens.md`). Polecenie `python -m wptrace` już nie istnieje. Dawna nazwa pozostaje tylko tam, gdzie opisuje historię: w `archives/` (oryginalne pakiety), w treści plików DOCX i PDF, w `docs/MIGRATION_2026-11-11.md`, `docs/legacy-release-notes.txt` oraz w zachowanym raporcie 0.1.0 używanym w teście migracji.
 
 ## Materiały źródłowe i zakres migracji
 

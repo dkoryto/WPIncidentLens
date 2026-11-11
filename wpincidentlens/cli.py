@@ -1,4 +1,4 @@
-"""WPTrace proof of concept. Only read static inputs; never execute WordPress code."""
+"""WPIncidentLens proof of concept. Only read static inputs; never execute WordPress code."""
 from __future__ import annotations
 
 import argparse
@@ -16,7 +16,7 @@ VERSION = "0.1.0-poc"
 DISCLAIMER = "Brak alertów nie dowodzi braku włamania. PoC, nie certyfikacja śledcza."
 # Kody wyjścia (specyfikacja §11, ADR 0003): 2 zgłasza argparse przy błędzie wywołania; ustalenia nie zmieniają kodu.
 EXIT_COMPLETE, EXIT_PARTIAL, EXIT_UNPROCESSED = 0, 3, 4
-# Materiał dowodowy otwiera wyłącznie wptrace.ingest (ADR 0002 D4); ten moduł dostaje już przeczytane bajty.
+# Materiał dowodowy otwiera wyłącznie wpincidentlens.ingest (ADR 0002 D4); ten moduł dostaje już przeczytane bajty.
 MAX_FILES = ingest.Limits().max_files
 MAX_SCAN_BYTES = ingest.Limits().max_scan_bytes
 MAX_SQL_BYTES = 20 * 1024 * 1024
@@ -637,7 +637,7 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
     findings = {item.id: item for item in _findings(detections)}
     gaps = {reason for entry in coverage.values() for reason in entry.reasons} | set(session_gaps)
     return models.Report(
-        case_id=case_id, tool="WPTrace PoC", tool_version=VERSION, analyzed_at_utc=models.utc_iso(datetime.now(timezone.utc)),
+        case_id=case_id, tool="WPIncidentLens PoC", tool_version=VERSION, analyzed_at_utc=models.utc_iso(datetime.now(timezone.utc)),
         assessment=models.assess(findings.values(), coverage), disclaimer=DISCLAIMER,
         evidence=tuple(evidence.values()), observations=tuple({found.observation.id: found.observation for found in detections}.values()),
         findings=tuple(findings.values()), coverage=coverage, coverage_gaps=tuple(gaps), timeline=tuple(timeline)).to_dict()
@@ -650,12 +650,12 @@ def exit_code(report: dict) -> int:
     return EXIT_COMPLETE if report["scope_complete"] else EXIT_PARTIAL
 
 
-write_html = report.write_html  # reeksport: Reporter jest w wptrace/report.py (ADR 0001, krok migracji 1)
+write_html = report.write_html  # reeksport: Reporter jest w wpincidentlens/report.py (ADR 0001, krok migracji 1)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="WPTrace PoC — statyczna analiza kopii WordPressa, bazy SQL i logów",
+        description="WPIncidentLens PoC — statyczna analiza kopii WordPressa, bazy SQL i logów",
         epilog="Kody wyjścia: 0 — zakres analizy pełny (ustalenia możliwe); 2 — błąd wywołania; 3 — analiza częściowa "
                "(brak źródła, pominięte lub zmienione wpisy, limit); 4 — podane źródło nieprzetworzone. "
                "Kod nie jest oceną kompromitacji: ocenę podaje pole assessment w report.json.")
@@ -664,7 +664,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--logs", type=Path)
     parser.add_argument("--baseline", type=Path, help="Zaufany JSON: {files: {ścieżka: sha256}, known_admins: [...]} ")
     parser.add_argument("--known-admin", action="append", default=[])
-    parser.add_argument("--case-id", default="WPTRACE-DEMO",
+    parser.add_argument("--case-id", default="WPINCIDENTLENS-DEMO",
                         help="Identyfikator sprawy: 1–64 znaki A-Z a-z 0-9 . _ -, pierwszy znak inny niż kropka i łącznik (%(default)s)")
     parser.add_argument("--operator-id", help="Pseudonim operatora zapisywany w case.json (te same znaki co --case-id); domyślnie brak")
     parser.add_argument("--output", type=Path, required=True)

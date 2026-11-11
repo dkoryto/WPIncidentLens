@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from wptrace.cli import main, iter_insert_rows, compose_report
+from wpincidentlens.cli import main, iter_insert_rows, compose_report
 
 FIX = Path(__file__).parents[1] / "fixtures"
 
@@ -19,7 +19,7 @@ def test_poc_end_to_end(tmp_path):
     assert data['assessment']=='SUSPICIOUS'
     assert len(data['evidence'])>=5
     assert any(x['event']=='HTTP_EXECUTABLE_IN_UPLOADS' and x['time_utc'].startswith('2026-11-09T01:14') for x in data['timeline'])
-    assert 'WPTrace' in (out/'report.html').read_text()
+    assert 'WPIncidentLens' in (out/'report.html').read_text()
 
 def test_no_indicators_not_a_clean_bill(tmp_path):
     root=tmp_path/'wp';root.mkdir();(root/'index.php').write_text('<?php echo 1;')
@@ -43,7 +43,7 @@ def test_output_cannot_be_inside_evidence(tmp_path):
         main(['--files',str(root),'--output',str(root/'report')])
 
 def test_report_escapes_html(tmp_path):
-    from wptrace.cli import write_html
+    from wpincidentlens.cli import write_html
     destination=tmp_path/'r.html'
     write_html({'case_id':'<img src=x onerror=alert(1)>','analyzed_at_utc':'2026-01-01',
       'assessment':'SUSPICIOUS','disclaimer':'x','findings':[], 'coverage_gaps':[], 'timeline':[]},destination)

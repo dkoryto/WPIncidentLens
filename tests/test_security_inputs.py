@@ -21,7 +21,7 @@ from conftest import (
     write,
 )
 
-from wptrace import cli, ingest
+from wpincidentlens import cli, ingest
 
 UNKNOWN_ADMIN = admin_sql("siteadmin", "ghostadmin")
 CHANGED = "SOURCE_CHANGED_DURING_ANALYSIS"

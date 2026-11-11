@@ -1,4 +1,4 @@
-# WPTrace — przegląd inżynierski / decyzja techniczna
+# WPIncidentLens — przegląd inżynierski / decyzja techniczna
 
 **Data:** 9.11.2026 · **Werdykt:** GO dla kontrolowanego PoC; NO-GO dla produkcji i automatycznej oceny „strona bezpieczna”.
 
