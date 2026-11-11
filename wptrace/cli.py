@@ -107,6 +107,37 @@ def scan_files(root: Path, baseline: dict | None) -> tuple[list[dict], list[dict
     return discoveries, manifest, gaps
 
 
+def _iter_row_groups(values: str):
+    """Yield innermost top-level "(...)" groups of a VALUES list in one linear pass.
+
+    Replaces a backtracking regex that took exponential time on crafted input.
+    Parentheses inside quoted strings are ignored; a group containing a nested
+    parenthesis outside a string is not a plain row and only its innermost part
+    is yielded, as before.
+    """
+    start, quoted, escaped, i = None, False, False, 0
+    while i < len(values):
+        ch = values[i]
+        if quoted:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == "'":
+                if i + 1 < len(values) and values[i+1] == "'":
+                    i += 1
+                else:
+                    quoted = False
+        elif ch == "'":
+            quoted = True
+        elif ch == "(":
+            start = i
+        elif ch == ")" and start is not None:
+            yield values[start:i+1]
+            start = None
+        i += 1
+
+
 def iter_insert_rows(sql: str):
     """Narrow PoC subset of mysqldump INSERT syntax; does NOT execute SQL.
 
@@ -151,8 +182,8 @@ def iter_insert_rows(sql: str):
         pos = i + 1
         if i >= len(sql) or quoted or nesting != 0:
             continue
-        for row in re.finditer(r"\((?:[^()']|'(?:\\.|''|[^'])*')*\)", values, re.S):
-            inside = row.group()[1:-1]
+        for group in _iter_row_groups(values):
+            inside = group[1:-1]
             items, buf, in_str, escape, j = [], [], False, False, 0
             while j < len(inside):
                 ch = inside[j]
