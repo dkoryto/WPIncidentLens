@@ -75,6 +75,27 @@ def test_s01_hardlink_to_file_outside_root_is_flagged(site, tmp_path, analyze):
     assert analyze(site).has_gap("shared.php")
 
 
+@pytest.mark.parametrize("plant", [
+    lambda path, outside: os.link(outside, path),
+    lambda path, outside: path.symlink_to(outside),
+], ids=["hardlink", "symlink"])
+def test_unread_php_in_uploads_is_still_reported_by_path(site, tmp_path, analyze, plant):
+    uploads = site / "wp-content" / "uploads"
+    uploads.mkdir(parents=True, exist_ok=True)
+    plant(uploads / "t.php", write(tmp_path / "outside.php", EVAL_MARKER))
+
+    finding = analyze(site).finding("EXECUTABLE_IN_UPLOADS")
+
+    assert (finding["source"], finding["confidence"]) == ("wp-content/uploads/t.php", "low")
+    assert "sha256" not in finding["metadata"]
+
+
+def test_unread_file_outside_uploads_gives_no_finding(site, tmp_path, analyze):
+    os.link(write(tmp_path / "outside.php", EVAL_MARKER), site / "shared.php")
+
+    assert analyze(site).findings == []
+
+
 def test_s01_hardlinked_file_is_not_hashed_or_analyzed_by_default(site, tmp_path, analyze):
     outside = write(tmp_path / "outside.php", EVAL_MARKER)
     os.link(outside, site / "shared.php")
@@ -146,8 +167,8 @@ def test_s02_file_swapped_for_symlink_after_check_is_not_read(site, tmp_path, an
     victim = write(site / "theme.php")
     real_listing = ingest._sorted_names
 
-    def swap_after_listing(dir_fd):
-        names = real_listing(dir_fd)
+    def swap_after_listing(dir_fd, limit):
+        names = real_listing(dir_fd, limit)
         if victim.name in names and not victim.is_symlink():
             victim.unlink()
             victim.symlink_to(outside)

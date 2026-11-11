@@ -46,6 +46,10 @@ def finding(rule: str, severity: str, confidence: str, kind: str,
             "metadata": metadata}
 
 
+def _is_code_in_uploads(rel: str) -> bool:
+    return rel.startswith("wp-content/uploads/") and PurePosixPath(rel).suffix.lower() in CODE_SUFFIXES
+
+
 def scan_files(root: Path, baseline: dict | None,
                session: ingest.Session | None = None) -> tuple[list[dict], list[dict], list[str]]:
     session = session or _session()
@@ -57,7 +61,12 @@ def scan_files(root: Path, baseline: dict | None,
         gaps.extend(item.gaps)
         if item.sha256 is None:
             unread.add(item.rel)
-            complete = complete and item.rel != ingest.ROOT and item.reason != "MAX_FILES"
+            complete = complete and item.rel != ingest.ROOT and item.reason not in ("MAX_FILES", "MAX_ENTRIES")
+            if _is_code_in_uploads(item.rel):
+                # Reguła zależy tylko od ścieżki: pominięcie odczytu (hardlink, symlink, błąd) nie może jej wyłączyć.
+                discoveries.append(finding("EXECUTABLE_IN_UPLOADS", "high", "low",
+                    "file", item.rel, "Plik wykonywalny PHP w uploads; treść nieodczytana, wymaga ręcznej analizy.",
+                    read_status=str(item.status)))
             continue
         rel, sha = item.rel, item.sha256
         manifest.append({"source": f"files/{rel}", "sha256": sha,
@@ -66,7 +75,7 @@ def scan_files(root: Path, baseline: dict | None,
             discoveries.append(finding("BASELINE_FILE_CHANGED", "medium", "high",
                 "file", rel, "Plik zmieniony względem zaufanej migawki (zmiana nie przesądza o ataku).",
                 sha256=sha, baseline_sha256=ref[rel]))
-        if rel.startswith("wp-content/uploads/") and PurePosixPath(rel).suffix.lower() in CODE_SUFFIXES:
+        if _is_code_in_uploads(rel):
             discoveries.append(finding("EXECUTABLE_IN_UPLOADS", "high", "medium",
                 "file", rel, "Plik wykonywalny PHP w uploads; wymaga analizy kontekstu.", sha256=sha))
         if item.size > scan_limit:
@@ -218,6 +227,9 @@ def scan_database(path: Path, known_admins: set[str],
     if item.size > MAX_SQL_BYTES:
         gaps.append(f"Eksport SQL większy niż {MAX_SQL_BYTES} B: analiza DB pominięta w PoC")
         return findings, entry, gaps
+    if item.content is None:
+        gaps.append("Treść eksportu SQL niedostępna po odczycie (plik zmienił się w trakcie): analiza DB pominięta")
+        return findings, entry, gaps
     sql = _text(item.content).read()
     users, admins, count = {}, set(), 0
     tables = set()
@@ -286,6 +298,9 @@ def scan_logs(root: Path, session: ingest.Session | None = None) -> tuple[list[d
         manifest.append({"source": f"logs/{name}", "sha256": item.sha256, "size": item.size})
         if item.size > MAX_LOG_BYTES:
             gaps.append(f"Log za duży do parsowania w PoC: {name}")
+            continue
+        if item.content is None:
+            gaps.append(f"Treść logu niedostępna po odczycie (plik zmienił się w trakcie): {name}")
             continue
         for ln, line in enumerate(_text(item.content), start=1):
             observed += 1
@@ -419,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-reverify", action="store_true",
                         help="Pomiń ponowną weryfikację skrótów po analizie (odnotowane w raporcie jako luka)")
     parser.add_argument("--max-files", type=int, default=MAX_FILES, help="Limit liczby plików, łącznie we wszystkich źródłach (%(default)s)")
+    parser.add_argument("--max-entries", type=int, default=defaults.max_entries,
+                        help="Limit liczby wszystkich wpisów: plików, katalogów, dowiązań i plików specjalnych (%(default)s)")
     parser.add_argument("--max-file-bytes", type=int, default=defaults.max_file_bytes, help="Limit rozmiaru jednego pliku (%(default)s)")
     parser.add_argument("--max-total-bytes", type=int, default=defaults.max_total_bytes, help="Limit łącznego rozmiaru czytanych plików (%(default)s)")
     parser.add_argument("--max-seconds", type=float, default=defaults.max_seconds, help="Limit czasu całej analizy w sekundach (%(default)s)")
@@ -437,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
     except ingest.IngestRefusal as refusal:
         parser.error(f"--output: {refusal}")
     try:
-        limits = ingest.Limits(max_files=args.max_files, max_file_bytes=args.max_file_bytes, max_total_bytes=args.max_total_bytes,
+        limits = ingest.Limits(max_files=args.max_files, max_entries=args.max_entries, max_file_bytes=args.max_file_bytes, max_total_bytes=args.max_total_bytes,
                                max_scan_bytes=MAX_SCAN_BYTES, max_seconds=args.max_seconds)
     except ValueError as invalid:
         parser.error(str(invalid))

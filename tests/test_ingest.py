@@ -251,10 +251,10 @@ def test_unreadable_entry_is_an_error_record_named_by_errno(site, locked_rel, ex
 def _fail_listing_of(monkeypatch, directory):
     real, inode = ingest._sorted_names, directory.stat().st_ino
 
-    def listing(dir_fd):
+    def listing(dir_fd, limit):
         if os.fstat(dir_fd).st_ino == inode:
             raise OSError(errno.EIO, "synthetic I/O error")
-        return real(dir_fd)
+        return real(dir_fd, limit)
 
     monkeypatch.setattr(ingest, "_sorted_names", listing)
 
@@ -296,8 +296,8 @@ def _swap_after_listing(monkeypatch, victim, replacement):
     """Hak: zaraz po wylistowaniu katalogu wpis ``victim`` zostaje podmieniony na symlink do ``replacement``."""
     real = ingest._sorted_names
 
-    def listing(dir_fd):
-        names = real(dir_fd)
+    def listing(dir_fd, limit):
+        names = real(dir_fd, limit)
         if victim.name in names and not victim.is_symlink():
             if victim.is_dir():
                 victim.rename(victim.with_name("moved-away"))
@@ -469,11 +469,11 @@ def test_disabled_reverification_is_itself_reported_and_detects_nothing(site):
 # --- B6: limity (każdy osobno) ----------------------------------------------------------------------
 
 def test_default_limits_match_adr_0002():
-    assert Limits() == Limits(max_files=200_000, max_file_bytes=2 * 1024**3, max_total_bytes=20 * 1024**3,
+    assert Limits() == Limits(max_files=200_000, max_entries=1_000_000, max_file_bytes=2 * 1024**3, max_total_bytes=20 * 1024**3,
                               max_scan_bytes=4 * 1024**2, max_path_bytes=4096, max_depth=64, max_seconds=1800)
 
 
-@pytest.mark.parametrize("field", ["max_files", "max_file_bytes", "max_total_bytes", "max_scan_bytes",
+@pytest.mark.parametrize("field", ["max_files", "max_entries", "max_file_bytes", "max_total_bytes", "max_scan_bytes",
                                    "max_path_bytes", "max_depth", "max_seconds"])
 def test_limits_reject_non_positive_values(field):
     with pytest.raises(ValueError):
@@ -775,7 +775,7 @@ def test_output_next_to_sources_is_accepted_and_returned_as_real_path(site, evid
 # --- D4: strażnik samego modułu ---------------------------------------------------------------------
 
 INGEST_TREE = ast.parse(Path(ingest.__file__).read_text(encoding="utf-8"))
-ALLOWED_IMPORTS = {"__future__", "collections", "dataclasses", "enum", "errno", "hashlib", "os", "pathlib", "stat", "time", "typing"}
+ALLOWED_IMPORTS = {"__future__", "collections", "dataclasses", "enum", "errno", "hashlib", "itertools", "os", "pathlib", "stat", "time", "typing"}
 WRITING_CALLS = {"fdopen", "write", "writev", "pwrite", "write_text", "write_bytes", "mkdir", "makedirs", "mkfifo", "mknod",
                  "unlink", "remove", "rmdir", "removedirs", "rename", "renames", "truncate", "ftruncate", "chmod",
                  "fchmod", "lchmod", "chown", "fchown", "lchown", "utime", "link", "symlink", "symlink_to", "hardlink_to",
@@ -802,3 +802,47 @@ def test_ingest_contains_no_writing_call_or_flag():
     assert methods & WRITING_CALLS == set()
     assert "replace" not in os_calls
     assert attributes & WRITING_FLAGS == set()
+
+
+# --- budżet wpisów: dowiązania i katalogi nie omijają limitu plików ------------------------------
+
+@pytest.mark.parametrize("populate", [
+    lambda root, target: [(root / f"link-{n:02}").symlink_to(target) for n in range(30)],
+    lambda root, target: [(root / f"dir-{n:02}").mkdir() for n in range(30)],
+], ids=["symlinks", "empty-directories"])
+def test_entries_other_than_regular_files_are_bounded_by_the_entry_limit(tmp_path, populate):
+    root = tmp_path / "many"
+    root.mkdir()
+    populate(root, write(tmp_path / "target.php"))
+    session = Session(Limits(max_entries=5))
+
+    records = read(root, session)
+
+    assert len(records) <= 6
+    assert len(session.ledger) <= 6
+    assert [record.reason for record in records if record.status is ReadStatus.SKIPPED_LIMIT] == ["MAX_ENTRIES"]
+
+
+def test_directory_listing_never_returns_more_than_the_requested_names(tmp_path):
+    for number in range(20):
+        write(tmp_path / f"f{number:02}")
+    dir_fd = os.open(tmp_path, os.O_RDONLY)
+    try:
+        assert len(ingest._sorted_names(dir_fd, 3)) == 4
+    finally:
+        os.close(dir_fd)
+
+
+def test_entry_limit_spans_all_sources_of_a_session(tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    for root in (first, second):
+        root.mkdir()
+        for number in range(3):
+            write(root / f"f{number}.php")
+    session = Session(Limits(max_entries=4))
+    read(first, session)
+
+    records = read(second, session, source="logs")
+
+    assert rels(records) == ["f0.php"]
+    assert any(record.reason == "MAX_ENTRIES" for record in records)

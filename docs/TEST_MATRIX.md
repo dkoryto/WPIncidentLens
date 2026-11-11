@@ -29,7 +29,7 @@ Aktualizacja po T-101 (#4, gałąź `agent/T-101-secure-ingest`, 2026-11-11) —
 
 | Komenda | Środowisko | Wynik |
 |---|---|---|
-| `python -m pytest -q` | macOS (Darwin 27.0.0, arm64), Python 3.12.11, pytest 8.4.2 | **262 passed, 2 skipped, 20 xfailed** |
+| `python -m pytest -q` | macOS (Darwin 27.0.0, arm64), Python 3.12.11, pytest 8.4.2 | **270 passed, 2 skipped, 20 xfailed** |
 | `python -m pytest -q -p no:cacheprovider` | Linux, kontener `python:3.12-slim` (Python 3.12.14) z `pytest`/`pytest-cov`/`ruff`, `--network none`, użytkownik 65532, kopia repozytorium w `/tmp` | **263 passed, 1 skipped, 20 xfailed** |
 | `python -m ruff check .` | macOS i Linux (jw.) | brak zgłoszeń |
 | `python -m pytest -q --cov=wptrace` | macOS | **96%** (`cli.py` 97%, `ingest.py` 95%) |
