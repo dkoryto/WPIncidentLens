@@ -583,8 +583,6 @@ def test_reverification_of_an_untouched_tree_reports_no_change(grow, seed, confi
 
 # --- własności, których kod dziś NIE spełnia (zgłoszone w #4; testy pilnują, żeby poprawka je odblokowała) ---
 
-@pytest.mark.xfail(strict=True, reason="dwa różne pliki dostają tę samą ścieżkę w rejestrze: nazwa z bajtem spoza UTF-8 zapisana jako "
-                                       "\\xNN jest nieodróżnialna od nazwy zawierającej dosłownie \\xNN (ingest._printable) (#4)")
 def test_distinct_files_never_share_a_ledger_path(tmp_path):
     site = tmp_path / "site"
     site.mkdir()
@@ -600,8 +598,6 @@ def test_distinct_files_never_share_a_ledger_path(tmp_path):
     assert len({record.rel for record in session.ledger}) == 2
 
 
-@pytest.mark.xfail(strict=True, reason="wpis rejestru oznaczony CHANGED przy ponownej weryfikacji ma puste gaps; tekst luki trafia tylko do "
-                                       "finish() i integrity_notes (ingest.Session._mark_changed) (#4)")
 def test_entry_marked_changed_by_reverification_carries_its_own_gap(tmp_path):
     site = tmp_path / "site"
     site.mkdir()
