@@ -18,6 +18,27 @@ python -m wptrace --files fixtures/site --database fixtures/database.sql --logs 
 
 Otwórz `results/report.html`.
 
+## Bezpieczny odczyt dowodów (T-101)
+
+Materiał dowodowy otwiera wyłącznie moduł `wptrace/ingest.py`: względem deskryptora katalogu, z `O_NOFOLLOW`, czytając tylko zwykłe pliki i katalogi (Linux i macOS; na platformie bez `dir_fd`/`O_NOFOLLOW` narzędzie odmawia pracy). Skrót SHA-256 i analizowana treść pochodzą z jednego odczytu, a po analizie dowody są weryfikowane ponownie. Zmiany zachowania względem wcześniejszego PoC:
+
+- Ścieżka `--files`, `--database`, `--logs` lub `--baseline` będąca dowiązaniem symbolicznym jest **odrzucana** (kod wyjścia 2) — podaj ścieżkę rzeczywistą. Symlinki wewnątrz drzewa są nadal pomijane z luką.
+- Pliki z wieloma dowiązaniami twardymi (`st_nlink > 1`) są domyślnie **pomijane** z luką `SKIPPED_HARDLINK`. Kopie z deduplikacją (np. `rsync --link-dest`) wymagają `--allow-hardlinks`.
+- `--output` nie może leżeć w żadnym źródle dowodów ani go zawierać; niepoprawny lub nieczytelny `--baseline` to błąd wywołania (kod 2). Baseline trafia do `evidence_manifest`.
+- Limity dotyczą wszystkich źródeł łącznie; po przekroczeniu analiza jest częściowa i powstaje nazwana luka w `coverage_gaps`. Komunikaty luk zawierają tylko ścieżki względne do źródła i nazwę błędu (np. `EACCES`).
+
+| Flaga | Domyślnie | Znaczenie |
+|---|---|---|
+| `--allow-hardlinks` | wyłączona | czytaj pliki z wieloma dowiązaniami twardymi; raport podaje ich liczbę |
+| `--no-reverify` | wyłączona | pomiń ponowną weryfikację skrótów po analizie (odnotowane jako luka) |
+| `--max-files` | 200000 | limit liczby plików |
+| `--max-entries` | 1000000 | limit wszystkich wpisów (pliki, katalogi, dowiązania, pliki specjalne) |
+| `--max-file-bytes` | 2147483648 (2 GiB) | większy plik jest pomijany bez liczenia skrótu |
+| `--max-total-bytes` | 21474836480 (20 GiB) | limit łącznego rozmiaru czytanych plików |
+| `--max-seconds` | 1800 | limit czasu całej analizy, sprawdzany między plikami |
+
+Stałe limity: treść plików analizowana do 4 MiB, SQL do 20 MiB, log do 30 MiB, ścieżka względna do 4096 bajtów, głębokość katalogów 64. Bezpieczny odczyt nie zastępuje izolacji: nie wykrywa punktów montowania w drzewie ani zmian cofniętych przed ponowną weryfikacją; materiał montuj tylko do odczytu, z `nodev`.
+
 ## Kontener Docker
 
 `docker/Dockerfile` używa `python:3.12-slim` bez pinu **wyłącznie na potrzeby PoC**. Przed wdrożeniem produkcyjnym wymagaj zweryfikowanego obrazu pinowanego po digest oraz SBOM. Aby uruchomić pokaz:
@@ -35,7 +56,7 @@ Tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability, non-r
 - Parsowanie SQL jest celowo ograniczone do wybranych składni `INSERT INTO`; nie interpretuje złożonych dumpów, `BLOB`, triggerów, procedur, multisite ani całej składni MySQL. Brak informacji jest jawnie zgłaszany.
 - Brak parsera PHP serialization, więc nie rozpoznaje ukrytych zmian w serializowanych opcjach.
 - Nie analizuje logów poza formatem Apache/Nginx combined. Czas w logach zachowany dosłownie, **nie jest normalizowany ani ustalany wektor ataku**.
-- Symlinki są pomijane; pliki duże są haszowane, ale ich zawartość nie jest skanowana. Brak uczenia maszynowego i nie ma wykonywania PHP.
+- Symlinki, pliki specjalne i (domyślnie) pliki z wieloma dowiązaniami twardymi są pomijane z luką; pliki powyżej 4 MiB są haszowane, ale ich zawartość nie jest skanowana. Brak uczenia maszynowego i nie ma wykonywania PHP.
 - Testowe detekcje są heurystykami i mogą mieć false positive / false negative.
 - Nie wdraża pełnej chain of custody, sygnowania dowodów ani modeli uprawnień. Nie uruchamiaj na poufnych realnych danych bez przeglądu bezpieczeństwa.
 - Raport HTML nie wyświetla niekontrolowanego kodu, lecz metadane IP/URL mogą nadal być danymi osobowymi; przechowuj bezpiecznie.
