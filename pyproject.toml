@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wptrace"
+# PEP 440 nie dopuszcza "0.1.0-poc"; wersja narzędzia w raporcie pozostaje w wptrace/cli.py (VERSION).
+version = "0.1.0"
+description = "WPIncidentLens (WPTrace PoC): offline, statyczna analiza powłamaniowa kopii WordPressa"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = []  # silnik analizy używa wyłącznie biblioteki standardowej
+
+[project.optional-dependencies]
+test = ["pytest>=8.3,<9"]
+dev = ["pytest>=8.3,<9", "ruff>=0.8,<0.9"]
+
+[project.scripts]
+wptrace = "wptrace.cli:main"
+
+[tool.setuptools]
+packages = ["wptrace"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 160
+extend-exclude = ["archives", "fixtures", "demo"]
+
+[tool.ruff.lint]
+# Baseline T-001: tylko błędy składni/nazw (pyflakes) i błędy krytyczne pycodestyle.
+# Zasady stylu (E701/E702, formatowanie) celowo odłożone — monolit cli.py refaktoryzujemy stopniowo.
+select = ["E9", "F"]

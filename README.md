@@ -6,7 +6,12 @@ PoC zapewnia działający **offline** przepływ: statyczna analiza kopii katalog
 
 ## Test lokalny
 
+Wymagany Python 3.12. Szczegóły środowiska i faktyczne wyniki: [docs/BASELINE.md](docs/BASELINE.md).
+
 ```bash
+python3.12 -m venv .venv && . .venv/bin/activate
+python -m pip install -e ".[dev]"
+python -m ruff check .
 python -m pytest -q
 python -m wptrace --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output results --case-id DEMO-001
 ```
