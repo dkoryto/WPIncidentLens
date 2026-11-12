@@ -107,7 +107,6 @@ def test_p6_synthetic_webshell_marker_is_a_heuristic_finding(site, analyze):
     assert "heurystyka, nie dowód malware" in signature["explanation"]
 
 
-@pytest.mark.xfail(strict=True, reason="brak YARA-X; trafienie sygnatury nie ma offsetu ani wersji reguły (#6)")
 def test_p6_signature_finding_carries_match_offset(site, analyze):
     write(site / "wp-content" / "themes" / "demo" / "footer.php", EVAL_MARKER)
 
