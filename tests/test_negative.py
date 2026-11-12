@@ -125,7 +125,8 @@ def test_empty_source_directory_is_reported_as_coverage_gap(evidence, analyze, s
 
     lost = set(reference.gaps) - set(run.gaps)
     assert set(run.gaps) - set(reference.gaps)
-    assert all(gap.startswith("WPDetector:") for gap in lost)  # z pustego katalogu detektor nie ma czego opisać; reszta luk zostaje
+    # W pustym katalogu nie ma czego weryfikować ani wykrywać; pozostałe luki zostają.
+    assert all(gap.startswith(("WPDetector:", "NOT_CHECKED")) for gap in lost)
 
 
 # --- N7: czas -----------------------------------------------------------------------------------

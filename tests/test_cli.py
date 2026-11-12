@@ -11,7 +11,7 @@ def test_sql_rows_and_prefix():
 def test_poc_end_to_end(tmp_path):
     out=tmp_path/'out'
     code=main(["--files",str(FIX/'site'),"--database",str(FIX/'database.sql'),"--logs",str(FIX/'logs'),"--baseline",str(FIX/'baseline.json'),"--output",str(out),"--case-id","TEST-01"])
-    assert code==0
+    assert code==3  # plik PHP w uploads nie ma zaufanej referencji: zakres niepełny (ADR 0005, pkt 6)
     data=json.loads((out/'report.json').read_text())
     rules={x['rule_id'] for x in data['findings']}
     assert {'EXECUTABLE_IN_UPLOADS','SUSPICIOUS_PHP_EVAL_DECODE','UNRECOGNIZED_ADMIN',

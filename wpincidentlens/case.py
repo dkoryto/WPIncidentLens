@@ -19,6 +19,10 @@ SCHEMA_VERSION = "case-poc-1"
 # (nazwa źródła, oczekiwany rodzaj wpisu); kolejność jak w raporcie
 SOURCES = (("files", "dir"), ("database", "file"), ("logs", "any"), ("baseline", "file"))
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
+_VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}")
+MAX_REFERENCE_LABEL = 120
+MAX_REFERENCE_PATH = 1024
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 _NOT_UTF8 = "tekst, którego nie da się zapisać w UTF-8 (samotny surogat)"
 
 
@@ -40,13 +44,17 @@ class CaseContext:
     reverify: bool
     known_admins: frozenset[str]
     created_at_utc: str
+    core_checksums: Path | None = None  # lokalny manifest sum rdzenia; w raporcie należy do źródła ``baseline``
 
     def describe(self) -> dict:
         """Część ``case.json`` znana przed analizą. Ze ścieżek źródeł zostaje tylko nazwa ostatniego składnika."""
+        sources = {name: {"provided": getattr(self, name) is not None, "name": _label(getattr(self, name))} for name, _ in SOURCES}
+        if self.core_checksums is not None:  # pole opcjonalne: case.json bez manifestu wygląda jak dotychczas
+            sources["core_checksums"] = {"provided": True, "name": _label(self.core_checksums)}
         return {
             "schema_version": SCHEMA_VERSION, "case_id": self.case_id, "operator_id": self.operator_id,
             "created_at_utc": self.created_at_utc,
-            "sources": {name: {"provided": getattr(self, name) is not None, "name": _label(getattr(self, name))} for name, _ in SOURCES},
+            "sources": sources,
             "limits": asdict(self.limits),
             "flags": {"allow_hardlinks": self.allow_hardlinks, "reverify": self.reverify},
         }
@@ -100,7 +108,8 @@ def _output(output: Path, sources: list[Path]) -> Path:
 
 def build(*, files: Path, output: Path, case_id: str, database: Path | None = None, logs: Path | None = None,
           baseline: Path | None = None, operator_id: str | None = None, known_admins: Iterable[str] = (),
-          limits: Mapping[str, float] | None = None, allow_hardlinks: bool = False, reverify: bool = True) -> CaseContext:
+          limits: Mapping[str, float] | None = None, allow_hardlinks: bool = False, reverify: bool = True,
+          core_checksums: Path | None = None) -> CaseContext:
     """Waliduje wywołanie w kolejności: wartości tekstowe i limity, ścieżki źródeł, katalog wyników.
 
     Zgłasza ``CaseError`` z nazwą flagi. Źródło bez uprawnień do odczytu nie jest błędem wywołania:
@@ -115,6 +124,10 @@ def build(*, files: Path, output: Path, case_id: str, database: Path | None = No
     checked = _limits(limits or {})
     paths = {"files": files, "database": database, "logs": logs, "baseline": baseline}
     given = [(name, paths[name], expect) for name, expect in SOURCES if paths[name] is not None]
+    if core_checksums is not None:
+        if baseline is not None and baseline.name == core_checksums.name:  # oba są dowodami ``baseline/<nazwa>``
+            raise CaseError("--core-checksums: nazwa pliku musi różnić się od nazwy pliku --baseline")
+        given.append(("core-checksums", core_checksums, "file"))
     for name, path, expect in given:
         try:
             ingest.check_source(path, expect)
@@ -124,12 +137,41 @@ def build(*, files: Path, output: Path, case_id: str, database: Path | None = No
     return CaseContext(
         case_id=case_id, operator_id=operator_id, files=files, database=database, logs=logs, baseline=baseline,
         output=_output(output, [path for _, path, _ in given]), limits=checked, allow_hardlinks=allow_hardlinks,
-        reverify=reverify, known_admins=admins, created_at_utc=models.utc_iso(datetime.now(timezone.utc)))
+        reverify=reverify, known_admins=admins, created_at_utc=models.utc_iso(datetime.now(timezone.utc)),
+        core_checksums=core_checksums)
+
+
+def is_relative_path(path: object) -> bool:
+    """Klucz referencji (baseline, manifest sum): ścieżka względna z ukośnikami ``/``, bez ``..`` i znaków sterujących."""
+    return (isinstance(path, str) and 0 < len(path) <= MAX_REFERENCE_PATH and path.isprintable() and "\\" not in path
+            and all(part not in ("", ".", "..") for part in path.split("/")))
+
+
+def reference_labels(document: Mapping) -> tuple[str | None, str | None]:
+    """Opcjonalne pola referencji: ``wordpress_version`` (ścisły wzorzec) i ``reference`` (krótki opis jednowierszowy).
+
+    Obie wartości trafiają do ustaleń, dlatego są ograniczone, zanim zacznie się analiza.
+    """
+    version, label = document.get("wordpress_version"), document.get("reference")
+    if version is not None and not (isinstance(version, str) and _VERSION.fullmatch(version)):
+        raise CaseError("wordpress_version: dozwolone są 1–32 znaki A-Z, a-z, 0-9, kropka, plus, podkreślenie i łącznik; "
+                        "pierwszy znak to litera lub cyfra")
+    if label is not None and not (isinstance(label, str) and 0 < len(label) <= MAX_REFERENCE_LABEL and label.isprintable()
+                                  and label == label.strip()):
+        raise CaseError(f"reference: dozwolony jest tekst 1–{MAX_REFERENCE_LABEL} znaków drukowalnych, bez znaków sterujących "
+                        "i bez spacji na końcach")
+    return version, label
 
 
 def check_baseline(baseline: dict) -> dict:
-    """Odrzuca baseline z tekstem nie do zapisania w UTF-8, zanim taka wartość trafi do raportu po całej analizie."""
+    """Odrzuca baseline z tekstem nie do zapisania w UTF-8 albo z niepoprawnym opisem referencji, zanim zacznie się analiza."""
     files = baseline.get("files", {})
-    if not all(map(_encodable, (*files, *files.values(), *baseline.get("known_admins", [])))):
+    if not all(map(_encodable, baseline.get("known_admins", []))):
         raise CaseError(f"baseline zawiera {_NOT_UTF8}")
+    if not all(map(is_relative_path, files)):
+        raise CaseError("klucze baseline.files muszą być ścieżkami względnymi z ukośnikami „/”, bez „..”, "
+                        f"znaków sterujących i dłuższych niż {MAX_REFERENCE_PATH} znaków")
+    if not all(isinstance(value, str) and _SHA256.fullmatch(value) for value in files.values()):
+        raise CaseError("wartości baseline.files muszą być skrótami SHA-256: 64 małe cyfry szesnastkowe")
+    reference_labels(baseline)
     return baseline
