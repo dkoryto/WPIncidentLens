@@ -18,6 +18,8 @@ python -m wpincidentlens --files fixtures/site --database fixtures/database.sql 
 
 `--database-format {sql,jsonl}` (domyślnie `sql`) mówi, czym jest plik `--database`: zrzutem SQL (`INSERT INTO … VALUES`) albo eksportem JSONL — jeden obiekt `{"table": "wp_users", "row": {"ID": 1, "user_login": "…"}}` na wiersz, wartości tylko łańcuch, liczba lub `null`. Formatu nie zgaduje się po treści; wiersze niezgodne z kontraktem obniżają pokrycie bazy (szczegóły: [docs/RULES.md](docs/RULES.md)).
 
+`--log-format {combined,common,json}` (domyślnie `combined`) mówi, w jakim formacie są wiersze `--logs`: Apache/Nginx `combined` albo `common`, albo jeden obiekt JSON na wiersz (pola `time`, `remote_addr`, `method`, `uri`, `status`, opcjonalnie `bytes` i `forwarded_for`). Formatu nie zgaduje się po treści; wiersze odrzucone obniżają pokrycie logów z liczbą per powód. `--trusted-proxy CIDR` (powtarzalna) wskazuje sieci zaufanych proxy: tylko dla połączeń z nich adres klienta pochodzi z `forwarded_for` (format json). `--log-clock-skew SEKUNDY` to deklarowana niepewność zegara serwera logów (nieujemna); bez niej zegar jest niezweryfikowany. Wszystkie trzy trafiają do `case.json` (szczegóły: [docs/RULES.md](docs/RULES.md), sekcja „Logi HTTP”).
+
 `--baseline PLIK` to zaufany JSON operatora: `{"files": {"ścieżka/względna.php": "<sha256>"}, "known_admins": ["login"]}`, opcjonalnie z `wordpress_version` i `reference`, które trafiają do ustaleń jako opis referencji.
 
 Opcjonalnie `--core-checksums PLIK` wskazuje **lokalny** plik JSON z sumami MD5 rdzenia w kształcie `api.wordpress.org/core/checksums/1.0` (`{"checksums": {"wp-admin/about.php": "<md5>", …}}`; można dopisać `wordpress_version` i `reference`). Narzędzie niczego nie pobiera z sieci. Manifest jest wpisem `evidence` źródła `baseline`; MD5 służy tylko do porównania z manifestem (ustalenia `CORE_CHECKSUM_MISMATCH`, `CORE_FILE_NOT_IN_MANIFEST`, `CORE_FILE_MISSING`), skrótem dowodu pozostaje SHA-256. Manifest innej wersji lub locale daje rozbieżności; niepoprawny manifest to błąd wywołania (kod 2). Klasy plików bez referencji są w pokryciu oznaczane `NOT_CHECKED`.
@@ -32,7 +34,7 @@ Otwórz `results/report.html`. Kod wyjścia opisuje pełność analizy, nie wyni
 - **Pliki — integralność względem referencji**: `BASELINE_FILE_CHANGED`, `BASELINE_FILE_MISSING`, `NEW_FILE_SINCE_BASELINE` (mu-plugins i drop-ins), `CORE_CHECKSUM_MISMATCH`, `CORE_FILE_NOT_IN_MANIFEST`, `CORE_FILE_MISSING`, `REFERENCE_FILE_UNREADABLE`.
 - **WPDetector**: wersja WordPressa, wersja bazy, locale i prefiks tabel jako kandydaci z pewnością (`observations`), bez ustalenia i bez wpływu na ocenę.
 - **Baza (wybrane `INSERT`)**: administrator spoza zaufanej listy, aktywny znacznik HTML lub schemat JS w opcji.
-- **Logi (format combined)**: żądanie do pliku `.php`, `.phtml` lub `.phar` w uploads oraz korelacja ścieżki z plikiem w obrazie witryny.
+- **Logi (formaty combined, common, json)**: żądanie do pliku kodu (rozszerzenia jak w regułach plików, także podwójne) w uploads oraz korelacja z plikami, które mają ustalenie (ścieżka i czas).
 - **Korelacja plik–żądanie** (ADR 0007, [docs/RULES.md](docs/RULES.md#korelacja-plikżądanie-correlate-t-401)): ta sama ścieżka (`CORRELATED_UPLOAD_REQUEST`, `CORRELATED_FILE_REQUEST`) i bliskość w czasie żądania i `mtime` pliku z ustaleniem (`REQUEST_NEAR_FILE_CHANGE`, okno `--correlation-window SECONDS`, domyślnie 900, poszerzane o zadeklarowaną niepewność zegara). Korelacja nie dowodzi przyczynowości, zapisu ani wykonania pliku; HTTP 200 też nie.
 
 Brak ustalenia w którymkolwiek z tych obszarów nie oznacza, że witryna nie została naruszona.
@@ -58,7 +60,7 @@ Materiał dowodowy otwiera wyłącznie moduł `wpincidentlens/ingest.py`: wzglę
 | `--max-depth` | 64 | limit głębokości katalogów; głębszy katalog nie jest przeglądany |
 | `--max-path-bytes` | 4096 | limit długości ścieżki względnej do źródła; dłuższa ścieżka jest pomijana |
 
-Każdy limit musi być dodatni i skończony, inaczej wywołanie jest odrzucane (kod 2). Stałe limity: treść plików analizowana do 4 MiB, zrzut SQL czytany strumieniowo (limit pliku `--max-file-bytes`, jedna instrukcja do 16 MiB), log do 30 MiB, baseline do 64 MiB, manifest sum rdzenia do 8 MiB i 50 000 wpisów. Bezpieczny odczyt nie zastępuje izolacji: nie wykrywa punktów montowania w drzewie ani zmian cofniętych przed ponowną weryfikacją; materiał montuj tylko do odczytu, z `nodev`.
+Każdy limit musi być dodatni i skończony, inaczej wywołanie jest odrzucane (kod 2). Stałe limity: treść plików analizowana do 4 MiB, zrzut SQL czytany strumieniowo (limit pliku `--max-file-bytes`, jedna instrukcja do 16 MiB), log czytany strumieniowo (limit pliku `--max-file-bytes`, jeden wiersz do 64 KiB), baseline do 64 MiB, manifest sum rdzenia do 8 MiB i 50 000 wpisów. Bezpieczny odczyt nie zastępuje izolacji: nie wykrywa punktów montowania w drzewie ani zmian cofniętych przed ponowną weryfikacją; materiał montuj tylko do odczytu, z `nodev`.
 
 ## Sprawa i zapis wyników (T-101)
 

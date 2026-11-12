@@ -22,7 +22,7 @@ from conftest import (
     write,
 )
 
-from wpincidentlens import cli, ingest, sqldump
+from wpincidentlens import cli, ingest, logformats, sqldump
 
 UNKNOWN_ADMIN = admin_sql("siteadmin", "ghostadmin")
 CHANGED = "SOURCE_CHANGED_DURING_ANALYSIS"
@@ -441,13 +441,14 @@ def test_s07_sql_dump_larger_than_the_old_in_memory_limit_is_streamed(site, evid
     assert run.has_gap("Instrukcja SQL dłuższa niż") and run.coverage("database")["status"] == "PARTIAL"
 
 
-def test_s07_oversized_log_is_skipped_with_gap(site, evidence, analyze):
-    log = sparse(evidence / "logs" / "access.log", cli.MAX_LOG_BYTES + 1, access_line("/" + UPLOAD_PHP))
+def test_s07_log_larger_than_the_old_in_memory_limit_is_streamed(site, evidence, analyze):
+    """Dawny limit 30 MiB zniknął (ADR 0007 pkt 2); bajty zerowe bez końca wiersza to jeden wiersz ponad limit 64 KiB."""
+    log = sparse(evidence / "logs" / "access.log", 31 * 1024 * 1024, access_line("/" + UPLOAD_PHP))
 
     run = analyze(site, logs=log.parent)
 
-    assert run.findings == []
-    assert run.has_gap("Log za duży do parsowania w PoC: access.log")
+    assert "HTTP_EXECUTABLE_IN_UPLOADS" in run.rules
+    assert run.has_gap("Nie sparsowano 1/2 wierszy logów") and run.coverage("logs")["status"] == "PARTIAL"
 
 
 # --- S-08: złośliwe wejście dla wyrażeń regularnych ----------------------------------------------
@@ -668,8 +669,7 @@ def _canary_log_query(site, evidence):
 
 
 @pytest.mark.parametrize("build", [
-    _canary_wp_config, _canary_password_hash,
-    pytest.param(_canary_log_query, marks=pytest.mark.xfail(strict=True, reason="query string z logu trafia bez redakcji do metadata.uri w report.json (#14)")),
+    _canary_wp_config, _canary_password_hash, _canary_log_query,
 ], ids=["wp-config-password", "user-pass-column", "log-query-token"])
 def test_s13_canary_secret_never_reaches_any_output(site, evidence, analyze, build):
     run = analyze(site, **build(site, evidence))
@@ -716,6 +716,7 @@ def test_report_never_contains_an_absolute_host_path(evidence, tmp_path, analyze
     assert not re.search(r"/(private|var|tmp|home|Users)/", run.json_text + run.html)
 
 
+@pytest.mark.parametrize("fmt", ["combined", "common", "json"])
 @pytest.mark.parametrize("line", [
     '192.0.2.10 - - [x] "GET ' + "\t" * 20_000,
     '192.0.2.10 - - [x] "GET ' + "/a " * 20_000,
@@ -723,9 +724,9 @@ def test_report_never_contains_an_absolute_host_path(evidence, tmp_path, analyze
     '192.0.2.10 - - [x] "GET /a' + " " * 20_000,
     '192.0.2.10 - - [x] "GET /a ' + "x " * 20_000,
 ], ids=["tabs-after-method", "many-tokens", "many-dashes", "spaces-after-uri", "no-closing-quote"])
-def test_s08_crafted_log_line_does_not_stall_the_log_pattern(line):
+def test_s08_crafted_log_line_does_not_stall_the_log_parser(line, fmt):
     with time_limit(2):
-        assert cli.LOG_PATTERN.match(line) is None
+        assert isinstance(logformats.parse(fmt, line), str)
 
 
 

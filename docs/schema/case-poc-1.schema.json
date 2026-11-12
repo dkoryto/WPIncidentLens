@@ -43,7 +43,22 @@
           "if": {"properties": {"provided": {"const": false}}},
           "then": {"properties": {"name": {"type": "null"}, "format": false}}
         },
-        "logs": {"$ref": "#/$defs/source"},
+        "logs": {
+          "description": "Pola format (combined, common albo json: --log-format), trusted_proxies (sieci z --trusted-proxy w postaci kanonicznej) i clock_skew_seconds (--log-clock-skew; null, gdy niezadeklarowana) występują, gdy logi podano. Dokumenty sprzed ich wprowadzenia ich nie mają.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provided", "name"],
+          "properties": {
+            "provided": {"type": "boolean"},
+            "name": {"$ref": "#/$defs/source/properties/name"},
+            "format": {"enum": ["combined", "common", "json"]},
+            "trusted_proxies": {"type": "array", "maxItems": 64, "uniqueItems": true,
+                                "items": {"type": "string", "pattern": "^[0-9A-Fa-f.:]+/[0-9]{1,3}$"}},
+            "clock_skew_seconds": {"anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}]}
+          },
+          "if": {"properties": {"provided": {"const": false}}},
+          "then": {"properties": {"name": {"type": "null"}, "format": false, "trusted_proxies": false, "clock_skew_seconds": false}}
+        },
         "baseline": {"$ref": "#/$defs/source"},
         "core_checksums": {
           "description": "Opcjonalne: lokalny manifest sum rdzenia WordPress.org podany w --core-checksums. Pole występuje tylko wtedy, gdy manifest podano; w report.json manifest należy do źródła baseline.",
