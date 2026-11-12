@@ -16,6 +16,10 @@ python -m pytest -q
 python -m wpincidentlens --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output results --case-id DEMO-001
 ```
 
+Opcjonalnie `--core-checksums PLIK` wskazuje **lokalny** plik JSON z sumami MD5 rdzenia w kształcie `api.wordpress.org/core/checksums/1.0` (`{"checksums": {"wp-admin/about.php": "<md5>", …}}`; można dopisać `wordpress_version` i `reference`). Narzędzie niczego nie pobiera z sieci. Manifest jest wpisem `evidence` źródła `baseline`; MD5 służy tylko do porównania z manifestem (ustalenia `CORE_CHECKSUM_MISMATCH`, `CORE_FILE_NOT_IN_MANIFEST`, `CORE_FILE_MISSING`), skrótem dowodu pozostaje SHA-256. Manifest innej wersji lub locale daje rozbieżności; niepoprawny manifest to błąd wywołania (kod 2). Klasy plików bez referencji są w pokryciu oznaczane `NOT_CHECKED`.
+
+Plik kodu (PHP i pokrewne, `.htaccess`, `.user.ini`, `php.ini`), którego nie porównano z żadną referencją — baseline ani manifestem — obniża pokrycie `files` do `PARTIAL`: zakres jest niepełny, przebieg bez ustaleń daje `INCONCLUSIVE`, a kod wyjścia to 3 (ADR 0005, pkt 6). Dotyczy to także demo powyżej: plik PHP w uploads nie ma referencji. Wpis wymieniony w referencji, którego nie dało się odczytać (dowiązanie, drugi hardlink, brak uprawnień), daje ustalenie `REFERENCE_FILE_UNREADABLE`. Każda reguła integralności zgłasza najwyżej 200 ustaleń na przebieg; nadmiar jest luką z łączną liczbą wykryć. Baseline i manifest z powtórzonym kluczem, ścieżką niewzględną albo skrótem w złej postaci są odrzucane (kod 2).
+
 Otwórz `results/report.html`. Kod wyjścia opisuje pełność analizy, nie wynik: `0` — zakres pełny, `3` — analiza częściowa (np. brak bazy lub logów), `4` — podane źródło nieprzetworzone, `2` — błąd wywołania. Ocenę podaje pole `assessment` w `report.json`.
 
 ## Bezpieczny odczyt dowodów (T-101)
@@ -47,7 +51,7 @@ Wywołanie waliduje `wpincidentlens/case.py` (CaseManager), zanim zostanie przec
 
 - `--case-id` (domyślnie `WPINCIDENTLENS-DEMO`) i opcjonalny `--operator-id`: 1–64 znaki `A-Z a-z 0-9 . _ -`, pierwszy znak inny niż kropka i łącznik. Inna wartość (separator ścieżki, spacja, znak sterujący, znak spoza ASCII) to błąd wywołania (kod 2).
 - `--operator-id` to pseudonim podany przez operatora. Narzędzie nie odczytuje nazwy użytkownika systemu, nazwy hosta ani zmiennych środowiskowych; bez flagi pole ma wartość `null`.
-- Wartość `--known-admin` oraz ścieżki, skróty i loginy w baseline, których nie da się zapisać w UTF-8, są odrzucane (kod 2) przed analizą.
+- Wartość `--known-admin` i loginy w baseline, których nie da się zapisać w UTF-8, oraz ścieżki i skróty w baseline w niepoprawnej postaci są odrzucane (kod 2) przed analizą.
 - `--output` wskazujący dowiązanie symboliczne albo wpis niebędący katalogiem jest odrzucany (kod 2). Sprawdzany jest ostatni składnik ścieżki, nie katalogi nadrzędne.
 - Każdy plik wyników powstaje jako plik tymczasowy w katalogu wyników (uprawnienia `0600`) i jest zamieniany na docelowy dopiero po zapisaniu w całości. Istniejący wpis o nazwie wyniku, także dowiązanie symboliczne, jest zastępowany, a cel dowiązania pozostaje nietknięty. Zamiana trzech plików nie jest jedną operacją: `case.json` jest zamieniany jako ostatni.
 
@@ -58,7 +62,7 @@ Wywołanie waliduje `wpincidentlens/case.py` (CaseManager), zanim zostanie przec
 | `schema_version`, `case_id`, `operator_id` | wersja schematu, identyfikator sprawy, pseudonim operatora albo `null` |
 | `tool`, `tool_version` | jak w `report.json` |
 | `created_at_utc`, `analysis_finished_at_utc` | czas walidacji wywołania i czas zakończenia analizy (równy `analyzed_at_utc` raportu); UTC, zegar narzędzia |
-| `sources` | dla `files`, `database`, `logs`, `baseline`: `provided` oraz `name` — wyłącznie ostatni składnik podanej ścieżki (`null`, gdy źródła nie podano albo ścieżka nie ma nazwy, np. `.`) |
+| `sources` | dla `files`, `database`, `logs`, `baseline`: `provided` oraz `name` — wyłącznie ostatni składnik podanej ścieżki (`null`, gdy źródła nie podano albo ścieżka nie ma nazwy, np. `.`); `core_checksums` w tym samym kształcie tylko wtedy, gdy podano `--core-checksums` |
 | `limits` | wszystkie limity odczytu użyte w przebiegu |
 | `flags` | `allow_hardlinks`, `reverify` |
 | `report` | nazwa pliku raportu i SHA-256 jego zapisanych bajtów |

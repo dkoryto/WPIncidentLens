@@ -49,11 +49,12 @@ def test_complete_scope_without_findings_is_no_indicators_in_analyzed_scope(comp
 
     assert (run.report["assessment"], run.report["scope_complete"], run.exit_code) == ("NO_INDICATORS_IN_ANALYZED_SCOPE", True, 0)
     assert {source: run.coverage(source)["status"] for source in models.SOURCES} == {
-        "files": "ANALYZED", "database": "ANALYZED", "logs": "ANALYZED", "baseline": "NOT_PROVIDED"}
+        "files": "ANALYZED", "database": "ANALYZED", "logs": "ANALYZED", "baseline": "ANALYZED"}
 
 
 def test_counters_of_a_fully_read_source_hold_only_read_entries(complete_case, analyze):
     write(complete_case["site"] / "wp-includes" / "version.php")
+    del complete_case["baseline"]
 
     run = analyze(**complete_case)
 
@@ -147,6 +148,7 @@ def _empty_log_directory(case, tmp_path, monkeypatch):
 
 def _empty_site_directory(case, tmp_path, monkeypatch):
     (case["site"] / "index.php").unlink()
+    del case["baseline"]  # baseline wymieniający usunięty plik dałby ustalenie BASELINE_FILE_MISSING
 
 
 INCOMPLETE_SCOPES = {
@@ -195,15 +197,21 @@ def test_unreadable_database_is_failed_coverage_with_the_error_recorded_on_its_e
     assert run.report["assessment"] == "INCONCLUSIVE"
 
 
-def test_missing_baseline_is_reported_but_does_not_make_the_scope_incomplete(complete_case, analyze):
-    baseline = analyze(**complete_case).coverage("baseline")
+def test_missing_baseline_is_reported_and_leaves_unverified_code_outside_the_scope(complete_case, analyze):
+    """ADR 0005, pkt 6 (zastępuje wariant z ADR 0003): bez referencji kod witryny jest niezweryfikowany, więc zakres jest niepełny."""
+    del complete_case["baseline"]
 
+    run = analyze(**complete_case)
+
+    baseline = run.coverage("baseline")
     assert baseline["status"] == "NOT_PROVIDED"
     assert baseline["reasons"] == ["Brak zaufanej migawki bazowej (baseline): porównanie plików z referencją niewykonane"]
+    assert run.coverage("files")["status"] == "PARTIAL"
+    assert (run.report["assessment"], run.report["scope_complete"], run.exit_code) == ("INCONCLUSIVE", False, 3)
 
 
 def test_provided_baseline_is_analyzed_and_counted(complete_case, analyze):
-    run = analyze(**complete_case, baseline={"files": {"index.php": "0" * 64}, "known_admins": ["siteadmin"]})
+    run = analyze(**{**complete_case, "baseline": {"files": {"index.php": "0" * 64}, "known_admins": ["siteadmin"]}})
 
     assert (run.coverage("baseline")["status"], entries(run, "baseline"), run.coverage("baseline")["reasons"]) == ("ANALYZED", {"READ": 1}, [])
 
@@ -221,7 +229,7 @@ def test_time_limit_hit_during_reverification_makes_every_provided_source_partia
 
     assert run.has_gap("Ponowna weryfikacja przerwana limitem czasu")
     assert {source: run.coverage(source)["status"] for source in models.SOURCES} == {
-        "files": "PARTIAL", "database": "PARTIAL", "logs": "PARTIAL", "baseline": "NOT_PROVIDED"}
+        "files": "PARTIAL", "database": "PARTIAL", "logs": "PARTIAL", "baseline": "PARTIAL"}
     assert (run.report["assessment"], run.exit_code) == ("INCONCLUSIVE", 3)
 
 
@@ -381,7 +389,8 @@ def test_demo_case_is_suspicious_not_strong(demo_case, analyze):
     """Reguły PoC to heurystyki o pewności najwyżej ``medium`` przy wadze ``high``: żadna nie jest silnym wskaźnikiem."""
     run = analyze_demo(analyze, demo_case)
 
-    assert (run.report["assessment"], run.report["scope_complete"], run.exit_code) == ("SUSPICIOUS", True, 0)
+    # Plik PHP w uploads nie ma zaufanej referencji, więc zakres jest niepełny (ADR 0005, pkt 6); ocena wynika z ustaleń.
+    assert (run.report["assessment"], run.report["scope_complete"], run.exit_code) == ("SUSPICIOUS", False, 3)
     assert not any(models.is_strong(models.Finding.from_dict(finding)) for finding in run.report["findings"])
 
 
@@ -428,7 +437,7 @@ def test_html_report_shows_assessment_and_coverage_of_every_source(complete_case
 
     assert "Stan: <strong>INCONCLUSIVE</strong>" in html_report
     for row in ("<td>files</td><td>ANALYZED</td><td>1</td><td>0</td>", "<td>database</td><td>NOT_PROVIDED</td><td>0</td><td>0</td>",
-                "<td>logs</td><td>ANALYZED</td>", "<td>baseline</td><td>NOT_PROVIDED</td>"):
+                "<td>logs</td><td>ANALYZED</td>", "<td>baseline</td><td>ANALYZED</td>"):
         assert row in html_report
 
 
@@ -472,7 +481,7 @@ def _report_from_fresh_process(case: Path, out: Path, hash_seed: str) -> dict:
     command = [sys.executable, "-m", "wpincidentlens", "--files", str(case / "site"), "--database", str(case / "database.sql"),
                "--logs", str(case / "logs"), "--baseline", str(case / "baseline.json"), "--output", str(out)]
     done = subprocess.run(command, cwd=REPOSITORY, env={**os.environ, "PYTHONHASHSEED": hash_seed}, capture_output=True, text=True, timeout=60)
-    assert done.returncode == 0, done.stderr
+    assert done.returncode == 3, done.stderr  # demo: kod w uploads bez zaufanej referencji, zakres niepełny
     return json.loads((out / "report.json").read_text(encoding="utf-8"))
 
 

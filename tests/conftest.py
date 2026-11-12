@@ -47,6 +47,15 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def trusted(site: Path) -> dict:
+    """Baseline zgodny z bieżącą treścią witryny: skrót SHA-256 każdego zwykłego pliku (bez dowiązań symbolicznych).
+
+    Plik kodu bez zaufanej referencji obniża pokrycie (ADR 0005, pkt 6), więc scenariusz „pełny zakres” wymaga baseline.
+    """
+    return {"files": {path.relative_to(site).as_posix(): sha256(path)
+                      for path in sorted(site.rglob("*")) if path.is_file() and not path.is_symlink()}}
+
+
 def tree_digest(root: Path) -> str:
     """Skrót drzewa: ścieżki, tryby, rozmiary, mtime i treść (bez atime, bez podążania za linkami)."""
     h = hashlib.sha256()
@@ -240,9 +249,13 @@ def site(evidence: Path) -> Path:
 
 @pytest.fixture
 def complete_case(site: Path, evidence: Path) -> dict:
-    """Argumenty ``analyze`` dla materiału bez wskaźników, z kompletem źródeł krytycznych: pliki, baza i logi."""
+    """Argumenty ``analyze`` dla materiału bez wskaźników: pliki, baza, logi i baseline zgodny z plikami witryny.
+
+    Test, który dopisuje do witryny plik kodu, podaje własny baseline (``trusted(site)``) albo oczekuje niepełnego zakresu.
+    """
     return {"site": site, "database": write(evidence / "db.sql", admin_sql("siteadmin")),
-            "logs": write(evidence / "logs" / "access.log", access_line("/about/")).parent, "known_admins": ("siteadmin",)}
+            "logs": write(evidence / "logs" / "access.log", access_line("/about/")).parent, "known_admins": ("siteadmin",),
+            "baseline": trusted(site)}
 
 
 @pytest.fixture
@@ -259,7 +272,7 @@ def analyze(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
 
     def run(site: Path, *, database: Path | None = None, logs: Path | None = None,
             baseline: Path | dict | None = None, known_admins: tuple[str, ...] = (), case_id: str = "T003-SYNTH",
-            flags: tuple[str, ...] = ()) -> Run:
+            flags: tuple[str, ...] = (), core_checksums: Path | dict | None = None) -> Run:
         number = next(counter)
         out = tmp_path / f"out-{number}"
         argv = ["--files", str(site), "--output", str(out), "--case-id", case_id, *flags]
@@ -271,6 +284,10 @@ def analyze(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
             baseline = write(tmp_path / f"baseline-{number}.json", json.dumps(baseline))
         if baseline is not None:
             argv += ["--baseline", str(baseline)]
+        if isinstance(core_checksums, dict):
+            core_checksums = write(tmp_path / f"core-checksums-{number}.json", json.dumps(core_checksums))
+        if core_checksums is not None:
+            argv += ["--core-checksums", str(core_checksums)]
         for login in known_admins:
             argv += ["--known-admin", login]
         capsys.readouterr()

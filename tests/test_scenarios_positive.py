@@ -27,7 +27,6 @@ def test_p2_modified_core_file_reports_observed_and_reference_hash(site, analyze
     assert changed["metadata"] == {"sha256": sha256(core), "baseline_sha256": OLD_SHA}
 
 
-@pytest.mark.xfail(strict=True, reason="finding nie niesie wersji referencji; baseline nie ma kontraktu wersji (#6)")
 def test_p2_checksum_mismatch_names_reference_version(site, analyze):
     write(site / "wp-includes" / "version.php")
 
@@ -90,7 +89,6 @@ def test_p5_changed_mu_plugin_is_reported_against_baseline(site, analyze):
     assert run.finding("BASELINE_FILE_CHANGED")["source"] == "wp-content/mu-plugins/loader.php"
 
 
-@pytest.mark.xfail(strict=True, reason="plik nieobecny w baseline (nowy mu-plugin) nie daje żadnego ustalenia (#6)")
 def test_p5_mu_plugin_added_since_baseline_is_reported(site, analyze):
     write(site / "wp-content" / "mu-plugins" / "loader.php")
 
