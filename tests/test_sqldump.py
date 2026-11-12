@@ -131,6 +131,17 @@ def test_buffer_never_holds_more_than_one_statement_and_one_chunk():
     assert parser.rows == 100_000
 
 
+@pytest.mark.parametrize("unit", [b"/**/\\'/*!40101 ", b"/*!40101 \\' */"], ids=["truncated", "terminated"])
+def test_unclosed_strings_after_unwrapping_are_scanned_in_linear_time(unit):
+    """Regresja (fuzz T-601): każdy niedomknięty ``'`` (``\\'`` nie zamyka łańcucha) szukał końca tekstu od nowa
+    przy rozwijaniu urwanej instrukcji i przy szukaniu komentarzy w rozwiniętym kodzie."""
+    data = unit * 20_000 + (b";" if unit.endswith(b"*/") else b"")
+    with time_limit(5):
+        _, parser = sqldump.parse([data])
+
+    assert parser.truncated or parser.unsupported
+
+
 def test_truncated_statement_with_many_unclosed_executable_comments_is_classified_in_linear_time():
     """Regresja (fuzz T-601): ``_unwrap`` szukał ``*/`` od każdego ``/*`` do końca tekstu; 400 KB trwało minuty."""
     with time_limit(5):
@@ -144,7 +155,8 @@ def test_truncated_statement_with_many_unclosed_executable_comments_is_classifie
     b"/*!40101 DROP TABLE IF EXISTS `t` /* */ UPDATE wp_users SET user_pass='x' /* c */;",
     b"/*!40101 LOCK TABLES `t` WRITE # c */;",
     b"/*!40101 DROP TABLE `t` -- c\n */;",
-], ids=["hidden-sql-mode", "hidden-update", "hash-comment-inside", "dash-comment-inside"])
+    b"/*!40101 LOCK TABLES `t` WRITE \\' */;",
+], ids=["hidden-sql-mode", "hidden-update", "hash-comment-inside", "dash-comment-inside", "unclosed-string-inside"])
 def test_comment_left_open_by_an_executable_comment_makes_the_statement_unsupported_not_inert(sql):
     """Regresja (przegląd T-601): komentarz z wnętrza ``/*!…*/`` (``/*`` niedomknięte, ``#``, ``--``) zostaje po rozwinięciu;
     instrukcji nie wolno wtedy sklasyfikować jako obojętnej: klasyfikator widziałby co innego niż serwer."""

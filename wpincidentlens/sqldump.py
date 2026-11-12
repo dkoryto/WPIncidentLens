@@ -67,8 +67,12 @@ _UNWRAP_PATTERN = rb"""
     | /\*.*?\*/ | --(?=[\x00-\x20\x7f]|\Z)[^\n]*+ | \#[^\n]*+
 """
 _UNWRAP = re.compile(_UNWRAP_PATTERN, re.X | re.S)
-_UNWRAP_TAIL = re.compile(_UNWRAP_PATTERN.replace(rb"\*/", rb"(?:\*/|\Z)"), re.X | re.S)
-_COMMENT_LEFT = re.compile(rb"""'(?:[^'\\]|\\.)*+'|"(?:[^"\\]|\\.)*+"|`[^`]*+`|(/\*|--(?=[\x00-\x20\x7f]|\Z)|\#)""")
+# W urwanej instrukcji także łańcuch i nazwa mogą sięgać końca tekstu: każdy niedomknięty ``'`` szukałby końca od nowa.
+_UNWRAP_TAIL = re.compile(_UNWRAP_PATTERN.replace(rb"\*/", rb"(?:\*/|\Z)").replace(rb"*+' |", rb"*+(?:'|\\?\Z) |")
+                          .replace(rb'*+" |', rb'*+(?:"|\\?\Z) |').replace(rb"*+` )", rb"*+(?:`|\Z) )"), re.X | re.S)
+# Kod po rozwinięciu: łańcuchy (domknięte — grupa zamknięcia — albo sięgające końca tekstu) i początki komentarzy.
+_COMMENT_LEFT = re.compile(rb"""'(?:[^'\\]|\\.)*+(?:(')|\\?\Z)|"(?:[^"\\]|\\.)*+(?:(")|\\?\Z)|`[^`]*+(?:(`)|\Z)"""
+                           rb"""|(/\*|--(?=[\x00-\x20\x7f]|\Z)|\#)""")
 _SCRUB = re.compile(rb"'(?:[^'\\]|\\.)*+'|\"(?:[^\"\\]|\\.)*+\"|`[^`]*+`")  # łańcuchy i nazwy poza sprawdzaniem słów
 # SET jest obojętny tylko jako lista prostych przypisań (``SET STATEMENT … FOR …`` wykonuje dowolną instrukcję).
 _SET_VALUE = (rb"(?:'(?:[^'\\]|\\.|'')*+'(?:\s*+'(?:[^'\\]|\\.|'')*+')*+|\"(?:[^\"\\]|\\.|\"\")*+\""
@@ -130,8 +134,9 @@ def _unwrap(text: bytes, tail: bool = False) -> bytes:
 
 
 def _has_comment_left(code: bytes) -> bool:
-    """Czy poza łańcuchami i nazwami został początek komentarza (``/*``, ``--``, ``#``) z wnętrza komentarza wykonywalnego."""
-    return any(found[1] is not None for found in _COMMENT_LEFT.finditer(code))
+    """Czy po rozwinięciu został początek komentarza (``/*``, ``--``, ``#``) albo niedomknięty łańcuch lub nazwa
+    z wnętrza komentarza wykonywalnego. Niedomknięty łańcuch sięga końca tekstu: jedno przejście, czas liniowy."""
+    return any(found[4] is not None or not (found[1] or found[2] or found[3]) for found in _COMMENT_LEFT.finditer(code))
 
 
 def _unescape(match: re.Match) -> bytes:
