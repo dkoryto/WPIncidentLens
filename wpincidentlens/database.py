@@ -54,6 +54,9 @@ def scan_database(path: Path, known_admins: set[str], session: ingest.Session,
         if dbrules.is_core_table(table.lower()):
             spellings.setdefault(table.lower(), set()).add(table)
     variants = sorted(table for group in spellings.values() for table in group if not dbrules.is_core_table(table) or len(group) > 1)
+    if getattr(parser, "names_overflow", False):
+        cover.degrade(f"Zrzut ma więcej niż {sqldump.MAX_TABLES} różnych nazw tabel lub definicji: pisownia nazw tabel "
+                      "i kolejność kolumn z CREATE TABLE nie zostały sprawdzone dla wszystkich")
     if variants:
         cover.degrade(f"Pominięto wiersze {len(variants)} tabel o nazwie różniącej się od tabel WordPressa tylko wielkością liter "
                       f"({', '.join(name[:40] for name in variants[:5])}{', …' if len(variants) > 5 else ''}); "
