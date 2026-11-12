@@ -30,13 +30,20 @@ EXCERPT_LEAD = 40  # ile znaków przed trafieniem zostaje w wycinku
 
 _USERINFO = re.compile(r"(://)[^\s/@\"'<>]{1,200}@")
 _QUERY = re.compile(r"\?[^\s\"'<>]+")  # także „\”: inaczej „?c\sekret” zostawiłby resztę wartości
+# Jeden element wartości: łańcuch w cudzysłowie (do 200 znaków), schemat nagłówka Authorization z tokenem
+# (``Bearer <token>``: sam token stoi po spacji) albo słowo bez białych znaków, opcjonalnie po cudzysłowie
+# (niedomknięty cudzysłów — wiersz ucięty — nie chroni wartości). Słowo kończy się na ``=``/``:`` (dalej jest
+# następny element: ``key=Bearer X``) i nie obejmuje „?”, więc znacznik zapytania zawsze zostaje dla _QUERY.
+_SECRET_PART = (r"(?:\"[^\"<>]{0,200}\"|'[^'<>]{0,200}'"
+                r"|(?:(?:Bearer|Basic|Digest|Negotiate|Token)\s{1,3}|[\"']?)(?:[^\s\"'<>&;,?=:]++[=:]*+|[=:]++))")
 _SECRET = re.compile(
     r"(key|token|passw(?:or)?d|pass|pwd|secret|auth|sig|nonce|session|credential)"
     r"([\w\-\[\]]{0,40}?[\"']?\s{0,3}[=:]\s{0,3})"
-    # Wartość w cudzysłowie albo bez; cudzysłów niedomknięty (wiersz ucięty) nie chroni wartości przed redakcją.
-    # Schemat nagłówka Authorization (``Bearer <token>``) należy do wartości: sam token stoi po spacji.
-    r"(?!\[usunięto\])(?:\"[^\"<>]{0,200}\"|'[^'<>]{0,200}'"
-    r"|(?:Bearer|Basic|Digest|Negotiate|Token)\s{1,3}[^\s\"'<>&;,?]+|[\"']?[^\s\"'<>&;,?]+)", re.I)  # wartość już zastąpiona zostaje
+    # Element kończący się na ``=``/``:`` albo z separatorem po nim wygląda jak kolejna nazwa (``key=token: X``,
+    # ``key=token: "a b"``, ``key=key = X``, ``key=//Authorization: Bearer X``): wartość obejmuje wtedy także
+    # następny element, dowolnej postaci.
+    # Lepiej za dużo niż jawne ``X``. Kwantyfikatory zaborcze i ograniczone: czas liniowy.
+    r"(?!\[usunięto\])" + _SECRET_PART + r"(?:(?:(?<=[=:])|[\"']?\s{0,3}[=:])\s{0,3}" + _SECRET_PART + r")*+", re.I)  # wartość już zastąpiona zostaje
 _AT_DOMAIN = re.compile(r"@(?=[\w\-]{1,63}\.[\w\-])")
 _LOCAL_PART_CHARS = frozenset("._+-")
 _MAX_LOCAL_PART = 64
