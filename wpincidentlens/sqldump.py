@@ -55,11 +55,13 @@ _LEAD = re.compile(rb"(?:\s++|--(?=[\x00-\x20\x7f]|\Z)[^\n]*+|\#[^\n]*+|/\*.*?\*
 _WORD = re.compile(rb"[A-Za-z_]++")
 # Komentarz wykonywalny (/*!NNNNN … */, /*M!NNNNNN … */) serwer wykonuje jak kod: jego treść klasyfikuje się jak
 # instrukcję, a zwykłe komentarze zastępuje spacja. Łańcuchy i nazwy w odwrotnych apostrofach zostają bez zmian.
+# Niedomknięty komentarz (urwana instrukcja na końcu zrzutu) sięga końca tekstu, jak w ``_TOKEN``: inaczej każde
+# z wielu ``/*`` szukałoby ``*/`` do końca tekstu od nowa — czas kwadratowy względem długości instrukcji.
 _EXECUTABLE = re.compile(rb"/\*M?!")
 _UNWRAP = re.compile(rb"""
       (?P<keep> '(?:[^'\\]|\\.)*+' | "(?:[^"\\]|\\.)*+" | `[^`]*+` )
-    | /\*M?!\d{0,6}(?P<code>.*?)\*/
-    | /\*.*?\*/ | --(?=[\x00-\x20\x7f]|\Z)[^\n]*+ | \#[^\n]*+
+    | /\*M?!\d{0,6}(?P<code>.*?)(?:\*/|\Z)
+    | /\*.*?(?:\*/|\Z) | --(?=[\x00-\x20\x7f]|\Z)[^\n]*+ | \#[^\n]*+
 """, re.X | re.S)
 _SCRUB = re.compile(rb"'(?:[^'\\]|\\.)*+'|\"(?:[^\"\\]|\\.)*+\"|`[^`]*+`")  # łańcuchy i nazwy poza sprawdzaniem słów
 # SET jest obojętny tylko jako lista prostych przypisań (``SET STATEMENT … FOR …`` wykonuje dowolną instrukcję).

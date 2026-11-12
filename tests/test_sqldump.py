@@ -131,6 +131,14 @@ def test_buffer_never_holds_more_than_one_statement_and_one_chunk():
     assert parser.rows == 100_000
 
 
+def test_truncated_statement_with_many_unclosed_executable_comments_is_classified_in_linear_time():
+    """Regresja (fuzz T-601): ``_unwrap`` szukał ``*/`` od każdego ``/*`` do końca tekstu; 400 KB trwało minuty."""
+    with time_limit(5):
+        _, parser = sqldump.parse([b"/*!40101 /*!40101 ''" * 20_000])
+
+    assert parser.truncated == ["?"]
+
+
 def test_seeded_mutation_fuzz_never_crashes_and_keeps_counters_consistent():
     """Deterministyczny fuzz: losowe wycięcia, wstawki i podmiany bajtów w poprawnym zrzucie (DoD #7)."""
     base = (admin_sql("siteadmin", "ghost") + option_sql("cron", 'a:1:{i:1;a:0:{}}')).encode() + TRICKY
