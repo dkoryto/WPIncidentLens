@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import filerules, ingest, integrity, models
+from . import filerules, ingest, integrity, models, wpdetect
 from .analysis import Detection, SourceCoverage
 
 
@@ -23,11 +23,13 @@ def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core:
     """Statusy pominiętych wpisów obniżają pokrycie na podstawie rejestru sesji; tutaj trafiają tylko ich opisy."""
     scan = FileScan()
     comparison = integrity.ReferenceComparison(baseline, core)
+    detector = wpdetect.WPDetector(baseline)
     scan_limit = session.limits.max_scan_bytes
     for item in session.read(root, "files", expect="dir", wanted=filerules.wants_content, md5=core is not None):
         scan.cover.note(*item.gaps)
         scan.detections.extend(comparison.check(item))
         scan.detections.extend(filerules.path_rules(item))
+        detector.feed(item)
         if item.sha256 is None:
             continue
         if item.size > scan_limit:
@@ -40,4 +42,5 @@ def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core:
         if item.content is not None:
             scan.detections.extend(filerules.content_rules(item))
     scan.detections.extend(comparison.finish(session, scan.cover))
+    scan.observations.extend(detector.finish(scan.cover))
     return scan

@@ -674,7 +674,7 @@ def test_report_never_contains_an_absolute_host_path(evidence, tmp_path, analyze
     finally:
         locked.chmod(0o600)
 
-    assert len(run.gaps) == 7 and run.findings  # EACCES, FIFO, hardlink, symlink ×2, zmiana po odczycie, plik bez wpisu w baseline
+    assert len(run.gaps) == 8 and run.findings  # EACCES, FIFO, hardlink, symlink ×2, zmiana po odczycie, plik bez wpisu w baseline, nota WPDetector
     assert str(tmp_path) not in run.json_text + run.html
     assert not re.search(r"/(private|var|tmp|home|Users)/", run.json_text + run.html)
 
