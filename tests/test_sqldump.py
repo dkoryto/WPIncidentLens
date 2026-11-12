@@ -139,6 +139,20 @@ def test_truncated_statement_with_many_unclosed_executable_comments_is_classifie
     assert parser.truncated == ["?"]
 
 
+@pytest.mark.parametrize("sql", [
+    b"/*!40101 SET NAMES utf8mb4 /* */ , sql_mode='ANSI_QUOTES' */;",
+    b"/*!40101 DROP TABLE IF EXISTS `t` /* */ UPDATE wp_users SET user_pass='x' /* c */;",
+    b"/*!40101 LOCK TABLES `t` WRITE # c */;",
+    b"/*!40101 DROP TABLE `t` -- c\n */;",
+], ids=["hidden-sql-mode", "hidden-update", "hash-comment-inside", "dash-comment-inside"])
+def test_comment_left_open_by_an_executable_comment_makes_the_statement_unsupported_not_inert(sql):
+    """Regresja (przegląd T-601): komentarz z wnętrza ``/*!…*/`` (``/*`` niedomknięte, ``#``, ``--``) zostaje po rozwinięciu;
+    instrukcji nie wolno wtedy sklasyfikować jako obojętnej: klasyfikator widziałby co innego niż serwer."""
+    _, parser = sqldump.parse([sql])
+
+    assert parser.unsupported >= 1 and parser.mode_change_at is None
+
+
 def test_seeded_mutation_fuzz_never_crashes_and_keeps_counters_consistent():
     """Deterministyczny fuzz: losowe wycięcia, wstawki i podmiany bajtów w poprawnym zrzucie (DoD #7)."""
     base = (admin_sql("siteadmin", "ghost") + option_sql("cron", 'a:1:{i:1;a:0:{}}')).encode() + TRICKY
