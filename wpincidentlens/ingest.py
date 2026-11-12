@@ -96,6 +96,8 @@ class Evidence:
     hardlinked: bool = False
     content: bytes | None = field(default=None, repr=False)
     gaps: tuple[str, ...] = ()
+    # Tylko na żądanie (``read(md5=True)``) i tylko do porównania z publicznym manifestem sum; skrótem dowodu jest SHA-256.
+    md5: str | None = None
 
 
 @dataclass
@@ -203,18 +205,24 @@ def _open_root(path: str | os.PathLike[str], expect: str) -> tuple[int, os.stat_
     raise IngestRefusal(ReadStatus.SKIPPED_SPECIAL, _kind(info.st_mode))
 
 
-def _hash_fd(fd: int, expected: int, keep: bool) -> tuple[str, int, bytes | None]:
-    """Jeden strumieniowy odczyt: skrót, liczba bajtów i (opcjonalnie) treść. Plik rosnący nie zatrzyma narzędzia."""
+def _hash_fd(fd: int, expected: int, keep: bool, md5: bool = False) -> tuple[str, int, bytes | None, str | None]:
+    """Jeden strumieniowy odczyt: skrót, liczba bajtów, (opcjonalnie) treść i (opcjonalnie) MD5 tych samych bajtów.
+
+    Plik rosnący nie zatrzyma narzędzia. MD5 nie pełni funkcji bezpieczeństwa (``usedforsecurity=False``).
+    """
     digest, kept, got = hashlib.sha256(), [], 0
+    extra = hashlib.md5(usedforsecurity=False) if md5 else None
     while got <= expected:
         chunk = os.read(fd, CHUNK_BYTES)
         if not chunk:
             break
         got += len(chunk)
         digest.update(chunk)
+        if extra is not None:
+            extra.update(chunk)
         if keep:
             kept.append(chunk)
-    return digest.hexdigest(), got, b"".join(kept) if keep else None
+    return digest.hexdigest(), got, b"".join(kept) if keep else None, extra.hexdigest() if extra is not None else None
 
 
 def check_source(path: str | os.PathLike[str], expect: str = "any") -> None:
@@ -266,11 +274,13 @@ class Session:
         self._files = self._entries = self._pending = self._bytes = self._hardlinked = 0
 
     def read(self, path: str | os.PathLike[str], source: str, *, expect: str = "any",
-             wanted: Callable[[str], bool] | None = None, keep_limit: int | None = None) -> Iterator[Evidence]:
+             wanted: Callable[[str], bool] | None = None, keep_limit: int | None = None,
+             md5: bool = False) -> Iterator[Evidence]:
         """Czyta źródło (katalog rekurencyjnie albo pojedynczy plik) i zwraca po jednym ``Evidence`` na wpis.
 
         Treść jest zachowywana tylko dla plików nie większych niż ``keep_limit`` (domyślnie limit skanowania),
         dla których ``wanted(rel)`` jest prawdą. Źródła, którego nie da się otworzyć, dotyczy wpis ``rel == ROOT``.
+        ``md5=True`` dolicza MD5 w tym samym odczycie, bez drugiego otwarcia pliku.
         """
         keep_limit = self.limits.max_scan_bytes if keep_limit is None else keep_limit
         if self._expired():
@@ -284,10 +294,10 @@ class Session:
         root = _Root(os.fspath(Path(path)), source, stat.S_ISDIR(info.st_mode), _identity(info))
         self._roots.append(root)
         if root.is_dir:
-            yield from self._walk(fd, root, wanted, keep_limit)
+            yield from self._walk(fd, root, wanted, keep_limit, md5)
             return
         try:
-            yield self._read_regular(fd, info, root, (), Path(path).name, wanted, keep_limit)
+            yield self._read_regular(fd, info, root, (), Path(path).name, wanted, keep_limit, md5)
         finally:
             os.close(fd)
 
@@ -310,7 +320,7 @@ class Session:
     def _expired(self) -> bool:
         return self._clock() > self._deadline
 
-    def _walk(self, root_fd: int, root: _Root, wanted, keep_limit: int) -> Iterator[Evidence]:
+    def _walk(self, root_fd: int, root: _Root, wanted, keep_limit: int, md5: bool = False) -> Iterator[Evidence]:
         """Przejście w głąb bez rekurencji: na stosie leżą otwarte katalogi, więc deskryptorów jest najwyżej tyle, ile poziomów."""
         frames: list[tuple[int, Iterator[str], tuple[str, ...]]] = []
         try:
@@ -351,7 +361,7 @@ class Session:
                     continue
                 try:
                     if stat.S_ISREG(info.st_mode):
-                        record = self._read_regular(fd, info, root, here, rel, wanted, keep_limit)
+                        record = self._read_regular(fd, info, root, here, rel, wanted, keep_limit, md5)
                     else:
                         record = self._skip(root.source, rel, ReadStatus.SKIPPED_SPECIAL, _kind(info.st_mode))
                 finally:
@@ -384,7 +394,7 @@ class Session:
         return None
 
     def _read_regular(self, fd: int, info: os.stat_result, root: _Root, parts: tuple[str, ...], rel: str,
-                      wanted, keep_limit: int) -> Evidence:
+                      wanted, keep_limit: int, md5: bool = False) -> Evidence:
         self._files += 1
         hardlinked = info.st_nlink > 1
         if self._files > self.limits.max_files:
@@ -398,7 +408,7 @@ class Session:
         shown = _printable(rel)
         keep = info.st_size <= keep_limit and (wanted is None or wanted(shown))
         try:
-            sha, got, content = _hash_fd(fd, info.st_size, keep)
+            sha, got, content, extra = _hash_fd(fd, info.st_size, keep, md5)
             after = os.fstat(fd)
         except OSError as exc:
             return self._skip(root.source, rel, ReadStatus.ERROR, _error_name(exc))
@@ -412,7 +422,7 @@ class Session:
         elif shown != rel:
             gaps.append(f"Nazwa spoza UTF-8 zapisana w postaci zastępczej: {_where(root.source, shown)}")
         record = Evidence(root.source, shown, ReadStatus.CHANGED if changed else ReadStatus.READ, "DURING_READ" if changed else "",
-                          sha, got, info.st_mtime_ns, hardlinked, content, tuple(gaps))
+                          sha, got, info.st_mtime_ns, hardlinked, content, tuple(gaps), extra)
         self.ledger.append(replace(record, content=None))
         if not changed:
             root.seen.append(_Seen(len(self.ledger) - 1, parts, _identity(info)))

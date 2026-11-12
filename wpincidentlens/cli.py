@@ -6,6 +6,7 @@ import io
 import json
 import re
 from collections import Counter
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -24,6 +25,7 @@ MAX_SCAN_BYTES = ingest.Limits().max_scan_bytes
 MAX_SQL_BYTES = 20 * 1024 * 1024
 MAX_LOG_BYTES = 30 * 1024 * 1024
 MAX_BASELINE_BYTES = 64 * 1024 * 1024
+MAX_CORE_CHECKSUMS_BYTES = 8 * 1024 * 1024
 
 
 def _session() -> ingest.Session:
@@ -409,6 +411,21 @@ def load_baseline(path: Path, session: ingest.Session) -> dict:
     return data
 
 
+def load_core_checksums(path: Path, session: ingest.Session) -> integrity.CoreChecksums:
+    """Czyta lokalny manifest sum rdzenia WordPress.org tak samo jak baseline; narzędzie niczego nie pobiera z sieci.
+
+    Manifest jest dowodem źródła ``baseline``. Nieczytelny albo o złym kształcie to błąd wejścia (``ValueError``).
+    """
+    item = session.read_file(path, "baseline", keep_limit=MAX_CORE_CHECKSUMS_BYTES)
+    if item.content is None:
+        raise ValueError(item.gaps[0] if item.sha256 is None else f"plik większy niż {MAX_CORE_CHECKSUMS_BYTES} B")
+    try:
+        data = json.loads(item.content.decode("utf-8"))
+    except (ValueError, RecursionError):
+        raise ValueError("niepoprawny JSON (wymagany UTF-8)") from None
+    return integrity.parse_core_checksums(data, replace(item, content=None))
+
+
 def _coverage(source: str, cover: SourceCoverage, ledger: list[ingest.Evidence]) -> models.Coverage:
     """Status źródła z ustaleń skanera i z rejestru: każdy wpis o statusie innym niż READ wyklucza ``ANALYZED``."""
     records = [record for record in ledger if record.source == source]
@@ -456,10 +473,11 @@ def _timeline(detections: list[Detection], evidence: dict[str, models.Evidence])
 
 
 def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline: dict | None, known_admins: set[str],
-                  session: ingest.Session) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation]]:
+                  session: ingest.Session, core: integrity.CoreChecksums | None = None,
+                  ) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation]]:
     """Uruchamia skanery podanych źródeł; źródło niepodane dostaje powód zamiast skanu. Trzeci wynik: fakty bez ustalenia."""
     cover = {source: SourceCoverage(provided=False) for source in models.SOURCES}
-    scan = files.scan_files(root, baseline, session)
+    scan = files.scan_files(root, baseline, session, core)
     detections, cover["files"] = scan.detections, scan.cover
     if database:
         found, cover["database"] = scan_database(database, known_admins, session)
@@ -471,13 +489,18 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
         detections.extend(found)
     else:
         cover["logs"].note("Brak logów HTTP")
-    if baseline is None:
+    if baseline is None and core is None:
         cover["baseline"].note("Brak zaufanej migawki bazowej (baseline): porównanie plików z referencją niewykonane")
-    else:
+    else:  # manifest sum rdzenia jest częścią źródła ``baseline`` (zaufane referencje)
         cover["baseline"] = SourceCoverage()
         cover["baseline"].note(*(gap for record in session.ledger if record.source == "baseline" for gap in record.gaps))
-        if not baseline.get("files"):
+        if baseline is None:
+            cover["baseline"].note("Brak zaufanej migawki bazowej (baseline): referencją jest wyłącznie manifest sum rdzenia")
+        elif not baseline.get("files"):
             cover["baseline"].note("Baseline nie zawiera skrótów plików (files): porównanie plików z referencją niewykonane")
+        if core is not None:
+            cover["baseline"].note("Manifest sum rdzenia (MD5) obejmuje tylko pliki dystrybucji WordPressa; zgodność z nim "
+                                   "nie mówi nic o wtyczkach, motywach, uploads ani konfiguracji")
     return detections, cover, scan.observations
 
 
@@ -500,12 +523,17 @@ def _findings(detections: list[Detection]) -> list[models.Finding]:
 
 def compose_report(root: Path, database: Path | None, logs: Path | None,
                    baseline: dict | None, known_admins: set[str], case_id: str, *,
-                   session: ingest.Session | None = None) -> dict:
-    """Zwraca raport ``poc-1`` jako słownik gotowy do zapisu. ``baseline`` musi pochodzić z ``load_baseline`` tej samej sesji."""
+                   session: ingest.Session | None = None, core: integrity.CoreChecksums | None = None) -> dict:
+    """Zwraca raport ``poc-1`` jako słownik gotowy do zapisu.
+
+    ``baseline`` musi pochodzić z ``load_baseline``, a ``core`` z ``load_core_checksums`` tej samej sesji.
+    """
     session = session or _session()
-    if baseline is not None and integrity.baseline_record(session) is None:
+    if baseline is not None and integrity.baseline_record(session, core) is None:
         raise ValueError("baseline musi być wczytany przez load_baseline w tej samej sesji odczytu")
-    detections, cover, facts = _scan_sources(root, database, logs, baseline, known_admins, session)
+    if core is not None and core.record not in session.ledger:
+        raise ValueError("manifest sum musi być wczytany przez load_core_checksums w tej samej sesji odczytu")
+    detections, cover, facts = _scan_sources(root, database, logs, baseline, known_admins, session, core)
     session_gaps = session.finish()  # od tej chwili rejestr sesji ma ostateczne statusy (także CHANGED z ponownej weryfikacji)
     for source, text in session.integrity_notes:
         for name in [source] if source else [name for name in models.SOURCES if cover[name].provided]:
@@ -543,6 +571,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--database", type=Path)
     parser.add_argument("--logs", type=Path)
     parser.add_argument("--baseline", type=Path, help="Zaufany JSON: {files: {ścieżka: sha256}, known_admins: [...]} ")
+    parser.add_argument("--core-checksums", type=Path,
+                        help="Lokalny plik JSON z sumami MD5 rdzenia w kształcie api.wordpress.org core/checksums/1.0: "
+                             "{checksums: {ścieżka: md5}}; narzędzie niczego nie pobiera z sieci")
     parser.add_argument("--known-admin", action="append", default=[])
     parser.add_argument("--case-id", default="WPINCIDENTLENS-DEMO",
                         help="Identyfikator sprawy: 1–64 znaki A-Z a-z 0-9 . _ -, pierwszy znak inny niż kropka i łącznik (%(default)s)")
@@ -567,7 +598,7 @@ def main(argv: list[str] | None = None) -> int:
         context = case.build(
             files=args.files, database=args.database, logs=args.logs, baseline=args.baseline, output=args.output,
             case_id=args.case_id, operator_id=args.operator_id, known_admins=args.known_admin,
-            allow_hardlinks=args.allow_hardlinks, reverify=not args.no_reverify,
+            allow_hardlinks=args.allow_hardlinks, reverify=not args.no_reverify, core_checksums=args.core_checksums,
             limits={"max_files": args.max_files, "max_entries": args.max_entries, "max_file_bytes": args.max_file_bytes,
                     "max_total_bytes": args.max_total_bytes, "max_scan_bytes": MAX_SCAN_BYTES, "max_seconds": args.max_seconds,
                     "max_depth": args.max_depth, "max_path_bytes": args.max_path_bytes})
@@ -580,8 +611,14 @@ def main(argv: list[str] | None = None) -> int:
             baseline = case.check_baseline(load_baseline(context.baseline, session))
         except ValueError as invalid:
             parser.error(f"--baseline: {invalid}")
+    core = None
+    if context.core_checksums:
+        try:
+            core = load_core_checksums(context.core_checksums, session)
+        except ValueError as invalid:
+            parser.error(f"--core-checksums: {invalid}")
     admins = set(context.known_admins) | set((baseline or {}).get("known_admins", []))
-    output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session)
+    output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session, core=core)
     code = exit_code(output)
     try:
         report.write(context.output, output, context.describe(), code)

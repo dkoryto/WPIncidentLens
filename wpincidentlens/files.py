@@ -19,12 +19,12 @@ class FileScan:
     observations: list[models.Observation] = field(default_factory=list)  # fakty, z których nie powstaje ustalenie
 
 
-def scan_files(root: Path, baseline: dict | None, session: ingest.Session) -> FileScan:
+def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core: integrity.CoreChecksums | None = None) -> FileScan:
     """Statusy pominiętych wpisów obniżają pokrycie na podstawie rejestru sesji; tutaj trafiają tylko ich opisy."""
     scan = FileScan()
-    comparison = integrity.BaselineComparison(baseline)
+    comparison = integrity.ReferenceComparison(baseline, core)
     scan_limit = session.limits.max_scan_bytes
-    for item in session.read(root, "files", expect="dir", wanted=filerules.wants_content):
+    for item in session.read(root, "files", expect="dir", wanted=filerules.wants_content, md5=core is not None):
         scan.cover.note(*item.gaps)
         scan.detections.extend(comparison.check(item))
         scan.detections.extend(filerules.path_rules(item))

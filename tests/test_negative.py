@@ -123,7 +123,8 @@ def test_empty_source_directory_is_reported_as_coverage_gap(evidence, analyze, s
     reference = analyze(**populated)
     run = analyze(**{**populated, source: empty})
 
-    assert set(run.gaps) > set(reference.gaps)
+    unverified = {gap for gap in reference.gaps if gap.startswith("NOT_CHECKED")}  # w pustym katalogu nie ma czego weryfikować
+    assert set(run.gaps) > set(reference.gaps) - unverified
 
 
 # --- N7: czas -----------------------------------------------------------------------------------

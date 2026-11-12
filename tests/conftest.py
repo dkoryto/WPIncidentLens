@@ -259,7 +259,7 @@ def analyze(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
 
     def run(site: Path, *, database: Path | None = None, logs: Path | None = None,
             baseline: Path | dict | None = None, known_admins: tuple[str, ...] = (), case_id: str = "T003-SYNTH",
-            flags: tuple[str, ...] = ()) -> Run:
+            flags: tuple[str, ...] = (), core_checksums: Path | dict | None = None) -> Run:
         number = next(counter)
         out = tmp_path / f"out-{number}"
         argv = ["--files", str(site), "--output", str(out), "--case-id", case_id, *flags]
@@ -271,6 +271,10 @@ def analyze(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
             baseline = write(tmp_path / f"baseline-{number}.json", json.dumps(baseline))
         if baseline is not None:
             argv += ["--baseline", str(baseline)]
+        if isinstance(core_checksums, dict):
+            core_checksums = write(tmp_path / f"core-checksums-{number}.json", json.dumps(core_checksums))
+        if core_checksums is not None:
+            argv += ["--core-checksums", str(core_checksums)]
         for login in known_admins:
             argv += ["--known-admin", login]
         capsys.readouterr()
