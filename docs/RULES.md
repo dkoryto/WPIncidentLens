@@ -119,6 +119,15 @@ Atrybuty każdej obserwacji: `value`, `confidence`, `origin`, `basis` (uzasadnie
 - Luki (`PARTIAL`): każda inna instrukcja (liczona pod pierwszym słowem, np. `UPDATE ×1`); `INSERT` poza gramatyką, `REPLACE`, `DELIMITER`, komentarz wykonywalny z `INSERT`/`REPLACE`, polecenie klienta (`\g`, `\d`); wiersz z wyrażeniem zamiast literału (sam wiersz, reszta instrukcji jest czytana); niedomknięta instrukcja na końcu; wartość spoza UTF-8 (dekodowana ze znakiem zastępczym); instrukcja dłuższa niż 16 MiB — od niej reszta zrzutu nie jest analizowana.
 - Znane fałszywe luki: `INSERT … ON DUPLICATE KEY UPDATE`, `INSERT IGNORE` i rozszerzenia narzędzi hostingowych są poprawnym SQL, ale wychodzą poza gramatykę. Luka nie jest ustaleniem, obniża jedynie pokrycie.
 
+### Eksport JSONL (`jsonldb`)
+
+- Wybór operatora: `--database-format jsonl` (domyślnie `sql`). Formatu nie zgaduje się po treści; zrzut SQL podany jako JSONL nie jest parsowany jako SQL, tylko odrzucany wiersz po wierszu. Wybór trafia do `case.json` (`sources.database.format`).
+- Kontrakt: jeden obiekt JSON na wiersz pliku, dokładnie dwa klucze: `{"table": "<nazwa>", "row": {"<kolumna>": <wartość>, …}}`. Nazwy: `[A-Za-z0-9_$]{1,64}`. Wartość: łańcuch, liczba (zachowuje zapis tekstowy z pliku) albo `null`; `row` niepusty. Ścisłe UTF-8. Wiersz pusty lub z samych spacji i tabulacji jest pomijany bez śladu; końcowe `\r` jest usuwane; ostatni wiersz bez znaku końca jest czytany. Numer wiersza w położeniu faktu to numer wiersza pliku.
+- Rozpoznanie tabel rdzenia, prefiks i reguły są takie same jak dla SQL (niżej); reguły nie wiedzą, z jakiego formatu pochodzi wiersz. Brakująca kolumna (np. `meta_key`) jest traktowana jak pusta wartość: taki wiersz zwykle nic nie wnosi do reguł, a luka nie powstaje.
+- Wiersz odrzucony (luka `PARTIAL` z liczbą wierszy per powód i numerem pierwszego): niepoprawny JSON (także BOM, kilka obiektów w wierszu, zagnieżdżenie przekraczające limit rekursji), powtórzony klucz na dowolnym poziomie, wartość logiczna, tablica, obiekt, `NaN`/`Infinity`, łańcuch z samotnym surogatem, niepoprawna nazwa tabeli lub kolumny, inna budowa niż powyżej, niepoprawne UTF-8, wiersz dłuższy niż 16 MiB (pomijany do najbliższego znaku końca wiersza, bez buforowania).
+- `FAILED`: żaden wiersz pliku nie spełnia kontraktu albo żaden nie należy do tabel `*_users`, `*_usermeta`, `*_options`.
+- Znane fałszywe luki: eksport z wartościami logicznymi lub kolumnami JSON zapisanymi jako zagnieżdżony obiekt (zamiast łańcucha) jest poprawnym JSON, ale wychodzi poza kontrakt. Adapter nie wie, czy eksport objął wszystkie tabele i wiersze — kompletność zależy od narzędzia, które go wykonało.
+
 ### Które tabele są analizowane
 
 - Prefiks tabel wynika ze zrzutu. Kandydatem jest każda tabela o nazwie `<prefiks>users`, `<prefiks>usermeta` albo `<prefiks>options` (prefiks dowolny, także bez `_` i pusty).

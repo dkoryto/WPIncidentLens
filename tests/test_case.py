@@ -212,7 +212,7 @@ def test_case_json_contains_no_host_path(demo_case, analyze, tmp_path):
 
 def test_case_json_names_only_the_last_component_of_each_source(demo_case, analyze):
     assert analyze_demo(analyze, demo_case).case["sources"] == {
-        "files": {"provided": True, "name": "site"}, "database": {"provided": True, "name": "database.sql"},
+        "files": {"provided": True, "name": "site"}, "database": {"provided": True, "name": "database.sql", "format": "sql"},
         "logs": {"provided": True, "name": "logs"}, "baseline": {"provided": True, "name": "baseline.json"}}
 
 
