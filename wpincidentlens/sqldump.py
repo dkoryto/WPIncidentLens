@@ -76,6 +76,14 @@ _FORBIDDEN_DDL = re.compile(rb"(?<![A-Za-z0-9_$])(?:SELECT|LIKE|UNION|AS|GENERAT
 _DDL_PART = re.compile(rb"[^()'\"`,]++|'(?:[^'\\]|\\.|'')*+'|\"(?:[^\"\\]|\\.|\"\")*+\"|`[^`]*+`|[(),]", re.S)
 _DDL_COLUMN = re.compile(rb"\s*+(?:`([A-Za-z0-9_$]{1,64})`|([A-Za-z_][A-Za-z0-9_$]{0,63}))(?![A-Za-z0-9_$])")
 _DDL_NOT_COLUMN = frozenset({"PRIMARY", "KEY", "UNIQUE", "INDEX", "CONSTRAINT", "FULLTEXT", "SPATIAL", "FOREIGN", "CHECK", "PERIOD"})
+MAX_VARIABLES = 100  # zmiennych użytkownika zapamiętanych z SET
+_QUOTED = re.compile(rb"'(?:[^'\\]|\\.|'')*+'|\"(?:[^\"\\]|\\.|\"\")*+\"", re.S)
+_TABLE_OPTIONS = re.compile(
+    rb"(?:\s*+,?\s*+(?:ENGINE\s*+=?\s*+(?:InnoDB|MyISAM|Aria|MEMORY|HEAP)(?![A-Za-z0-9_])"
+    rb"|(?:DEFAULT\s++)?(?:CHARSET|CHARACTER\s++SET|COLLATE)\s*+=?\s*+[A-Za-z0-9_]++"
+    rb"|(?:AUTO_INCREMENT|AVG_ROW_LENGTH|CHECKSUM|DELAY_KEY_WRITE|KEY_BLOCK_SIZE|MAX_ROWS|MIN_ROWS|PACK_KEYS|PAGE_CHECKSUM"
+    rb"|STATS_AUTO_RECALC|STATS_PERSISTENT|STATS_SAMPLE_PAGES|TRANSACTIONAL|ROW_FORMAT)\s*+=?\s*+[A-Za-z0-9_]++"
+    rb"|COMMENT\s*+=?\s*+'(?:[^'\\]|\\.|'')*+'))*+\s*+", re.I | re.S)
 MAX_UNANALYSED_KEYS = 200  # różnych słów kluczowych w liczniku; dalsze trafiają pod „(inne)”
 _NAME = rb"(?:`([A-Za-z0-9_$]{1,64})`|([A-Za-z0-9_$]{1,64})(?![A-Za-z0-9_$.]))"
 _HEAD = re.compile(rb"INSERT\s++INTO\s++" + _NAME + rb"\s*+(?:\(([^()]*+)\)\s*+)?VALUES\s*+", re.I)
@@ -133,7 +141,10 @@ class DumpParser:
     # podział na instrukcje byłby niepewny, więc dalszej części zrzutu nie analizowano. ``mode_change`` mówi, co zmieniła.
     mode_change_at: int | None = None
     mode_change: str = ""
-    ddl: dict[str, list[str]] = field(default_factory=dict)  # tabela → kolumny z CREATE TABLE (dla INSERT bez listy kolumn)
+    # Tabela (małymi literami: serwer może nie rozróżniać wielkości liter) → kolumny z CREATE TABLE, dla INSERT bez listy.
+    ddl: dict[str, list[str]] = field(default_factory=dict)
+    ddl_names: set[str] = field(default_factory=set)  # nazwy z CREATE TABLE w oryginalnej pisowni
+    _vars: dict[str, str | None] = field(default_factory=dict)  # zmienne użytkownika z SET (np. @OLD_SQL_MODE)
     _buf: bytes = b""
     _start: int = 0            # początek bieżącej instrukcji w buforze
     _pos: int = 0              # dokąd bufor został podzielony na leksemy
@@ -238,57 +249,83 @@ class DumpParser:
         self.unanalysed[keyword] += 1
 
     def _set(self, code: bytes, lead: int) -> bool:
-        """SET jako lista prostych przypisań jest obojętny; zmiana trybu czytania łańcuchów zatrzymuje analizę."""
+        """SET jako lista prostych przypisań jest obojętny; zmiana trybu czytania łańcuchów zatrzymuje analizę.
+
+        Wartość ``sql_mode`` i kodowania klienta musi być znana: łańcuch, nazwa, kopia zmiennej systemowej albo zmienna
+        użytkownika z taką wartością przypisaną wcześniej w tym zrzucie. Liczba (maska bitowa), zapis szesnastkowy
+        i nieznana zmienna zatrzymują analizę jak tryb niebezpieczny.
+        """
         match = _SET.fullmatch(code, lead, len(code.rstrip()))
         if match is None:
             return False
-        charsets = [match["names"] or match["charset"] or b""]
-        modes: list[bytes] = []
+        settings: list[tuple[str, str | None]] = []
+        if match["names"] or match["charset"]:
+            settings.append(("names", (match["names"] or match["charset"]).strip(b"'\"").decode("latin-1")))
         for assign in _ASSIGN.finditer(match["assign"] or b""):
             target = assign["target"].decode("ascii").lower().replace("`", "")
+            value = self._resolve(assign["value"])
             if target.startswith("@") and not target.startswith("@@"):
-                continue  # zmienna użytkownika (np. @OLD_SQL_MODE) nie zmienia trybu sesji
+                if target in self._vars or len(self._vars) < MAX_VARIABLES:
+                    self._vars[target] = value
+                continue
             name = target.rsplit(".", 1)[-1].split()[-1].lstrip("@")
-            value = assign["value"]
-            if value.startswith(b"@"):
-                continue  # przywrócenie wartości zapamiętanej wcześniej (wzorzec mysqldump)
-            if name == "sql_mode":
-                modes.append(value)
-            elif name in ("character_set_client", "names"):
-                charsets.append(value)
-        for value in modes:
-            if found := _UNSAFE_MODES.search(value.decode("latin-1")):
+            if name in ("sql_mode", "character_set_client", "names"):
+                settings.append((name, value))
+        for name, value in settings:
+            if value is None:
+                self.mode_change_at, self.mode_change = 0, f"{name} z wartości, której parser nie zna"
+            elif name == "sql_mode" and (found := _UNSAFE_MODES.search(value)):
                 self.mode_change_at, self.mode_change = 0, f"sql_mode {found[0].upper()}"
-                return True
-        for value in charsets:
-            charset = value.strip(b"'\"").decode("latin-1").lower()
-            if charset and charset not in _SAFE_CHARSETS:
-                self.mode_change_at, self.mode_change = 0, f"kodowanie klienta {charset[:40]}"
-                return True
+            elif name != "sql_mode" and value and value.lower() not in _SAFE_CHARSETS:
+                self.mode_change_at, self.mode_change = 0, f"kodowanie klienta {value[:40].lower()}"
+            else:
+                continue
+            return True
         return True
 
+    def _resolve(self, value: bytes) -> str | None:
+        """Wartość przypisania jako tekst; ``""`` = kopia ustawienia sesji (``@@…``); ``None`` = nieznana."""
+        if value.startswith(b"@@"):
+            return ""
+        if value.startswith(b"@"):
+            return self._vars.get(value.decode("ascii").lower())
+        if value[:1] in (b"'", b'"'):
+            return "".join(_ESCAPE.sub(_unescape, part[1:-1]).decode("latin-1") for part in _QUOTED.findall(value))
+        if value[:1].isalpha() or value[:1] == b"_":
+            return value.decode("latin-1")
+        return None  # liczba lub zapis szesnastkowy: dla sql_mode to maska bitowa
+
     def _definition(self, word: str, kind: str, code: bytes, lead: int) -> bool:
-        """Czy CREATE/DROP/ALTER jest obojętne: definicja tabeli bez danych, usunięcie tabeli, ALTER … KEYS."""
+        """Czy CREATE/DROP/ALTER jest obojętne: definicja tabeli bez danych, usunięcie tabeli, ALTER … KEYS.
+
+        Sprawdzana jest postać bez komentarzy: apostrof w komentarzu nie może otworzyć łańcucha i ukryć słowa.
+        """
+        plain = _unwrap(code)
+        lead = _LEAD.match(plain).end()
+        end = len(plain.rstrip())
         if word == "DROP":
             return kind in _INERT_OBJECTS
         if word == "ALTER":
-            return kind in ("DATABASE", "SCHEMA") or _ALTER_KEYS.fullmatch(code, lead, len(code.rstrip())) is not None
+            return kind in ("DATABASE", "SCHEMA") or _ALTER_KEYS.fullmatch(plain, lead, end) is not None
         if kind in ("DATABASE", "SCHEMA"):
             return True
-        head = _CREATE_TABLE.match(code, lead)
-        if head is None or _FORBIDDEN_DDL.search(_SCRUB.sub(b"''", code)):
+        head = _CREATE_TABLE.match(plain, lead)
+        if head is None or _FORBIDDEN_DDL.search(_SCRUB.sub(b"''", plain)):
             return False
-        columns = self._columns_of(code, head.end() - 1)
-        if columns is None:
+        found = self._columns_of(plain, head.end() - 1)
+        # Po liście kolumn wolno stać tylko znanym opcjom tabeli (bez TABLE, SELECT, PARTITION, silnika CSV…).
+        if found is None or _TABLE_OPTIONS.fullmatch(plain, found[1], end) is None:
             return False
         table = (head[1] or head[2]).decode("ascii")
-        if table in self.ddl or len(self.ddl) < MAX_TABLES:
-            self.ddl[table] = columns
+        if len(self.ddl_names) < MAX_TABLES:
+            self.ddl_names.add(table)
+        if table.lower() in self.ddl or len(self.ddl) < MAX_TABLES:
+            self.ddl[table.lower()] = found[0]
         return True
 
     @staticmethod
-    def _columns_of(code: bytes, start: int) -> list[str] | None:
-        """Nazwy kolumn z listy definicji w nawiasie od ``start``; ``None``, gdy nawiasy się nie domykają."""
+    def _columns_of(code: bytes, start: int) -> tuple[list[str], int] | None:
+        """Nazwy kolumn z listy definicji w nawiasie od ``start`` i pozycja za nawiasem; ``None``, gdy się nie domyka."""
         depth, item, columns = 0, b"", []
         for part in _DDL_PART.finditer(code, start):
             token = part[0]
@@ -299,6 +336,7 @@ class DumpParser:
             elif token == b")":
                 depth -= 1
                 if depth == 0:
+                    after = part.end()
                     break
             if depth == 1 and token == b",":
                 columns.append(item)
@@ -316,7 +354,7 @@ class DumpParser:
             if column[2] and column[2].decode("ascii").upper() in _DDL_NOT_COLUMN:
                 continue
             names.append((column[1] or column[2]).decode("ascii"))
-        return names
+        return names, after
 
     @staticmethod
     def _table(head: re.Match) -> str:
@@ -333,7 +371,7 @@ class DumpParser:
                     return False
                 columns.append((column[1] or column[2]).decode("ascii"))
         else:
-            columns = list(self.ddl.get(table, ()))  # kolejność kolumn z CREATE TABLE tego zrzutu, jeśli była
+            columns = list(self.ddl.get(table.lower(), ()))  # kolejność kolumn z CREATE TABLE tego zrzutu, jeśli była
         decode = self.wanted is None or self.wanted(table)
         rows: list = []
         expressions, pos, end = 0, head.end(), len(text.rstrip())
