@@ -28,7 +28,7 @@ EXCERPT_CHARS = 200
 EXCERPT_LEAD = 40  # ile znaków przed trafieniem zostaje w wycinku
 
 _USERINFO = re.compile(r"(://)[^\s/@\"'<>]{1,200}@")
-_QUERY = re.compile(r"\?[^\s\"'<>\\]+")
+_QUERY = re.compile(r"\?[^\s\"'<>]+")  # także „\”: inaczej „?c\sekret” zostawiłby resztę wartości
 _SECRET = re.compile(
     r"(key|token|passw(?:or)?d|pass|pwd|secret|auth|sig|nonce|session|credential)"
     r"([\w\-\[\]]{0,40}?[\"']?\s{0,3}[=:]\s{0,3})"
