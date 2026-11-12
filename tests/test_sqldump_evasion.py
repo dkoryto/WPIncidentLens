@@ -224,3 +224,34 @@ def test_table_definition_in_other_case_still_orders_the_columns_and_is_a_gap(si
 
     assert run.finding("UNRECOGNIZED_ADMIN")["metadata"]["username"] == "ghost"
     assert run.has_gap("tylko wielkością liter") and run.coverage("database")["status"] == "PARTIAL"
+
+
+# --- trzecia runda (automatyczny przegląd commita #44) -------------------------------------------
+
+@pytest.mark.parametrize("statements, change", [
+    ("SET @@session.character_set_results='gbk'; SET character_set_client=@@character_set_results;", "gbk"),
+    ("SET @m='TRADITIONAL'; SELECT @m:='NO_BACKSLASH_ESCAPES'; SET sql_mode=@m;", "wartości, której parser nie zna"),
+    ("SET @m='TRADITIONAL'; INSERT INTO t VALUES (@m:='ANSI'); SET sql_mode=@m;", "wartości, której parser nie zna"),
+    ("SET @@session.x=1; SELECT 1; SET sql_mode=@@x;", "wartości, której parser nie zna"),
+    ("SET sql_mode = CONCAT('NO_BACKSLASH', '_ESCAPES');", "nierozpoznany SET"),
+], ids=["copy-of-a-changed-system-variable", "variable-changed-by-select", "variable-changed-in-insert",
+        "system-variable-after-unrecognised-statement", "unrecognised-set-of-sql-mode"])
+def test_variables_are_not_trusted_after_they_could_have_changed(statements, change):
+    _, parser = sqldump.parse([statements.encode()])
+
+    assert change in parser.mode_change
+
+
+def test_restoring_the_original_session_mode_is_not_a_stop():
+    _, parser = sqldump.parse([b"SET sql_mode=@@GLOBAL.sql_mode; SET NAMES utf8mb4;"])
+
+    assert parser.mode_change_at is None
+
+
+def test_name_registry_overflow_is_a_gap(site, evidence, analyze, monkeypatch):
+    monkeypatch.setattr(sqldump, "MAX_TABLES", 3)
+    tables = "".join(f"CREATE TABLE `t{n}` (`a` int);\n" for n in range(5))
+
+    run = analyze(site, database=write(evidence / "db.sql", admin_sql("siteadmin") + tables), known_admins=("siteadmin",))
+
+    assert run.has_gap("różnych nazw tabel lub definicji") and run.coverage("database")["status"] == "PARTIAL"

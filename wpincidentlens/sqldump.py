@@ -76,7 +76,8 @@ _FORBIDDEN_DDL = re.compile(rb"(?<![A-Za-z0-9_$])(?:SELECT|LIKE|UNION|AS|GENERAT
 _DDL_PART = re.compile(rb"[^()'\"`,]++|'(?:[^'\\]|\\.|'')*+'|\"(?:[^\"\\]|\\.|\"\")*+\"|`[^`]*+`|[(),]", re.S)
 _DDL_COLUMN = re.compile(rb"\s*+(?:`([A-Za-z0-9_$]{1,64})`|([A-Za-z_][A-Za-z0-9_$]{0,63}))(?![A-Za-z0-9_$])")
 _DDL_NOT_COLUMN = frozenset({"PRIMARY", "KEY", "UNIQUE", "INDEX", "CONSTRAINT", "FULLTEXT", "SPATIAL", "FOREIGN", "CHECK", "PERIOD"})
-MAX_VARIABLES = 100  # zmiennych użytkownika zapamiętanych z SET
+MAX_VARIABLES = 100  # zmiennych użytkownika i systemowych zapamiętanych z SET
+_MODE_WORDS = re.compile(rb"sql_mode|character_set|(?<![A-Za-z0-9_])(?:NAMES|CHARSET)(?![A-Za-z0-9_])", re.I)
 _QUOTED = re.compile(rb"'(?:[^'\\]|\\.|'')*+'|\"(?:[^\"\\]|\\.|\"\")*+\"", re.S)
 _TABLE_OPTIONS = re.compile(
     rb"(?:\s*+,?\s*+(?:ENGINE\s*+=?\s*+(?:InnoDB|MyISAM|Aria|MEMORY|HEAP)(?![A-Za-z0-9_])"
@@ -145,6 +146,10 @@ class DumpParser:
     ddl: dict[str, list[str]] = field(default_factory=dict)
     ddl_names: set[str] = field(default_factory=set)  # nazwy z CREATE TABLE w oryginalnej pisowni
     _vars: dict[str, str | None] = field(default_factory=dict)  # zmienne użytkownika z SET (np. @OLD_SQL_MODE)
+    _sysvars: dict[str, str | None] = field(default_factory=dict)  # zmienne systemowe ustawione w zrzucie
+    _sys_unknown: bool = False  # po nierozpoznanej instrukcji wartości zmiennych systemowych są nieznane
+    # Rejestr nazw tabel lub definicji przekroczył limit: sprawdzenie pisowni i kolejności kolumn jest niepełne.
+    names_overflow: bool = False
     _buf: bytes = b""
     _start: int = 0            # początek bieżącej instrukcji w buforze
     _pos: int = 0              # dokąd bufor został podzielony na leksemy
@@ -206,6 +211,15 @@ class DumpParser:
     # --- jedna instrukcja -------------------------------------------------------------------------
 
     def _finish_statement(self, text: bytes, terminated: bool, out: list) -> None:
+        before = (self.unsupported, sum(self.unanalysed.values()), self.expression_rows)
+        self._classify(text, terminated, out)
+        if (self.unsupported, sum(self.unanalysed.values()), self.expression_rows) != before:
+            # Nierozpoznana instrukcja albo wiersz z wyrażeniem mógł zmienić zmienne (SELECT @m:=…, SET … = (SELECT …)):
+            # od tej chwili ich wartości są nieznane.
+            self._vars.clear()
+            self._sys_unknown = True
+
+    def _classify(self, text: bytes, terminated: bool, out: list) -> None:
         flags, self._flags = self._flags, 0
         self.unsupported += flags
         # Treść komentarzy wykonywalnych serwer wykonuje: klasyfikowana jest instrukcja po ich rozwinięciu.
@@ -235,6 +249,8 @@ class DumpParser:
             plain = _unwrap(code)  # bez komentarzy, które mogą stać na końcu przypisania
             if not self._set(plain, _LEAD.match(plain).end()):
                 self._count("SET")
+                if _MODE_WORDS.search(plain) and self.mode_change_at is None:
+                    self.mode_change_at, self.mode_change = 0, "nierozpoznany SET trybu SQL lub kodowania"
         elif word not in _INERT_STATEMENTS:
             self._count(word or "(nie słowo kluczowe)")
         else:
@@ -269,6 +285,10 @@ class DumpParser:
                     self._vars[target] = value
                 continue
             name = target.rsplit(".", 1)[-1].split()[-1].lstrip("@")
+            if name in self._sysvars or len(self._sysvars) < MAX_VARIABLES:
+                self._sysvars[name] = value
+            else:
+                self._sys_unknown = True
             if name in ("sql_mode", "character_set_client", "names"):
                 settings.append((name, value))
         for name, value in settings:
@@ -286,7 +306,10 @@ class DumpParser:
     def _resolve(self, value: bytes) -> str | None:
         """Wartość przypisania jako tekst; ``""`` = kopia ustawienia sesji (``@@…``); ``None`` = nieznana."""
         if value.startswith(b"@@"):
-            return ""
+            # Kopia zmiennej systemowej: wartość ustawiona wcześniej w zrzucie albo pierwotna wartość sesji ("").
+            if self._sys_unknown:
+                return None
+            return self._sysvars.get(value.decode("ascii").lower().rsplit(".", 1)[-1].lstrip("@"), "")
         if value.startswith(b"@"):
             return self._vars.get(value.decode("ascii").lower())
         if value[:1] in (b"'", b'"'):
@@ -319,8 +342,12 @@ class DumpParser:
         table = (head[1] or head[2]).decode("ascii")
         if len(self.ddl_names) < MAX_TABLES:
             self.ddl_names.add(table)
+        else:
+            self.names_overflow = True
         if table.lower() in self.ddl or len(self.ddl) < MAX_TABLES:
             self.ddl[table.lower()] = found[0]
+        else:
+            self.names_overflow = True
         return True
 
     @staticmethod
@@ -394,8 +421,10 @@ class DumpParser:
                 break
         if pos < end:
             return False  # np. ON DUPLICATE KEY UPDATE albo śmieci po liście wierszy
-        if len(self.tables) < MAX_TABLES:
+        if table in self.tables or len(self.tables) < MAX_TABLES:
             self.tables.add(table)
+        else:
+            self.names_overflow = True
         self.expression_rows += expressions
         for cells in rows:
             self.rows += 1
