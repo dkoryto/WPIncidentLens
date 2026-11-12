@@ -100,7 +100,14 @@
       }
     },
     "assessment": {"enum": ["STRONG_INDICATORS", "SUSPICIOUS", "NO_INDICATORS_IN_ANALYZED_SCOPE", "INCONCLUSIVE"]},
-    "exit_code": {"enum": [0, 3, 4]}
+    "exit_code": {"enum": [0, 3, 4]},
+    "outputs": {
+      "description": "Opcjonalne (od T-501): SHA-256 bajtów każdego innego pliku zapisanego w tym przebiegu, po nazwie pliku w katalogu wyników. Dokumenty sprzed jego wprowadzenia go nie mają.",
+      "type": "object",
+      "propertyNames": {"enum": ["report.json", "report.html", "evidence-manifest.json", "observations.jsonl", "findings.json",
+                                 "timeline.json", "coverage.json", "run.log"]},
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }
   },
   "$defs": {
     "identifier": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$"},

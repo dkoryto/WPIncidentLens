@@ -25,7 +25,8 @@ INVALID_IDENTIFIERS = {
     "markup": XSS,
 }
 IDENTIFIER_FLAGS = ["--case-id", "--operator-id"]
-TIME_DEPENDENT = ("created_at_utc", "analysis_finished_at_utc", "report")  # skrót raportu zależy od analyzed_at_utc w report.json
+# skróty report.json, report.html i run.log w ``report``/``outputs`` zależą od analyzed_at_utc; widoki bez czasu: test_outputs (S-18)
+TIME_DEPENDENT = ("created_at_utc", "analysis_finished_at_utc", "report", "outputs")
 
 
 @pytest.fixture
@@ -177,7 +178,7 @@ def test_case_json_has_the_case_poc_1_shape(demo_case, analyze):
 
     assert record["schema_version"] == "case-poc-1"
     assert list(record) == ["schema_version", "case_id", "operator_id", "tool", "tool_version", "created_at_utc", "analysis_finished_at_utc",
-                            "sources", "limits", "flags", "report", "assessment", "exit_code"]
+                            "sources", "limits", "flags", "report", "assessment", "exit_code", "outputs"]
 
 
 def test_case_json_conforms_to_the_published_schema(demo_case, analyze):

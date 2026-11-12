@@ -14,7 +14,8 @@ from conftest import sha256, tamper_before_reverification, write
 
 from wpincidentlens import cli, report
 
-OUTPUTS = ("report.json", "report.html", "case.json")
+OUTPUTS = ("report.json", "report.html", "evidence-manifest.json", "observations.jsonl", "findings.json", "timeline.json",
+           "coverage.json", "run.log", "case.json")
 # Opis sprawy sprzed analizy w kształcie ``CaseContext.describe()``; pisarz przenosi go do case.json bez interpretacji.
 DESCRIBED = {"schema_version": "case-poc-1", "case_id": "T101-SYNTH", "operator_id": None,
              "created_at_utc": "2026-11-11T00:00:00+00:00", "sources": {}, "limits": {}, "flags": {}}
