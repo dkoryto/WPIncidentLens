@@ -34,6 +34,10 @@ _MULTISITE_TABLE = r"(?:\d{1,10}_(?:options|posts|postmeta)|blogs|sitemeta)"
 _FALSE_ROLE_NOTE = (" Klucz roli ma wartość fałszywą; WordPress wyznacza role po kluczach tablicy uprawnień, więc konto ma uprawnienia administratora.")
 _INVENTORY_OPTIONS = ("cron", "active_plugins")
 _USERS_COLUMNS = 10  # układ wp_users bez listy kolumn; user_registered jest siódmą kolumną
+# Kolumny, bez których wiersza nie da się ocenić. Wiersz z listą kolumn bez nich jest luką: serwer wstawiłby tam
+# wartość domyślną z definicji tabeli (np. DEFAULT z rolą), której reguły nie znają.
+_REQUIRED_COLUMNS = {"users": {"id", "user_login"}, "usermeta": {"user_id", "meta_key", "meta_value"},
+                     "options": {"option_name", "option_value"}}
 
 
 def _label(value: object, limit: int = 40) -> str:
@@ -101,16 +105,19 @@ class RowAnalysis:
             return
         site = self._sites.setdefault(prefix, _Site())
         site.kinds.add(suffix)
-        # Wiersz z wyrażeniem zamiast literału (np. CONCAT(...)) rozpada się na mniej pól, niż ma tabela.
-        if (len(cells) != len(cols)) if cols else (len(cells) < CORE_TABLE_CELLS[suffix]):
+        # Nazwy kolumn MySQL nie rozróżniają wielkości liter (META_KEY to meta_key).
+        cols = [column.lower() for column in cols]
+        # Wiersz o innej liczbie pól niż kolumn albo bez kolumny potrzebnej regułom nie jest oceniany.
+        if ((len(cells) != len(cols) or not _REQUIRED_COLUMNS[suffix] <= set(cols)) if cols
+                else len(cells) < CORE_TABLE_CELLS[suffix]):
             site.malformed += 1
             return
         if suffix == "users":
             row = dict(zip(cols, cells)) if cols else {
-                "ID": cells[0], "user_login": cells[1], "user_registered": cells[6] if len(cells) == _USERS_COLUMNS else None}
-            if row.get("ID") is not None:
+                "id": cells[0], "user_login": cells[1], "user_registered": cells[6] if len(cells) == _USERS_COLUMNS else None}
+            if row.get("id") is not None:
                 registered = str(row.get("user_registered") or "")
-                site.users[str(row["ID"])] = (str(row.get("user_login") or ""), registered if _REGISTERED.fullmatch(registered) else None)
+                site.users[str(row["id"])] = (str(row.get("user_login") or ""), registered if _REGISTERED.fullmatch(registered) else None)
         elif suffix == "usermeta":
             row = dict(zip(cols, cells)) if cols else {"user_id": cells[1], "meta_key": cells[2], "meta_value": cells[3]}
             key, user_id, value = str(row.get("meta_key") or ""), str(row.get("user_id")), str(row.get("meta_value") or "")
@@ -251,7 +258,7 @@ class RowAnalysis:
                 cover.degrade(f"Opcja {name} występuje w zrzucie {rows} razy; do inwentarza odczytano tylko pierwszy wiersz")
         if site.malformed:
             cover.degrade(f"Pominięto {site.malformed} wierszy tabel użytkowników lub opcji o nieoczekiwanej liczbie pól "
-                          "(np. wyrażenie SQL zamiast literału)")
+                          "albo bez kolumny potrzebnej regułom (wartość z definicji tabeli jest nieznana)")
         if site.oversize:
             cover.degrade(f"Nie sprawdzono {site.oversize} wartości opcji dłuższych niż {MAX_OPTION_CHARS} znaków")
         if site.foreign_caps:

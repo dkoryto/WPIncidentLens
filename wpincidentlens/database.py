@@ -12,7 +12,8 @@ from .analysis import Detection, SourceCoverage
 from .case import DATABASE_FORMATS
 
 MAX_ROWS = 1_000_000  # wierszy tabel rdzenia przekazanych regułom; dalsze są tylko liczone
-MAX_ROW_BYTES = 256 * 1024 * 1024  # łączny rozmiar komórek czekających na reguły: granica pamięci przy zrzucie 2 GiB
+MAX_ROW_BYTES = 256 * 1024 * 1024  # szacowana pamięć wierszy czekających na reguły: granica przy zrzucie 2 GiB
+_ROW_COST, _CELL_COST = 120, 64  # narzut obiektów Pythona na wiersz i na komórkę (lista, krotka, str), z zapasem
 FORMATS = DATABASE_FORMATS  # wybiera operator flagą --database-format; formatu nie zgaduje się po treści (ADR 0006 pkt 9)
 
 
@@ -30,7 +31,8 @@ def scan_database(path: Path, known_admins: set[str], session: ingest.Session,
     def consume(batch: list) -> None:
         for row in batch:
             analysed[0] += 1
-            size = sum(len(cell) for cell in row[2] if cell is not None)
+            size = (_ROW_COST + sum(_CELL_COST + len(cell or "") for cell in row[2])
+                    + sum(_CELL_COST + len(column) for column in row[1]))
             if analysed[0] <= MAX_ROWS and held[0] + size <= MAX_ROW_BYTES:
                 held[0] += size
                 rows.append(row)
@@ -46,6 +48,12 @@ def scan_database(path: Path, known_admins: set[str], session: ingest.Session,
     for table, columns, cells, number in rows:
         rules.feed(table, columns, cells, number)
     rules.note_tables(parser.tables)
+    # Na serwerze z lower_case_table_names=1 lub 2 tabela WP_USERMETA to wp_usermeta: jej wierszy reguły nie widzą.
+    variants = sorted(table for table in parser.tables if not dbrules.is_core_table(table) and dbrules.is_core_table(table.lower()))
+    if variants:
+        cover.degrade(f"Pominięto wiersze {len(variants)} tabel o nazwie różniącej się od tabel WordPressa tylko wielkością liter "
+                      f"({', '.join(name[:40] for name in variants[:5])}{', …' if len(variants) > 5 else ''}); "
+                      "na serwerze nierozróżniającym wielkości liter trafiłyby do tabel rdzenia")
     if analysed[0] > len(rows):
         cover.degrade(f"Reguły objęły {len(rows)} z {analysed[0]} wierszy tabel użytkowników i opcji "
                       f"(limit {MAX_ROWS} wierszy i {MAX_ROW_BYTES} B treści)")
@@ -74,6 +82,9 @@ def _sql_read_gaps(parser: sqldump.DumpParser, rules: dbrules.RowAnalysis, cover
     if parser.oversized_at is not None:
         cover.degrade(f"Instrukcja SQL dłuższa niż {parser.max_statement} B (od bajtu {parser.oversized_at}): "
                       "dalszej części zrzutu nie analizowano")
+    if parser.mode_change_at is not None:
+        cover.degrade(f"Zrzut zmienia sposób czytania łańcuchów ({parser.mode_change}, instrukcja od bajtu "
+                      f"{parser.mode_change_at}): parser tego trybu nie obsługuje, dalszej części zrzutu nie analizowano")
     if not parser.tables:
         cover.fail("Brak obsługiwanych instrukcji INSERT; parser PoC nie interpretuje tego formatu SQL")
     else:

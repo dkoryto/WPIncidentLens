@@ -179,7 +179,7 @@ def test_secure_ingest_does_not_call_the_sink_for_a_file_it_skips(tmp_path):
 
 def test_rows_waiting_for_the_rules_are_capped_by_size_with_a_gap(site, evidence, analyze, monkeypatch):
     from wpincidentlens import database
-    monkeypatch.setattr(database, "MAX_ROW_BYTES", 200)
+    monkeypatch.setattr(database, "MAX_ROW_BYTES", 1600)  # dwa wiersze konta mieszczą się, opcja nie
     dump = write(evidence / "db.sql", admin_sql("siteadmin") + option_sql("blogname", "x" * 500))
 
     run = analyze(site, database=dump, known_admins=("siteadmin",))

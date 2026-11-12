@@ -38,15 +38,45 @@ _BODY = re.compile(rb"""(?:
 # sięga końca bufora.
 _TOKEN = re.compile(rb"""
       (?P<quoted> '(?:[^'\\]|\\.)*+(?:'|\\?\Z) | "(?:[^"\\]|\\.)*+(?:"|\\?\Z) | `[^`]*+(?:`|\Z) )
-    | (?P<comment> --(?=[ \t\r\n\f\v]|\Z)[^\n]*+ | \#[^\n]*+ | /\*.*?(?:\*/|\Z) )
+    | (?P<comment> --(?=[\x00-\x20\x7f]|\Z)[^\n]*+ | \#[^\n]*+ | /\*.*?(?:\*/|\Z) )
     | (?P<end> ; )
     | (?P<client> \\ )
     | .
 """, re.X | re.S)
-# Początek instrukcji: białe znaki i komentarze (także wykonywalne — ich treść ocenia ``_TOKEN``).
-_LEAD = re.compile(rb"(?:\s++|--(?=[ \t\r\n\f\v]|\Z)[^\n]*+|\#[^\n]*+|/\*.*?\*/)*+", re.S)
+# ``--`` zaczyna komentarz, gdy po nim jest biały znak albo znak sterujący (lekser serwera MySQL: my_iscntrl).
+# Początek instrukcji: białe znaki i zwykłe komentarze; komentarze wykonywalne są wcześniej rozwijane (``_unwrap``).
+_LEAD = re.compile(rb"(?:\s++|--(?=[\x00-\x20\x7f]|\Z)[^\n]*+|\#[^\n]*+|/\*.*?\*/)*+", re.S)
 _WORD = re.compile(rb"[A-Za-z_]++")
-_WRITE_KEYWORD = re.compile(rb"(?<![A-Za-z_])(?:INSERT|REPLACE)(?![A-Za-z0-9_])", re.I)
+# Komentarz wykonywalny (/*!NNNNN … */, /*M!NNNNNN … */) serwer wykonuje jak kod: jego treść klasyfikuje się jak
+# instrukcję, a zwykłe komentarze zastępuje spacja. Łańcuchy i nazwy w odwrotnych apostrofach zostają bez zmian.
+_EXECUTABLE = re.compile(rb"/\*M?!")
+_UNWRAP = re.compile(rb"""
+      (?P<keep> '(?:[^'\\]|\\.)*+' | "(?:[^"\\]|\\.)*+" | `[^`]*+` )
+    | /\*M?!\d{0,6}(?P<code>.*?)\*/
+    | /\*.*?\*/ | --(?=[\x00-\x20\x7f]|\Z)[^\n]*+ | \#[^\n]*+
+""", re.X | re.S)
+_SCRUB = re.compile(rb"'(?:[^'\\]|\\.)*+'|\"(?:[^\"\\]|\\.)*+\"|`[^`]*+`")  # łańcuchy i nazwy poza sprawdzaniem słów
+# SET jest obojętny tylko jako lista prostych przypisań (``SET STATEMENT … FOR …`` wykonuje dowolną instrukcję).
+_SET_VALUE = (rb"(?:'(?:[^'\\]|\\.|'')*+'(?:\s*+'(?:[^'\\]|\\.|'')*+')*+|\"(?:[^\"\\]|\\.|\"\")*+\""
+              rb"|[-+]?[0-9.]++[A-Za-z0-9.]*+|@@?(?:[A-Za-z_]++\.)?[A-Za-z0-9_$]++|[A-Za-z_][A-Za-z0-9_$]*+)")
+_SET_TARGET = rb"(?:(?:GLOBAL|SESSION|LOCAL|PERSIST)\s++)?(?:@@?(?:[A-Za-z_]++\.)?)?`?[A-Za-z_][A-Za-z0-9_$]*+`?"
+_ASSIGN = re.compile(rb"(?P<target>" + _SET_TARGET + rb")\s*+:?=\s*+(?P<value>" + _SET_VALUE + rb")", re.I | re.S)
+_SET = re.compile(rb"SET\s++(?:NAMES\s++(?P<names>'?[A-Za-z0-9_]++'?)(?:\s++COLLATE\s++'?[A-Za-z0-9_]++'?)?"
+                  rb"|CHARACTER\s++SET\s++(?P<charset>'?[A-Za-z0-9_]++'?)"
+                  rb"|(?P<assign>" + _ASSIGN.pattern + rb"(?:\s*+,\s*+" + _ASSIGN.pattern.replace(b"?P<", b"?P<x") + rb")*+))\s*+",
+                  re.I | re.S)
+# Kodowania, w których bajt 0x5C (ukośnik wsteczny) i apostrof nie mogą być drugim bajtem znaku wielobajtowego.
+_SAFE_CHARSETS = frozenset({"utf8", "utf8mb3", "utf8mb4", "latin1", "binary", "ascii", "default"})
+_UNSAFE_MODES = re.compile(r"NO_BACKSLASH_ESCAPES|ANSI_QUOTES|(?<![A-Z_])ANSI(?![A-Z_])", re.I)
+_ALTER_KEYS = re.compile(rb"ALTER\s++TABLE\s++(?:`[^`]{1,64}`|[A-Za-z0-9_$]{1,64})\s++(?:DISABLE|ENABLE)\s++KEYS\s*+", re.I)
+_CREATE_TABLE = re.compile(rb"CREATE\s++TABLE\s++(?:IF\s++NOT\s++EXISTS\s++)?(?:`([A-Za-z0-9_$]{1,64})`|([A-Za-z0-9_$]{1,64}))\s*+\(", re.I)
+# Definicja tabeli, która wstawia, kopiuje lub przenosi dane albo łączy tabele, nie jest obojętna.
+_FORBIDDEN_DDL = re.compile(rb"(?<![A-Za-z0-9_$])(?:SELECT|LIKE|UNION|AS|GENERATED|RENAME|INSERT_METHOD|VALUES)"
+                            rb"(?![A-Za-z0-9_$])|ENGINE\s*+=\s*+'?(?:MERGE|MRG_MYISAM|FEDERATED|CONNECT|SPIDER)", re.I)
+_DDL_PART = re.compile(rb"[^()'\"`,]++|'(?:[^'\\]|\\.|'')*+'|\"(?:[^\"\\]|\\.|\"\")*+\"|`[^`]*+`|[(),]", re.S)
+_DDL_COLUMN = re.compile(rb"\s*+(?:`([A-Za-z0-9_$]{1,64})`|([A-Za-z_][A-Za-z0-9_$]{0,63}))(?![A-Za-z0-9_$])")
+_DDL_NOT_COLUMN = frozenset({"PRIMARY", "KEY", "UNIQUE", "INDEX", "CONSTRAINT", "FULLTEXT", "SPATIAL", "FOREIGN", "CHECK", "PERIOD"})
+MAX_UNANALYSED_KEYS = 200  # różnych słów kluczowych w liczniku; dalsze trafiają pod „(inne)”
 _NAME = rb"(?:`([A-Za-z0-9_$]{1,64})`|([A-Za-z0-9_$]{1,64})(?![A-Za-z0-9_$.]))"
 _HEAD = re.compile(rb"INSERT\s++INTO\s++" + _NAME + rb"\s*+(?:\(([^()]*+)\)\s*+)?VALUES\s*+", re.I)
 _COLUMN = re.compile(rb"\s*+" + _NAME + rb"\s*+")
@@ -64,8 +94,16 @@ _ESCAPE = re.compile(rb"\\(.)|''", re.S)
 _ESCAPES = {b"0": b"\0", b"b": b"\b", b"n": b"\n", b"r": b"\r", b"t": b"\t", b"Z": b"\x1a", b"%": b"\\%", b"_": b"\\_"}
 
 # Instrukcje, które zrzut może zawierać, a których pominięcie nie ukrywa danych: ustawienia sesji i definicje tabel.
-_INERT_STATEMENTS = frozenset({"SET", "USE", "LOCK", "UNLOCK", "START", "COMMIT", "BEGIN"})
+_INERT_STATEMENTS = frozenset({"USE", "LOCK", "UNLOCK", "START", "COMMIT", "BEGIN"})
+# …ale tylko w dokładnej postaci: ``BEGIN NOT ATOMIC …`` (MariaDB) wykonuje dowolne instrukcje.
+_INERT_FORM = re.compile(rb"(?:USE\s++[`A-Za-z0-9_$]++|LOCK\s++TABLES?\s++[^()]++|UNLOCK\s++TABLES?"
+                         rb"|START\s++TRANSACTION[A-Za-z ,]*+|BEGIN(?:\s++WORK)?|COMMIT(?:\s++WORK)?)\s*+", re.I)
 _INERT_OBJECTS = frozenset({"TABLE", "DATABASE", "SCHEMA"})  # po CREATE / DROP / ALTER
+
+
+def _unwrap(text: bytes) -> bytes:
+    """Treść komentarzy wykonywalnych zamiast nich, zwykłe komentarze jako spacja; łańcuchy i nazwy bez zmian."""
+    return _UNWRAP.sub(lambda m: m["keep"] or b" " + (m["code"] or b"") + b" ", text)
 
 
 def _unescape(match: re.Match) -> bytes:
@@ -91,14 +129,23 @@ class DumpParser:
     truncated: list[str] = field(default_factory=list)  # niedomknięta instrukcja na końcu zrzutu (tabela INSERT albo słowo)
     lossy_cells: int = 0       # komórki, które nie były poprawnym UTF-8
     oversized_at: int | None = None  # przesunięcie instrukcji dłuższej niż limit; dalszej części zrzutu nie analizowano
+    # Przesunięcie instrukcji SET, która zmienia sposób czytania łańcuchów (sql_mode, kodowanie klienta); od niej
+    # podział na instrukcje byłby niepewny, więc dalszej części zrzutu nie analizowano. ``mode_change`` mówi, co zmieniła.
+    mode_change_at: int | None = None
+    mode_change: str = ""
+    ddl: dict[str, list[str]] = field(default_factory=dict)  # tabela → kolumny z CREATE TABLE (dla INSERT bez listy kolumn)
     _buf: bytes = b""
     _start: int = 0            # początek bieżącej instrukcji w buforze
     _pos: int = 0              # dokąd bufor został podzielony na leksemy
     _offset: int = 0           # przesunięcie początku bufora w całym zrzucie
     _flags: int = 0            # nieobsługiwane elementy bieżącej instrukcji (komentarz wykonywalny z zapisem, polecenie klienta)
 
+    @property
+    def stopped(self) -> bool:
+        return self.oversized_at is not None or self.mode_change_at is not None
+
     def feed(self, chunk: bytes) -> list[tuple[str, list[str], list[str | None], int]]:
-        if self.oversized_at is not None:
+        if self.stopped:
             return []
         self._buf = self._buf[self._start:] + chunk
         self._offset += self._start
@@ -107,10 +154,10 @@ class DumpParser:
         return self._scan(final=False)
 
     def close(self) -> list[tuple[str, list[str], list[str | None], int]]:
-        if self.oversized_at is not None:
+        if self.stopped:
             return []
         out = self._scan(final=True)
-        if self.oversized_at is None and self._buf[self._start:].strip():
+        if not self.stopped and self._buf[self._start:].strip():
             self._finish_statement(self._buf[self._start:], terminated=False, out=out)
         self._buf, self._start, self._pos = b"", 0, 0
         return out
@@ -129,12 +176,11 @@ class DumpParser:
                 break  # leksem może ciągnąć się w następnej porcji
             if token["end"]:
                 self._finish_statement(buf[self._start:pos], terminated=True, out=out)
+                if self.mode_change_at is not None:
+                    self.mode_change_at += self._offset + self._start
+                    self._buf, self._start, self._pos = b"", 0, 0
+                    return out
                 self._start = token.end()
-            elif token["comment"]:
-                text = token["comment"]
-                # Komentarz wykonywalny (/*!NNNNN … */, /*M! … */) serwer traktuje jak kod.
-                if text.startswith((b"/*!", b"/*M!")) and _WRITE_KEYWORD.search(text):
-                    self._flags += 1
             elif token["client"]:
                 # Ukośnik wsteczny poza łańcuchem to polecenie klienta (\d, \g, \G): może zakończyć instrukcję
                 # albo zmienić jej terminator, a poprawny zrzut go tam nie zawiera.
@@ -151,28 +197,126 @@ class DumpParser:
     def _finish_statement(self, text: bytes, terminated: bool, out: list) -> None:
         flags, self._flags = self._flags, 0
         self.unsupported += flags
-        lead = _LEAD.match(text).end()
-        if lead == len(text):
+        # Treść komentarzy wykonywalnych serwer wykonuje: klasyfikowana jest instrukcja po ich rozwinięciu.
+        code = _unwrap(text) if _EXECUTABLE.search(text) else text
+        lead = _LEAD.match(code).end()
+        if lead == len(code):
             return
-        word_match = _WORD.match(text, lead)
+        word_match = _WORD.match(code, lead)
         word = word_match[0].decode("ascii").upper() if word_match else ""
         if not terminated:
-            head = _HEAD.match(text, lead)
+            head = _HEAD.match(code, lead)
             self.truncated.append(self._table(head) if head else (word or "?")[:40])
             return
         if word == "INSERT":
-            head = _HEAD.match(text, lead)
-            if head is None or not self._insert(head, text, out):
+            head = _HEAD.match(code, lead)
+            # INSERT z komentarzem wykonywalnym w środku nie jest zwykłą listą literałów.
+            if code != text or head is None or not self._insert(head, code, out):
                 self.unsupported += 1
         elif word in ("REPLACE", "DELIMITER"):
             self.unsupported += 1
         elif word in ("CREATE", "DROP", "ALTER"):
-            kind = _WORD.match(text, _LEAD.match(text, word_match.end()).end())
+            kind = _WORD.match(code, _LEAD.match(code, word_match.end()).end())
             kind_word = kind[0].decode("ascii").upper() if kind else ""
-            if kind_word not in _INERT_OBJECTS:
-                self.unanalysed[f"{word} {kind_word}"[:40] if kind_word else word] += 1
+            if not self._definition(word, kind_word, code, lead):
+                self._count(f"{word} {kind_word}" if kind_word else word)
+        elif word == "SET":
+            plain = _unwrap(code)  # bez komentarzy, które mogą stać na końcu przypisania
+            if not self._set(plain, _LEAD.match(plain).end()):
+                self._count("SET")
         elif word not in _INERT_STATEMENTS:
-            self.unanalysed[word[:40] or "(nie słowo kluczowe)"] += 1
+            self._count(word or "(nie słowo kluczowe)")
+        else:
+            plain = _unwrap(code)
+            if _INERT_FORM.fullmatch(plain, _LEAD.match(plain).end(), len(plain.rstrip())) is None:
+                self._count(word)
+
+    def _count(self, keyword: str) -> None:
+        keyword = keyword[:40]
+        if keyword not in self.unanalysed and len(self.unanalysed) >= MAX_UNANALYSED_KEYS:
+            keyword = "(inne)"
+        self.unanalysed[keyword] += 1
+
+    def _set(self, code: bytes, lead: int) -> bool:
+        """SET jako lista prostych przypisań jest obojętny; zmiana trybu czytania łańcuchów zatrzymuje analizę."""
+        match = _SET.fullmatch(code, lead, len(code.rstrip()))
+        if match is None:
+            return False
+        charsets = [match["names"] or match["charset"] or b""]
+        modes: list[bytes] = []
+        for assign in _ASSIGN.finditer(match["assign"] or b""):
+            target = assign["target"].decode("ascii").lower().replace("`", "")
+            if target.startswith("@") and not target.startswith("@@"):
+                continue  # zmienna użytkownika (np. @OLD_SQL_MODE) nie zmienia trybu sesji
+            name = target.rsplit(".", 1)[-1].split()[-1].lstrip("@")
+            value = assign["value"]
+            if value.startswith(b"@"):
+                continue  # przywrócenie wartości zapamiętanej wcześniej (wzorzec mysqldump)
+            if name == "sql_mode":
+                modes.append(value)
+            elif name in ("character_set_client", "names"):
+                charsets.append(value)
+        for value in modes:
+            if found := _UNSAFE_MODES.search(value.decode("latin-1")):
+                self.mode_change_at, self.mode_change = 0, f"sql_mode {found[0].upper()}"
+                return True
+        for value in charsets:
+            charset = value.strip(b"'\"").decode("latin-1").lower()
+            if charset and charset not in _SAFE_CHARSETS:
+                self.mode_change_at, self.mode_change = 0, f"kodowanie klienta {charset[:40]}"
+                return True
+        return True
+
+    def _definition(self, word: str, kind: str, code: bytes, lead: int) -> bool:
+        """Czy CREATE/DROP/ALTER jest obojętne: definicja tabeli bez danych, usunięcie tabeli, ALTER … KEYS."""
+        if word == "DROP":
+            return kind in _INERT_OBJECTS
+        if word == "ALTER":
+            return kind in ("DATABASE", "SCHEMA") or _ALTER_KEYS.fullmatch(code, lead, len(code.rstrip())) is not None
+        if kind in ("DATABASE", "SCHEMA"):
+            return True
+        head = _CREATE_TABLE.match(code, lead)
+        if head is None or _FORBIDDEN_DDL.search(_SCRUB.sub(b"''", code)):
+            return False
+        columns = self._columns_of(code, head.end() - 1)
+        if columns is None:
+            return False
+        table = (head[1] or head[2]).decode("ascii")
+        if table in self.ddl or len(self.ddl) < MAX_TABLES:
+            self.ddl[table] = columns
+        return True
+
+    @staticmethod
+    def _columns_of(code: bytes, start: int) -> list[str] | None:
+        """Nazwy kolumn z listy definicji w nawiasie od ``start``; ``None``, gdy nawiasy się nie domykają."""
+        depth, item, columns = 0, b"", []
+        for part in _DDL_PART.finditer(code, start):
+            token = part[0]
+            if token == b"(":
+                depth += 1
+                if depth == 1:
+                    continue
+            elif token == b")":
+                depth -= 1
+                if depth == 0:
+                    break
+            if depth == 1 and token == b",":
+                columns.append(item)
+                item = b""
+            elif depth >= 1:
+                item += token if len(item) < 200 else b""
+        else:
+            return None
+        columns.append(item)
+        names = []
+        for definition in columns:
+            column = _DDL_COLUMN.match(definition)
+            if column is None:
+                return None
+            if column[2] and column[2].decode("ascii").upper() in _DDL_NOT_COLUMN:
+                continue
+            names.append((column[1] or column[2]).decode("ascii"))
+        return names
 
     @staticmethod
     def _table(head: re.Match) -> str:
@@ -188,6 +332,8 @@ class DumpParser:
                 if column is None:
                     return False
                 columns.append((column[1] or column[2]).decode("ascii"))
+        else:
+            columns = list(self.ddl.get(table, ()))  # kolejność kolumn z CREATE TABLE tego zrzutu, jeśli była
         decode = self.wanted is None or self.wanted(table)
         rows: list = []
         expressions, pos, end = 0, head.end(), len(text.rstrip())
