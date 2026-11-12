@@ -33,6 +33,7 @@ Otwórz `results/report.html`. Kod wyjścia opisuje pełność analizy, nie wyni
 - **WPDetector**: wersja WordPressa, wersja bazy, locale i prefiks tabel jako kandydaci z pewnością (`observations`), bez ustalenia i bez wpływu na ocenę.
 - **Baza (wybrane `INSERT`)**: administrator spoza zaufanej listy, aktywny znacznik HTML lub schemat JS w opcji.
 - **Logi (format combined)**: żądanie do pliku `.php`, `.phtml` lub `.phar` w uploads oraz korelacja ścieżki z plikiem w obrazie witryny.
+- **Korelacja plik–żądanie** (ADR 0007, [docs/RULES.md](docs/RULES.md#korelacja-plikżądanie-correlate-t-401)): ta sama ścieżka (`CORRELATED_UPLOAD_REQUEST`, `CORRELATED_FILE_REQUEST`) i bliskość w czasie żądania i `mtime` pliku z ustaleniem (`REQUEST_NEAR_FILE_CHANGE`, okno `--correlation-window SECONDS`, domyślnie 900, poszerzane o zadeklarowaną niepewność zegara). Korelacja nie dowodzi przyczynowości, zapisu ani wykonania pliku; HTTP 200 też nie.
 
 Brak ustalenia w którymkolwiek z tych obszarów nie oznacza, że witryna nie została naruszona.
 
