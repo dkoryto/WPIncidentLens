@@ -22,7 +22,7 @@ from conftest import (
     write,
 )
 
-from wpincidentlens import cli, ingest
+from wpincidentlens import cli, ingest, sqldump
 
 UNKNOWN_ADMIN = admin_sql("siteadmin", "ghostadmin")
 CHANGED = "SOURCE_CHANGED_DURING_ANALYSIS"
@@ -422,13 +422,23 @@ def test_s07_file_scan_limit_does_not_apply_to_sql_and_logs(site, evidence, anal
     assert rule in analyze(site, **build(evidence)).rules
 
 
-def test_s07_oversized_sql_dump_is_skipped_with_gap(site, evidence, analyze):
-    database = sparse(evidence / "db.sql", cli.MAX_SQL_BYTES + 1, UNKNOWN_ADMIN)
+def test_s07_sql_dump_over_the_file_size_limit_is_skipped_with_gap(site, evidence, analyze):
+    database = write(evidence / "db.sql", UNKNOWN_ADMIN)
+
+    run = analyze(site, database=database, known_admins=("siteadmin",), flags=("--max-file-bytes", str(len(UNKNOWN_ADMIN) - 1)))
+
+    assert "UNRECOGNIZED_ADMIN" not in run.rules
+    assert run.has_gap("Plik większy niż limit") and run.coverage("database")["status"] == "FAILED"
+
+
+def test_s07_sql_dump_larger_than_the_old_in_memory_limit_is_streamed(site, evidence, analyze):
+    """Dawny limit 20 MiB zniknął (ADR 0006 pkt 2); bajty zerowe bez średnika przekraczają limit jednej instrukcji."""
+    database = sparse(evidence / "db.sql", 21 * 1024 * 1024, UNKNOWN_ADMIN)
 
     run = analyze(site, database=database, known_admins=("siteadmin",))
 
-    assert run.findings == []
-    assert run.has_gap(f"Eksport SQL większy niż {cli.MAX_SQL_BYTES} B")
+    assert "UNRECOGNIZED_ADMIN" in run.rules
+    assert run.has_gap("Instrukcja SQL dłuższa niż") and run.coverage("database")["status"] == "PARTIAL"
 
 
 def test_s07_oversized_log_is_skipped_with_gap(site, evidence, analyze):
@@ -450,17 +460,25 @@ def test_s08_crafted_insert_does_not_stall_the_sql_parser():
 
 
 @pytest.mark.parametrize("values, expected", [
-    ("(1,'a'),(2,'b')", ["(1,'a')", "(2,'b')"]),
-    ("(1,'x) , (y'),(2,'it''s')", ["(1,'x) , (y')", "(2,'it''s')"]),
-    ("(1,'back\\\\'),(2,'q\\'(')", ["(1,'back\\\\')", "(2,'q\\'(')"]),
-    ("(1,NOW())", ["()"]),
-    ("('\\',1)'''", []),  # nawias wewnątrz łańcucha: stary regex zwracał tu fałszywy wiersz
-    ("1,2)", []),
-    ("(1,2", []),
-    ("", []),
-])
-def test_sql_row_groups_are_split_outside_quotes(values, expected):
-    assert list(cli._iter_row_groups(values)) == expected
+    ("(1,'a'),(2,'b')", [["1", "a"], ["2", "b"]]),
+    ("(1,'x) , (y'),(2,'it''s')", [["1", "x) , (y"], ["2", "it's"]]),
+    ("(1,'back\\\\'),(2,'q\\'(')", [["1", "back\\"], ["2", "q'("]]),
+    ("(1,NOW()),(2,'b')", [["2", "b"]]),
+], ids=["two-rows", "parentheses-in-string", "escaped-quote-and-backslash", "expression-row-skipped"])
+def test_sql_rows_are_split_outside_quotes(values, expected):
+    rows, _ = sqldump.parse([f"INSERT INTO `t` VALUES {values};".encode()])
+
+    assert [cells for _, _, cells, _ in rows] == expected
+
+
+@pytest.mark.parametrize("values", [
+    "('\\',1)'''", "1,2)", "(1,2", "", "(1,'a') ON DUPLICATE KEY UPDATE a=1", "(1,'a') (2,'b')",
+], ids=["string-after-row", "no-opening-parenthesis", "no-closing-parenthesis", "no-rows",
+        "on-duplicate-key-update", "missing-comma"])
+def test_insert_outside_the_grammar_yields_no_rows_and_is_counted(values):
+    rows, parser = sqldump.parse([f"INSERT INTO `t` VALUES {values};".encode()])
+
+    assert rows == [] and parser.unsupported == 1
 
 
 @pytest.mark.parametrize("crafted", [
@@ -720,4 +738,4 @@ def test_s08_crafted_log_line_does_not_stall_the_log_pattern(line):
 ], ids=["unterminated-string", "unterminated-comments", "odd-backticks", "keywords-without-terminator", "comment-lines"])
 def test_s08_statement_scanner_is_linear_on_crafted_sql(crafted):
     with time_limit(3):
-        list(cli._write_statement_starts(crafted))
+        sqldump.parse([crafted.encode()])

@@ -71,6 +71,11 @@ def _root(prefixes: list[str]) -> str | None:
     return shortest if all(prefix.startswith(shortest) for prefix in prefixes) else None
 
 
+def is_core_table(table: str) -> bool:
+    """Czy nazwa może być tabelą rdzenia (``<prefiks>users``, ``usermeta``, ``options``); tylko takich wierszy potrzebują reguły."""
+    return table.endswith(tuple(CORE_TABLE_CELLS))
+
+
 class RowAnalysis:
     """Przyjmuje kolejne wiersze INSERT (``feed``) i po ostatnim oddaje wykrycia (``finish``)."""
 
@@ -120,6 +125,13 @@ class RowAnalysis:
         else:
             row = dict(zip(cols, cells)) if cols else {"option_name": cells[1], "option_value": cells[2]}
             self._option(site, str(row.get("option_name") or ""), str(row.get("option_value") or ""), table, count)
+
+    def note_tables(self, tables: set[str]) -> None:
+        """Nazwy tabel z wierszami, których komórek nie dekodowano (rozpoznanie multisite)."""
+        for table in sorted(tables):
+            if len(self._tables) >= MAX_TABLE_NAMES:
+                break
+            self._tables.add(table)
 
     @staticmethod
     def _role(site: _Site, user_id: str, value: str, place: models.Location) -> None:

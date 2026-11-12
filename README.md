@@ -55,7 +55,7 @@ Materiał dowodowy otwiera wyłącznie moduł `wpincidentlens/ingest.py`: wzglę
 | `--max-depth` | 64 | limit głębokości katalogów; głębszy katalog nie jest przeglądany |
 | `--max-path-bytes` | 4096 | limit długości ścieżki względnej do źródła; dłuższa ścieżka jest pomijana |
 
-Każdy limit musi być dodatni i skończony, inaczej wywołanie jest odrzucane (kod 2). Stałe limity: treść plików analizowana do 4 MiB, SQL do 20 MiB, log do 30 MiB, baseline do 64 MiB, manifest sum rdzenia do 8 MiB i 50 000 wpisów. Bezpieczny odczyt nie zastępuje izolacji: nie wykrywa punktów montowania w drzewie ani zmian cofniętych przed ponowną weryfikacją; materiał montuj tylko do odczytu, z `nodev`.
+Każdy limit musi być dodatni i skończony, inaczej wywołanie jest odrzucane (kod 2). Stałe limity: treść plików analizowana do 4 MiB, zrzut SQL czytany strumieniowo (limit pliku `--max-file-bytes`, jedna instrukcja do 16 MiB), log do 30 MiB, baseline do 64 MiB, manifest sum rdzenia do 8 MiB i 50 000 wpisów. Bezpieczny odczyt nie zastępuje izolacji: nie wykrywa punktów montowania w drzewie ani zmian cofniętych przed ponowną weryfikacją; materiał montuj tylko do odczytu, z `nodev`.
 
 ## Sprawa i zapis wyników (T-101)
 

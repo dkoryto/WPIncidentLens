@@ -67,7 +67,7 @@ def test_limitations_that_do_not_shrink_the_scope_stay_listed_as_reasons(complet
     database = analyze(**complete_case).coverage("database")
 
     assert database["status"] == "ANALYZED"
-    assert any("Parser SQL PoC obsługuje wybrane INSERT" in reason for reason in database["reasons"])
+    assert any("Parser SQL obsługuje INSERT INTO" in reason for reason in database["reasons"])
 
 
 def test_large_file_without_content_rules_does_not_shrink_the_scope(complete_case, analyze):
@@ -614,9 +614,9 @@ SKIPPED_SQL = {
     "insert-ignore": (f"INSERT IGNORE INTO `wp_options` VALUES (1,'a','{MARKUP}');\n", "PARTIAL", "nieobsługiwanej składni"),
     "database-qualified-name": (f"INSERT INTO wp.wp_options VALUES (1,'a','{MARKUP}');\n", "PARTIAL", "nieobsługiwanej składni"),
     "insert-set": (f"INSERT INTO `wp_options` SET option_name='a', option_value='{MARKUP}';\n", "PARTIAL", "nieobsługiwanej składni"),
-    "expression-instead-of-literal": ("INSERT INTO `wp_options` VALUES (4,'d',CONCAT('<script>','x'));\n", "PARTIAL", "nieoczekiwanej liczbie pól"),
+    "expression-instead-of-literal": ("INSERT INTO `wp_options` VALUES (4,'d',CONCAT('<script>','x'));\n", "PARTIAL", "wyrażeniem SQL zamiast literału"),
     "column-list-longer-than-row": ("INSERT INTO `wp_options` (`option_id`,`option_name`,`option_value`) VALUES (4,CONCAT('a','b'));\n",
-                                    "PARTIAL", "nieoczekiwanej liczbie pól"),
+                                    "PARTIAL", "wyrażeniem SQL zamiast literału"),
 }
 
 

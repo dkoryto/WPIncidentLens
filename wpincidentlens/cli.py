@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from . import case, files, ingest, integrity, models, report
 from . import database as database_scan
 from .analysis import Detection, SourceCoverage, decoded, is_lossy
-from .sqldump import _iter_row_groups, _write_statement_starts, iter_insert_rows  # noqa: F401  (testy wołają je przez cli)
+from .sqldump import iter_insert_rows  # noqa: F401  (ADR 0001: testy wołają go przez cli)
 from .analysis import evidence_of as _evidence
 
 VERSION = "0.1.0-poc"
@@ -22,7 +22,6 @@ EXIT_COMPLETE, EXIT_PARTIAL, EXIT_UNPROCESSED = 0, 3, 4
 # Materiał dowodowy otwiera wyłącznie wpincidentlens.ingest (ADR 0002 D4); ten moduł dostaje już przeczytane bajty.
 MAX_FILES = ingest.Limits().max_files
 MAX_SCAN_BYTES = ingest.Limits().max_scan_bytes
-MAX_SQL_BYTES = database_scan.MAX_SQL_BYTES
 MAX_LOG_BYTES = 30 * 1024 * 1024
 MAX_BASELINE_BYTES = 64 * 1024 * 1024
 MAX_CORE_CHECKSUMS_BYTES = 8 * 1024 * 1024
