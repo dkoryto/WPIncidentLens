@@ -1,6 +1,7 @@
 """Wspólne typy skanerów: wykrycie (fakt + ocena reguły) i robocze pokrycie źródła. Bez dostępu do plików."""
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass, field
 
 from . import ingest, models
@@ -53,3 +54,17 @@ def observe(evidence: ingest.Evidence, kind: str, location: models.Location, **f
 def seen_in(item: ingest.Evidence, kind: str, **facts: str | int | None) -> models.Observation:
     """Fakt dotyczący całego pliku ``item``."""
     return observe(item, kind, models.Location(path=item.rel), **facts)
+
+
+def decoded(content: bytes) -> io.TextIOWrapper:
+    """Dekoduje jak dotychczasowe otwarcie w trybie tekstowym: UTF-8 ze znakami zastępczymi, uniwersalne końce wierszy."""
+    return io.TextIOWrapper(io.BytesIO(content), encoding="utf-8", errors="replace")
+
+
+def is_lossy(content: bytes) -> bool:
+    """Czy dekodowanie UTF-8 musiało podstawić znaki zastępcze (część treści mogła zmienić znaczenie)."""
+    try:
+        content.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return False

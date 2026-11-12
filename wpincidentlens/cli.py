@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import re
 from collections import Counter
@@ -11,9 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from . import case, files, ingest, integrity, models, report
-from .analysis import Detection, SourceCoverage
+from . import database as database_scan
+from .analysis import Detection, SourceCoverage, decoded, is_lossy
+from .sqldump import _iter_row_groups, _write_statement_starts, iter_insert_rows  # noqa: F401  (testy wołają je przez cli)
 from .analysis import evidence_of as _evidence
-from .analysis import observe as _observe
 
 VERSION = "0.1.0-poc"
 DISCLAIMER = "Brak alertów nie dowodzi braku włamania. PoC, nie certyfikacja śledcza."
@@ -22,7 +22,7 @@ EXIT_COMPLETE, EXIT_PARTIAL, EXIT_UNPROCESSED = 0, 3, 4
 # Materiał dowodowy otwiera wyłącznie wpincidentlens.ingest (ADR 0002 D4); ten moduł dostaje już przeczytane bajty.
 MAX_FILES = ingest.Limits().max_files
 MAX_SCAN_BYTES = ingest.Limits().max_scan_bytes
-MAX_SQL_BYTES = 20 * 1024 * 1024
+MAX_SQL_BYTES = database_scan.MAX_SQL_BYTES
 MAX_LOG_BYTES = 30 * 1024 * 1024
 MAX_BASELINE_BYTES = 64 * 1024 * 1024
 MAX_CORE_CHECKSUMS_BYTES = 8 * 1024 * 1024
@@ -32,304 +32,6 @@ def _session() -> ingest.Session:
     """Sesja odczytu z limitami domyślnymi; stałe MAX_* są czytane w chwili wywołania."""
     return ingest.Session(ingest.Limits(max_files=MAX_FILES, max_scan_bytes=MAX_SCAN_BYTES))
 
-
-def _text(content: bytes) -> io.TextIOWrapper:
-    """Dekoduje jak dotychczasowe otwarcie w trybie tekstowym: UTF-8 ze znakami zastępczymi, uniwersalne końce wierszy."""
-    return io.TextIOWrapper(io.BytesIO(content), encoding="utf-8", errors="replace")
-
-
-def _is_lossy(content: bytes) -> bool:
-    """Czy dekodowanie UTF-8 musiało podstawić znaki zastępcze (część treści mogła zmienić znaczenie)."""
-    try:
-        content.decode("utf-8")
-    except UnicodeDecodeError:
-        return True
-    return False
-
-
-def _iter_row_groups(values: str):
-    """Yield innermost top-level "(...)" groups of a VALUES list in one linear pass.
-
-    Replaces a backtracking regex that took exponential time on crafted input.
-    Parentheses inside quoted strings are ignored; a group containing a nested
-    parenthesis outside a string is not a plain row and only its innermost part
-    is yielded, as before.
-    """
-    start, quoted, escaped, i = None, False, False, 0
-    while i < len(values):
-        ch = values[i]
-        if quoted:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == "'":
-                if i + 1 < len(values) and values[i+1] == "'":
-                    i += 1
-                else:
-                    quoted = False
-        elif ch == "'":
-            quoted = True
-        elif ch == "(":
-            start = i
-        elif ch == ")" and start is not None:
-            yield values[start:i+1]
-            start = None
-        i += 1
-
-
-# Lista kolumn nie zawiera nawiasów: [^;()]* kończy się na pierwszym nawiasie, więc nagłówek bez
-# zamknięcia nie jest skanowany do końca pliku przy każdym wystąpieniu (czas kwadratowy, #17).
-# Biały znak przed VALUES dopasowuje dokładnie jeden kwantyfikator, więc długi ciąg spacji nie daje nawrotów.
-_INSERT_HEAD = re.compile(r"INSERT\s+INTO\s+`?([A-Za-z0-9_]+)(?![A-Za-z0-9_])`?\s*(?:(\([^;()]*\))\s*)?VALUES\s*", re.I)
-# Leksemy zrzutu SQL potrzebne do znalezienia początków instrukcji. Każda alternatywa zawsze się dopasowuje
-# (niedomknięty łańcuch lub komentarz sięga końca tekstu), a kwantyfikatory zaborcze wykluczają nawroty.
-_SQL_TOKEN = re.compile(r"""
-      '(?:[^'\\]|\\.|'')*+(?:'|\Z)
-    | "(?:[^"\\]|\\.|"")*+(?:"|\Z)
-    | `[^`]*+(?:`|\Z)
-    | (?P<comment> --(?=\s|\Z)[^\n]*+ | \#[^\n]*+ | /\*.*?(?:\*/|\Z) )
-    | (?P<end> ; )
-    | (?P<space> \s++ )
-    | (?P<word> [A-Za-z_]++ )
-    | .
-""", re.X | re.S)
-# Bez \b z lewej: w "/*!50001INSERT" numer wersji przylega do słowa kluczowego i granicy słowa tam nie ma.
-_WRITE_KEYWORD = re.compile(r"(?<![A-Za-z_])(?:INSERT|REPLACE)(?![A-Za-z0-9_])", re.I)
-_CORE_TABLE_CELLS = {"_users": 2, "_usermeta": 4, "_options": 3}
-
-
-# Instrukcje, które zrzut może zawierać, a których pominięcie nie ukrywa danych: ustawienia sesji i definicje tabel.
-_INERT_STATEMENTS = frozenset({"SET", "USE", "LOCK", "UNLOCK", "START", "COMMIT", "BEGIN"})
-_INERT_OBJECTS = frozenset({"TABLE", "DATABASE", "SCHEMA"})  # po CREATE / DROP / ALTER
-
-
-def _write_statement_starts(sql: str, unanalysed: Counter | None = None):
-    """Pozycje instrukcji INSERT/REPLACE: słowo kluczowe jako pierwszy leksem instrukcji, poza łańcuchami i komentarzami.
-
-    Zgłasza też miejsca, których podział na instrukcje nie obejmuje wiarygodnie: komentarz wykonywalny ze słowem
-    INSERT/REPLACE i dyrektywę DELIMITER. Wywołujący liczy je jako składnię nieobsługiwaną.
-
-    Używa podziału na instrukcje po średniku, więc instrukcja w tym samym wierszu co poprzednia albo po
-    komentarzu też jest widziana; słowo INSERT w treści wartości nie jest liczone.
-
-    Każda inna instrukcja, która nie jest obojętnym ustawieniem ani definicją tabeli (np. UPDATE, DELETE,
-    CREATE TRIGGER, CALL), jest liczona w ``unanalysed`` pod swoim początkowym słowem kluczowym: parser jej nie
-    interpretuje, więc nie może zniknąć bez śladu.
-    """
-    at_start, definer = True, None  # definer: CREATE / DROP / ALTER czekające na nazwę rodzaju obiektu
-    for token in _SQL_TOKEN.finditer(sql):
-        if token["comment"]:
-            # Komentarz wykonywalny (/*!NNNNN ... */, /*M! ... */) serwer traktuje jak kod.
-            if token["comment"].startswith(("/*!", "/*M!")) and _WRITE_KEYWORD.search(token["comment"]):
-                yield token.start()
-            continue
-        if token["space"]:
-            continue
-        if token["end"]:
-            at_start, definer = True, None
-            continue
-        word = (token["word"] or "").upper()
-        if unanalysed is not None:
-            if definer:
-                if word not in _INERT_OBJECTS:
-                    unanalysed[f"{definer} {word}"[:40] if word else definer] += 1
-                definer = None
-            elif at_start and word in ("CREATE", "DROP", "ALTER"):
-                definer = word
-            elif at_start and word not in _INERT_STATEMENTS and word not in ("INSERT", "REPLACE", "DELIMITER"):
-                unanalysed[word[:40] or "(nie słowo kluczowe)"] += 1
-        # DELIMITER zmienia znak końca instrukcji: dalszego podziału po średniku nie można uznać za wiarygodny.
-        # Ukośnik wsteczny poza łańcuchem i komentarzem to polecenie klienta (\d, \g, \G): może zakończyć
-        # instrukcję albo zmienić jej terminator w dowolnym miejscu, a poprawny zrzut go tam nie zawiera.
-        if token.group() == "\\" or (at_start and (token["word"] or "").upper() in ("INSERT", "REPLACE", "DELIMITER")):
-            yield token.start()
-        at_start = False
-
-
-def iter_insert_rows(sql: str, dropped: list[str] | None = None):
-    """Narrow PoC subset of mysqldump INSERT syntax; does NOT execute SQL.
-
-    Supports quoted identifiers, optional column list, multi-row VALUES, MySQL
-    backslash quotes, numeric and NULL literals. Unsupported INSERTs are ignored;
-    a statement that is not terminated (truncated dump) is skipped and its table
-    name is appended to ``dropped`` so the caller can report the gap.
-    """
-    pos = 0
-    while (m := _INSERT_HEAD.search(sql, pos)) is not None:
-        table = m.group(1)
-        cols = re.findall(r"`([A-Za-z0-9_]+)`", m.group(2) or "")
-        i, values, quoted, escaped, nesting = m.end(), "", False, False, 0
-        while i < len(sql):
-            ch = sql[i]
-            if quoted:
-                values += ch
-                if escaped:
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == "'":
-                    if i + 1 < len(sql) and sql[i+1] == "'":
-                        i += 1
-                        values += sql[i]
-                    else:
-                        quoted = False
-            else:
-                if ch == "'":
-                    quoted = True
-                    values += ch
-                elif ch == "(":
-                    nesting += 1
-                    values += ch
-                elif ch == ")":
-                    nesting -= 1
-                    values += ch
-                elif ch == ";" and nesting == 0:
-                    break
-                else:
-                    values += ch
-            i += 1
-        pos = i + 1
-        if i >= len(sql) or quoted or nesting != 0:
-            if dropped is not None:
-                dropped.append(table)
-            continue
-        for group in _iter_row_groups(values):
-            inside = group[1:-1]
-            items, buf, in_str, escape, j = [], [], False, False, 0
-            while j < len(inside):
-                ch = inside[j]
-                if in_str:
-                    buf.append(ch)
-                    if escape:
-                        escape = False
-                    elif ch == "\\":
-                        escape = True
-                    elif ch == "'":
-                        if j + 1 < len(inside) and inside[j+1] == "'":
-                            j += 1
-                            buf.append(inside[j])
-                        else:
-                            in_str = False
-                elif ch == "'":
-                    in_str = True
-                    buf.append(ch)
-                elif ch == ",":
-                    items.append("".join(buf).strip()); buf = []
-                else:
-                    buf.append(ch)
-                j += 1
-            items.append("".join(buf).strip())
-            cooked = []
-            for item in items:
-                if item.startswith("'") and item.endswith("'"):
-                    v = item[1:-1].replace("''", "'")
-                    v = re.sub(r"\\([\\'\"nrt0])", lambda m: {"n":"\n", "r":"\r", "t":"\t", "0":"\0"}.get(m[1], m[1]), v)
-                    cooked.append(v)
-                elif item.upper() == "NULL":
-                    cooked.append(None)
-                else:
-                    cooked.append(item)
-            yield table, cols, cooked
-
-
-def scan_database(path: Path, known_admins: set[str],
-                  session: ingest.Session | None = None) -> tuple[list[Detection], SourceCoverage]:
-    """Zrzut, którego nie udało się bezpiecznie odczytać, nie ma skrótu w rejestrze sesji — pokrycie wychodzi wtedy ``FAILED``."""
-    cover, findings = SourceCoverage(), []
-    item = (session or _session()).read_file(path, "database", keep_limit=MAX_SQL_BYTES)
-    cover.note(*item.gaps)
-    if item.sha256 is None:
-        return findings, cover
-    if item.size > MAX_SQL_BYTES:
-        cover.fail(f"Eksport SQL większy niż {MAX_SQL_BYTES} B: analiza DB pominięta w PoC")
-        return findings, cover
-    if item.content is None:
-        cover.fail("Treść eksportu SQL niedostępna po odczycie (plik zmienił się w trakcie): analiza DB pominięta")
-        return findings, cover
-    if _is_lossy(item.content):
-        cover.degrade("Eksport SQL nie jest poprawnym UTF-8: zdekodowano ze znakami zastępczymi, wartości mogą być zniekształcone")
-    sql = _text(item.content).read()
-    users, admins, count = {}, {}, 0  # admins: identyfikator użytkownika → miejsce pierwszego wiersza z rolą
-    tables = set()
-    dropped: list[str] = []
-    malformed, core_seen = 0, False
-    for table, cols, cells in iter_insert_rows(sql, dropped):
-        tables.add(table)
-        count += 1
-        if count > 100000:
-            cover.degrade("Przekroczono 100000 wierszy INSERT, analiza częściowa")
-            break
-        if needed := next((cells_needed for suffix, cells_needed in _CORE_TABLE_CELLS.items() if table.endswith(suffix)), 0):
-            core_seen = True
-            # Wiersz z wyrażeniem zamiast literału (np. CONCAT(...)) rozpada się na mniej pól, niż ma tabela.
-            if (len(cells) != len(cols)) if cols else (len(cells) < needed):
-                malformed += 1
-                continue
-        if table.endswith("_users"):
-            if cols:
-                row = dict(zip(cols, cells))
-            elif len(cells) >= 2:
-                row = {"ID": cells[0], "user_login": cells[1]}
-            else:
-                continue
-            if row.get("ID") is not None:
-                users[str(row["ID"])] = str(row.get("user_login") or "")
-        elif table.endswith("_usermeta"):
-            if cols:
-                row = dict(zip(cols, cells))
-            elif len(cells) >= 4:
-                row = {"user_id": cells[1], "meta_key": cells[2], "meta_value": cells[3]}
-            else:
-                continue
-            if str(row.get("meta_key") or "").endswith("_capabilities") and "administrator" in str(row.get("meta_value") or ""):
-                admins.setdefault(str(row.get("user_id")), models.Location(table=table, key=str(row.get("meta_key"))[:200], row=count))
-        elif table.endswith("_options"):
-            if cols:
-                row = dict(zip(cols, cells))
-            elif len(cells) >= 3:
-                row = {"option_name": cells[1], "option_value": cells[2]}
-            else:
-                continue
-            key = str(row.get("option_name") or "")[:200]
-            value = str(row.get("option_value") or "")
-            if re.search(r"<script\b|<iframe\b|javascript\s*:", value, flags=re.I):
-                findings.append(Detection("SUSPICIOUS_DB_MARKUP", "medium", "low", "database",
-                    "Wartość opcji zawiera aktywny znacznik HTML lub schemat JS; wymaga weryfikacji.",
-                    _observe(item, "OPTION_VALUE_WITH_ACTIVE_MARKUP", models.Location(table=table, key=key, row=count))))
-    if not tables:
-        cover.fail("Brak obsługiwanych instrukcji INSERT; parser PoC nie interpretuje tego formatu SQL")
-    elif not core_seen:
-        cover.fail("Zrzut nie zawiera odczytanych wierszy tabel *_users, *_usermeta ani *_options; "
-                   "analiza DB nie objęła danych WordPressa")
-    if dropped:
-        cover.degrade(f"Pominięto {len(dropped)} niedomkniętych instrukcji INSERT (zrzut ucięty lub uszkodzony)")
-    if malformed:
-        cover.degrade(f"Pominięto {malformed} wierszy tabel użytkowników lub opcji o nieoczekiwanej liczbie pól "
-                      "(np. wyrażenie SQL zamiast literału)")
-    unanalysed: Counter = Counter()
-    unsupported = sum(1 for start in _write_statement_starts(sql, unanalysed) if _INSERT_HEAD.match(sql, start) is None)
-    if unanalysed:
-        listed = ", ".join(f"{keyword} ×{number}" for keyword, number in sorted(unanalysed.items(), key=lambda pair: (-pair[1], pair[0]))[:8])
-        cover.degrade(f"Zrzut zawiera {sum(unanalysed.values())} instrukcji, których parser PoC nie analizuje: {listed}")
-    if unsupported:
-        cover.degrade(f"Pominięto {unsupported} instrukcji INSERT/REPLACE w nieobsługiwanej składni "
-                      "(np. REPLACE INTO, INSERT IGNORE, nazwa z bazą, INSERT ... SET, komentarz wykonywalny, DELIMITER)")
-    for user_id in sorted(admins):
-        login = users.get(user_id, "")
-        if not login:
-            # Roli nie da się porównać z zaufaną listą: bez luki administrator zniknąłby z raportu bez śladu.
-            cover.degrade(f"Rola administratora dla user_id {str(user_id)[:40]} bez odczytanego wiersza w tabeli użytkowników; "
-                          "nie można ustalić loginu ani porównać go z zaufaną listą")
-            continue
-        if known_admins and login not in known_admins:
-            findings.append(Detection("UNRECOGNIZED_ADMIN", "high", "medium", "database",
-                "Administrator nie figuruje na dostarczonej, zaufanej liście; nie dowodzi to włamania.",
-                _observe(item, "ADMINISTRATOR_ROLE_ROW", admins[user_id], username=login, user_id=user_id)))
-    if admins and not known_admins:
-        cover.note("Wykryto role administratorów, ale brak wiarygodnej listy porównawczej; sam fakt istnienia admina nie jest alertem")
-    cover.note("Parser SQL PoC obsługuje wybrane INSERT; nie obsługuje triggerów, procedur, pełnej składni ani multisite")
-    return findings, cover
 
 LOG_PATTERN = re.compile(r'^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"(GET|POST|PUT|PATCH|DELETE|HEAD)[ \t]+(\S+)[ \t]+[^\"\s][^\"]*"\s+(\d{3})\b')
 
@@ -359,9 +61,9 @@ def scan_logs(root: Path, session: ingest.Session | None = None) -> tuple[list[D
         if item.content is None:
             cover.degrade(f"Treść logu niedostępna po odczycie (plik zmienił się w trakcie): {name}")
             continue
-        if _is_lossy(item.content):
+        if is_lossy(item.content):
             cover.degrade(f"Log nie jest poprawnym UTF-8: zdekodowano ze znakami zastępczymi: {name}")
-        for ln, line in enumerate(_text(item.content), start=1):
+        for ln, line in enumerate(decoded(item.content), start=1):
             observed += 1
             m = LOG_PATTERN.match(line)
             if not m:
@@ -492,10 +194,11 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
     """Uruchamia skanery podanych źródeł; źródło niepodane dostaje powód zamiast skanu. Trzeci wynik: fakty bez ustalenia."""
     cover = {source: SourceCoverage(provided=False) for source in models.SOURCES}
     scan = files.scan_files(root, baseline, session, core)
-    detections, cover["files"] = scan.detections, scan.cover
+    detections, cover["files"], facts = scan.detections, scan.cover, list(scan.observations)
     if database:
-        found, cover["database"] = scan_database(database, known_admins, session)
+        found, cover["database"], database_facts = database_scan.scan_database(database, known_admins, session)
         detections.extend(found)
+        facts.extend(database_facts)
     else:
         cover["database"].note("Brak zrzutu bazy danych")
     if logs:
@@ -515,7 +218,7 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
         if core is not None:
             cover["baseline"].note("Manifest sum rdzenia (MD5) obejmuje tylko pliki dystrybucji WordPressa; zgodność z nim "
                                    "nie mówi nic o wtyczkach, motywach, uploads ani konfiguracji")
-    return detections, cover, scan.observations
+    return detections, cover, facts
 
 
 def _findings(detections: list[Detection]) -> list[models.Finding]:
