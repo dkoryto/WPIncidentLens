@@ -1,6 +1,6 @@
-# Macierz testów P1–P6, N1–N8, S-01–S-18 (T-003, stan po M1)
+# Macierz testów P1–P6, N1–N8, S-01–S-18 (T-003, stan po M2)
 
-**Stan na 2026-11-11**, gałąź `agent/T-101-case-manager`, commit `4cac876` (PR #27, w chwili pisania niescalony z `main`). Źródło scenariuszy: `docs/WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.md`, rozdz. 14.1–14.3. Dokument opisuje jeden, aktualny stan; wcześniejsze wyniki cząstkowe (T-003, #11, T-101, T-102) są w historii gita tego pliku.
+**Stan na 2026-11-12**, gałąź `main`, commit `6c4cc87` (po scaleniu PR #30, #31, #33 i #32 — etap M2, T-201). Źródło scenariuszy: `docs/WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.md`, rozdz. 14.1–14.3. Dokument opisuje jeden, aktualny stan; wcześniejsze wyniki (T-003, #11, T-101, T-102, bramka M1) są w historii gita tego pliku.
 
 Macierz nie jest dowodem bezpieczeństwa ani skuteczności detekcji. `PASS` znaczy tylko: opisane zachowanie zaobserwowano w uruchomionym teście na danych syntetycznych, na macOS.
 
@@ -10,25 +10,24 @@ Macierz nie jest dowodem bezpieczeństwa ani skuteczności detekcji. `PASS` znac
 - **XFAIL (#N)** — test uruchomiony, potwierdza znaną lukę; oznaczony `xfail(strict=True)` z numerem Issue w powodzie. Po naprawie test da XPASS i wymusi zdjęcie znacznika.
 - **SKIP** — test nie wykonał się na tej platformie; podany powód.
 - **NOT COVERED** — brak testu; podany powód.
-- Skróty plików (`tests/test_*.py`): `pos` = `test_scenarios_positive`, `neg` = `test_negative`, `sec` = `test_security_inputs`, `inv` = `test_invariants`, `cli` = `test_cli`, `ing` = `test_ingest`, `prop` = `test_ingest_properties`, `mod` = `test_models`, `con` = `test_contract`, `mig` = `test_migrate`, `case` = `test_case`, `rw` = `test_report_writer`.
+- Skróty plików (`tests/test_*.py`): `pos` = `test_scenarios_positive`, `neg` = `test_negative`, `sec` = `test_security_inputs`, `inv` = `test_invariants`, `cli` = `test_cli`, `ing` = `test_ingest`, `prop` = `test_ingest_properties`, `mod` = `test_models`, `con` = `test_contract`, `mig` = `test_migrate`, `case` = `test_case`, `rw` = `test_report_writer`, `fr` = `test_filerules`, `integ` = `test_integrity`, `wpd` = `test_wpdetect`, `fc` = `test_fileclass`.
 - Raport ma schemat `poc-1` (ADR 0003). Kolumna „Dowód w raporcie” używa nazw widoku testowego `Run` z `tests/conftest.py` (`source`, `metadata`, `gaps`, `manifest`), który składa ustalenie z jego obserwacją i dowodem; nazwy pól w pliku opisuje ADR 0003.
-- Issue (stan z `gh issue list --state all`, 2026-11-11): **otwarte** #4 (T-101), #6 (T-201 pliki), #7 (T-301 SQL), #13 (T-401 logi), #18 (T-006); **zamknięte** #3 (T-003), #5 (T-102), #11, #14 (T-501), #15 (T-601), #17.
+- Issue (stan z `gh issue list --state all`, 2026-11-12): **otwarte** #6 (T-201 pliki), #7 (T-301 SQL), #13 (T-401 logi); **zamknięte** #3 (T-003), #4 (T-101), #5 (T-102), #11, #14 (T-501), #15 (T-601), #17, #18 (T-006).
 
-## Wyniki uruchomienia (2026-11-11)
+## Wyniki uruchomienia (2026-11-12)
 
-Uruchomione przez agenta aktualizującego ten dokument, w świeżym środowisku (`uv venv --python 3.12`, `pip install -e '.[dev]'`):
+Uruchomione przez agenta aktualizującego ten dokument w istniejącym środowisku wirtualnym projektu (`.venv`, pakiet zainstalowany z `.[dev]`), na drzewie roboczym commita `6c4cc87`:
 
 | Komenda | Środowisko | Wynik |
 |---|---|---|
 | `python -m ruff check .` | macOS 27.0.1 (Darwin 27.0.0, arm64), ruff 0.8.6 | **All checks passed** (reguły `E9`, `F`) |
-| `python -m pytest -q` | jw., Python 3.12.11, pytest 8.4.2, jsonschema 4.26.0 | **1864 passed, 5 skipped, 10 xfailed** (19,75 s) |
-| `python -m pytest -q --cov=wpincidentlens --cov-report=term-missing` | jw., pytest-cov 6.3.0, coverage 7.17.2 | **1864 passed, 5 skipped, 10 xfailed; pokrycie 99%** (tabela niżej) |
-| `python -m pytest -v` | jw. | ten sam wynik; trzeci przebieg, w tym oba testy wyścigu |
-| `python -m wpincidentlens --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output <tmp> --case-id DEMO-001` | jw. | kod 0; `SUSPICIOUS`, `scope_complete: true`, 6 ustaleń, 2 luki; powstały `report.json`, `report.html`, `case.json`, wszystkie z trybem `0600` |
-| `python -m wpincidentlens --files fixtures/site --output <tmp>` | jw. | kod 3; `SUSPICIOUS`, `scope_complete: false` |
+| `python -m pytest -q -rx` | jw., Python 3.12.11, pytest 8.4.2, jsonschema 4.26.0 | **2138 passed, 5 skipped, 7 xfailed** (22,5 s) |
+| `python -m pytest -q -rs --cov=wpincidentlens --cov-report=term-missing` | jw., pytest-cov 6.3.0, coverage 7.17.2 | **2138 passed, 5 skipped, 7 xfailed; pokrycie 99%** (tabela niżej) |
+| `python -m wpincidentlens --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output <tmp> --case-id DEMO-001` | jw. | **kod 3**; `SUSPICIOUS`, `scope_complete: false`, 6 ustaleń, 6 luk; pokrycie `files` = `PARTIAL` (`NOT_CHECKED` dla klas `CONFIG`, `CORE`, `UPLOAD`: `fixtures/baseline.json` nie zawiera skrótów plików); powstały `report.json`, `report.html`, `case.json`, wszystkie z trybem `0600`. Przed M2 to samo polecenie kończyło się kodem 0 (ADR 0005 pkt 6) |
+| `python -m wpincidentlens --files fixtures/site --output <tmp>` | jw. | kod 3; `SUSPICIOUS`, `scope_complete: false`, 2 ustalenia, 7 luk |
 | `python -m wpincidentlens --help` | jw. | kod 0 |
 
-Zebrano 1871 przypadków z 362 funkcji testowych (`pytest --collect-only -q`): 1066 w `prop`, 184 w `mod`, 119 w `con`, 116 w `ing`, 108 w `sec`, 91 w `case`, 61 w `mig`, 41 w `neg`, 38 w `inv`, 22 w `rw`, 19 w `pos`, 6 w `cli`.
+Zebrano 2150 przypadków z 422 funkcji testowych (`pytest --collect-only -q`): 1066 w `prop`, 184 w `mod`, 126 w `con`, 124 w `fr`, 116 w `ing`, 109 w `sec`, 98 w `integ`, 91 w `case`, 61 w `mig`, 42 w `neg`, 38 w `inv`, 30 w `wpd`, 22 w `rw`, 19 w `pos`, 18 w `fc`, 6 w `cli`. M2 dodał cztery pliki testów: `test_wpdetect.py` (11 funkcji), `test_filerules.py` (12), `test_integrity.py` (32), `test_fileclass.py` (2).
 
 Pominięcia na macOS (5), wszystkie z powodu systemu plików APFS:
 
@@ -40,52 +39,58 @@ Pominięcia na macOS (5), wszystkie z powodu systemu plików APFS:
 | `prop::test_distinct_files_never_share_a_ledger_path` | jw. |
 | `con::test_report_names_the_flagged_file_whose_mtime_cannot_be_written_as_a_date` | system plików nie zachowuje `mtime` spoza zakresu lat 1–9999 |
 
-**Linux nie był uruchamiany w ramach tej aktualizacji.** Jedyny znany wynik z Linuksa pochodzi z opisu PR #27 (pomiar agenta prowadzącego, nieodtworzony tutaj): kontener `python:3.12-slim`, `--network none`, uid 1000, kopia repozytorium — „1856 passed, 2 skipped, 13 xfailed; ruff czysty”. Wyniku CI (`ubuntu-24.04`) dla PR #27 nie sprawdzano.
+**Linux nie był uruchamiany w ramach tej aktualizacji.** Opis PR #32 podaje, że lokalny przebieg w obrazie Docker się nie odbył (demon Dockera nie działał). CI na `main` (GitHub Actions, `ubuntu-24.04`) dla commita `6c4cc87` zakończyło się wynikiem `success` (`gh run list --branch main`, 2026-11-12); liczb testów z tego przebiegu tutaj nie odczytywano. Ostatni znany wynik z Linuksa pochodzi z opisu PR #27 (etap M1, pomiar agenta prowadzącego, nieodtworzony tutaj).
 
 ### Pokrycie kodu
 
 ```
-Name                  Stmts   Miss  Cover   Missing
----------------------------------------------------
-wpincidentlens/__init__.py       1      0   100%
-wpincidentlens/__main__.py       2      0   100%
-wpincidentlens/case.py          86      0   100%
-wpincidentlens/cli.py          470     11    98%   334-335, 345-346, 355, 359, 368, 377, 440-441, 674
-wpincidentlens/ingest.py       380      7    98%   170-172, 334-335, 413, 520
-wpincidentlens/migrate.py      136      1    99%   211
-wpincidentlens/models.py       459      0   100%
-wpincidentlens/report.py        82      0   100%
----------------------------------------------------
-TOTAL                  1616     19    99%
+Name                          Stmts   Miss  Cover   Missing
+-----------------------------------------------------------
+wpincidentlens/__init__.py        1      0   100%
+wpincidentlens/__main__.py        2      0   100%
+wpincidentlens/analysis.py       31      0   100%
+wpincidentlens/case.py          112      0   100%
+wpincidentlens/cli.py           453     12    97%   248-249, 261-262, 271, 275, 284, 293, 360-361, 549, 646
+wpincidentlens/fileclass.py      31      0   100%
+wpincidentlens/filerules.py     100      0   100%
+wpincidentlens/files.py          33      0   100%
+wpincidentlens/ingest.py        384      7    98%   172-174, 344-345, 423, 530
+wpincidentlens/integrity.py     188      0   100%
+wpincidentlens/migrate.py       136      1    99%   211
+wpincidentlens/models.py        459      0   100%
+wpincidentlens/report.py         82      0   100%
+wpincidentlens/wpdetect.py      126      1    99%   186
+-----------------------------------------------------------
+TOTAL                          2138     21    99%
 ```
 
-Pokrycie liniowe mierzy wykonanie, nie poprawność: 13 przypadków XFAIL wykonuje kod, który zachowuje się źle. Niepokryte na macOS: treść niedostępna po zmianie pliku w trakcie odczytu (`cli.py` 334–335, 440–441), limit 100 000 wierszy `INSERT` (345–346), wiersze bez listy kolumn o zbyt małej liczbie pól (355, 359, 368, 377), błąd `fstat` tuż po otwarciu (`ingest.py` 170–172), limit wpisów osiągnięty w pętli przejścia (334–335), luka o nazwie spoza UTF-8 (413 — testy pominięte na APFS), wpis zmieniony na inny typ przy ponownej weryfikacji (520). Nie ustawiono progu `fail-under`.
+Pokrycie liniowe mierzy wykonanie, nie poprawność: 7 przypadków XFAIL wykonuje kod, który zachowuje się źle, a 100% w `filerules.py` nie mówi nic o skuteczności reguł. Niepokryte na macOS: treść niedostępna po zmianie pliku w trakcie odczytu (`cli.py` 248–249, 360–361), limit 100 000 wierszy `INSERT` (261–262), wiersze bez listy kolumn o zbyt małej liczbie pól (271, 275, 284, 293), manifest sum spoza rejestru sesji przekazany do `compose_report` (549), wywołanie modułu jako skryptu (646), błąd `fstat` tuż po otwarciu (`ingest.py` 172–174), limit wpisów osiągnięty w pętli przejścia (344–345), luka o nazwie spoza UTF-8 (423 — testy pominięte na APFS), wpis zmieniony na inny typ przy ponownej weryfikacji (530), nota o więcej niż 16 plikach językowych (`wpdetect.py` 186). Nie ustawiono progu `fail-under`.
 
 ## Scenariusze pozytywne P1–P6
 
 | ID | Wymaganie | Oczekiwany status / zachowanie | Dowód w raporcie | Test | Stan |
 |---|---|---|---|---|---|
 | P1 | PHP w uploadach + odwołanie w access logu | finding pliku, finding logu i korelacja z opisem ograniczeń | `EXECUTABLE_IN_UPLOADS`, `HTTP_EXECUTABLE_IN_UPLOADS`, `CORRELATED_UPLOAD_REQUEST`; wyjaśnienie „nie dowód wykonania kodu” | `pos::test_p1_upload_php_and_log_request_are_correlated_with_caveat`, `cli::test_poc_end_to_end` | PASS |
-| P2 | Zmodyfikowany plik core, poprawny manifest | checksum mismatch | `BASELINE_FILE_CHANGED` z `sha256` i `baseline_sha256` | `pos::test_p2_modified_core_file_reports_observed_and_reference_hash` | PASS |
-| P2 | — | dowód z wersją referencji | wersja WordPressa/manifestu w ustaleniu | `pos::test_p2_checksum_mismatch_names_reference_version` | XFAIL (#6) |
+| P2 | Zmodyfikowany plik core, poprawny manifest | checksum mismatch | `BASELINE_FILE_CHANGED` z `sha256` i `baseline_sha256` (baseline); `CORE_CHECKSUM_MISMATCH` z `observed_md5`, `reference_md5`, `observed_sha256` (manifest sum rdzenia) | `pos::test_p2_modified_core_file_reports_observed_and_reference_hash`, `integ::test_core_checksum_mismatch_reports_both_digests_and_the_reference` | PASS |
+| P2 | — | dowód z wersją referencji | `reference_version` (i opcjonalny opis `reference`) w ustaleniu; dla manifestu także `reference_file` | `pos::test_p2_checksum_mismatch_names_reference_version`, `integ::test_manifest_nested_under_a_version_key_supplies_the_reference_version`, `integ::test_missing_baseline_file_carries_the_reference_version_and_label` | PASS — wersję deklaruje referencja; jej zgodności z wersją witryny narzędzie nie sprawdza |
 | P3 | Administrator dodany w nowszej migawce | ustalenie bez przypisania sprawstwa | `UNRECOGNIZED_ADMIN`, „nie dowodzi to włamania”, brak słowa `ATTACKER` | `pos::test_p3_admin_outside_trusted_list_is_flagged_without_attribution` | PASS |
 | P3 | — | `NEW_SINCE_BASELINE` | reguła o tej nazwie | `pos::test_p3_admin_added_since_baseline_is_new_since_baseline` | XFAIL (#7) |
 | P4 | Opcja z podejrzanym redirectem | finding DB | `SUSPICIOUS_DB_MARKUP`, źródło `tabela:opcja` | `pos::test_p4_option_with_redirect_markup_is_a_database_finding[script, iframe, javascript-scheme]` | PASS |
 | P4 | — | finding DB także dla meta-refresh | jw. | `pos::test_p4_option_with_redirect_markup_is_a_database_finding[meta-refresh]` | XFAIL (#7) |
 | P4 | — | cytat wartości po redakcji | fragment wartości bez sekretu | `pos::test_p4_finding_quotes_option_value_with_secret_redacted` | XFAIL (#7) |
 | P5 | `mu-plugin` zmieniony wobec baseline | anomalia trwałości | `BASELINE_FILE_CHANGED` (ogólna reguła, bez klasy „persistence”) | `pos::test_p5_changed_mu_plugin_is_reported_against_baseline` | PASS |
-| P5 | Nowy `mu-plugin` nieobecny w baseline | ustalenie dla pliku | finding ze ścieżką pliku | `pos::test_p5_mu_plugin_added_since_baseline_is_reported` | XFAIL (#6) |
+| P5 | Nowy `mu-plugin` lub drop-in nieobecny w baseline | ustalenie dla pliku, bez twierdzenia o włamaniu | `NEW_FILE_SINCE_BASELINE` medium/medium z `file_class`; dla wpisu nieodczytanego pewność `low` | `pos::test_p5_mu_plugin_added_since_baseline_is_reported`, `integ::test_new_autoloaded_file_is_a_finding_that_does_not_claim_compromise[mu-plugin, drop-in]`, `integ::test_unread_entry_in_autoloaded_location_is_reported_by_path_with_low_confidence`, `integ::test_unread_mu_plugins_directory_itself_is_reported_by_path` (2 warianty) | PASS |
 | P5 | Cron zmieniony wobec baseline | anomalia trwałości | — | — | NOT COVERED: PoC nie ma wejścia na bazową migawkę DB ani analizy opcji `cron` (#7) |
 | P6 | Sygnatura sztucznego webshella | trafienie sygnatury | `SUSPICIOUS_PHP_EVAL_DECODE`, confidence `medium`, „heurystyka, nie dowód malware” | `pos::test_p6_synthetic_webshell_marker_is_a_heuristic_finding`, `cli::test_poc_end_to_end` | PASS |
-| P6 | — | YARA finding z `rule_id` i offsetem | `metadata.offset` | `pos::test_p6_signature_finding_carries_match_offset` | XFAIL (#6) |
+| P6 | — | finding z `rule_id` i offsetem | `metadata.offset`, `length`, `match_count`, `rule_version` — reguła wbudowana, **nie YARA-X** | `pos::test_p6_signature_finding_carries_match_offset`, `fr::test_content_finding_points_to_the_byte_offset_of_the_first_match` (10 reguł) | PASS — YARA-X: NOT COVERED (brak adaptera, R-52) |
 
-Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC` — `pos::test_content_rules_fire_only_on_request_driven_exec_in_code_files` (PASS); `BASELINE_FILE_MISSING` — `pos::test_baseline_file_missing_only_for_files_absent_from_evidence` (PASS).
+Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC` — `pos::test_content_rules_fire_only_on_request_driven_exec_in_code_files` (PASS); `BASELINE_FILE_MISSING` — `pos::test_baseline_file_missing_only_for_files_absent_from_evidence` (PASS). Pozostałe reguły plików i integralności: sekcja „Analiza plików WordPressa (M2)” niżej.
 
 ## Scenariusze negatywne N1–N8
 
 | ID | Wymaganie | Oczekiwany status / zachowanie | Dowód w raporcie | Test | Stan |
 |---|---|---|---|---|---|
-| N1 | Czysty WordPress, poprawny manifest | bez alertów | `findings == []`, `NO_INDICATORS_IN_ANALYZED_SCOPE` (komplet źródeł) | `neg::test_n1_clean_site_with_matching_manifest_has_no_findings`, `con::test_complete_scope_without_findings_is_no_indicators_in_analyzed_scope` | PASS |
+| N1 | Czysty WordPress, poprawny manifest | bez alertów | `findings == []`, `NO_INDICATORS_IN_ANALYZED_SCOPE` (komplet źródeł; baseline obejmuje każdy plik kodu fikstury — bez tego wynik to `INCONCLUSIVE`) | `neg::test_n1_clean_site_with_matching_manifest_has_no_findings`, `con::test_complete_scope_without_findings_is_no_indicators_in_analyzed_scope` | PASS |
 | N2 | Legalny kod analytics w pliku motywu | brak ustaleń | `findings == []` | `neg::test_n2_analytics_snippet_in_theme_file_raises_nothing` | PASS |
 | N2 | Legalny kod analytics w opcji DB | brak wysokiego alarmu | jedno `SUSPICIOUS_DB_MARKUP` medium/low — **znany false positive** (każdy `<script>` w opcji) | `neg::test_n2_analytics_snippet_in_option_is_only_a_low_confidence_review_item` | PASS |
 | N3 | Legalny admin bez baseline | brak alertu, nota o braku listy | `findings == []`, gap „brak wiarygodnej listy porównawczej” | `neg::test_n3_admin_without_trusted_list_is_a_gap_not_an_alert` | PASS |
@@ -98,24 +103,25 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | N7 | Błędna strefa czasu w logu | brak zdarzenia na osi czasu, jawna nota | brak wpisu HTTP w `timeline`, gap „Nie można znormalizować czasu logu” | `neg::test_n7_unusable_log_timezone_yields_gap_instead_of_timeline_event[no-zone, impossible-zone, garbage]` | PASS |
 | N7 | Poprawna strefa | UTC + adnotacja o niezweryfikowanym zegarze | `time_utc`, `timestamp_basis` | `neg::test_n7_log_event_time_is_marked_as_unverified_clock` | PASS |
 | N7 | Brak fałszywej **ścisłej** korelacji czasowej | — | — | — | NOT COVERED: korelacja PoC łączy plik z logiem wyłącznie po ścieżce i nie używa czasu (#13) |
-| N8 | Wtyczka premium bez sum kontrolnych | `NO_TRUSTED_REFERENCE` | status w raporcie | `neg::test_n8_premium_plugin_without_checksums_has_no_trusted_reference` | PASS (nota `NO_TRUSTED_REFERENCE`) |
+| N8 | Wtyczka premium bez sum kontrolnych | `NO_TRUSTED_REFERENCE`, nie malware | nota `NO_TRUSTED_REFERENCE` z liczbą i przykładem; powód `NOT_CHECKED` dla klasy `PLUGIN`; pokrycie `files` = `PARTIAL` | `neg::test_n8_premium_plugin_without_checksums_has_no_trusted_reference`, `neg::test_files_all_listed_in_baseline_have_no_trusted_reference_note`, `integ::test_not_checked_counts_read_and_unread_files_that_no_reference_covers` | PASS |
 
 ### Luki pokrycia i wiarygodność baseline (poza numeracją N)
 
 | Wymaganie | Oczekiwane zachowanie | Test | Stan |
 |---|---|---|---|
-| Brak lub pusty baseline | powód w `coverage.baseline`; zakres pozostaje pełny | `neg::test_missing_trusted_baseline_is_reported_as_coverage_gap[not-provided, empty-manifest]`, `con::test_missing_baseline_is_reported_but_does_not_make_the_scope_incomplete` | PASS |
+| Brak lub pusty baseline | powód w `coverage.baseline`; **zakres niepełny**, jeśli w drzewie jest plik kodu: `files` = `PARTIAL`, `INCONCLUSIVE`, kod 3 (ADR 0005 pkt 6; przed M2 zakres pozostawał pełny) | `neg::test_missing_trusted_baseline_is_reported_as_coverage_gap[not-provided, empty-manifest]`, `con::test_missing_baseline_is_reported_and_leaves_unverified_code_outside_the_scope` | PASS |
 | Niepoprawny plik baseline (zły JSON, zły typ, nie-UTF-8, głębokie zagnieżdżenie) | odmowa, kod 2, nic nie zapisane | `neg::test_malformed_baseline_is_rejected_as_usage_error` (9 wariantów) | PASS |
+| Baseline z wpisem w złej postaci: skrót za krótki, wielkimi literami albo MD5; klucz z `./`, `\` lub bajtem zerowym; powtórzony klucz ścieżki albo `files`; niepoprawne `wordpress_version` / `reference` | odmowa, kod 2, komunikat bez odrzuconej wartości | `integ::test_baseline_with_malformed_or_duplicated_entries_is_a_usage_error` (8 wariantów), `integ::test_invalid_reference_description_in_baseline_is_a_usage_error` (12 wariantów) | PASS |
 | Baseline nieczytelny lub z wieloma dowiązaniami twardymi | odmowa, kod 2 (nie cicha rezygnacja z porównania) | `sec::test_unreadable_baseline_is_refused_not_silently_dropped`, `neg::test_hardlinked_baseline_is_refused_with_a_hint` | PASS |
 | Baseline lub `--known-admin` z tekstem nie do zapisania w UTF-8 | odmowa, kod 2, przed analizą | `case::test_baseline_text_that_cannot_be_encoded_is_refused_before_analysis` (3 warianty), `case::test_known_admin_that_cannot_be_encoded_is_refused_before_analysis` (2 warianty) | PASS |
 | Baseline jako dowód | wpis `baseline/<nazwa>` w `evidence` | `neg::test_baseline_is_listed_in_evidence_manifest`, `con::test_provided_baseline_is_analyzed_and_counted` | PASS |
-| Plik z baseline obecny, ale nieprzeczytany (hardlink, nieczytelny katalog, limit) | luka, nie `BASELINE_FILE_MISSING` | `sec::test_file_present_but_not_read_is_a_gap_not_a_missing_file_finding[hardlinked, in-unreadable-directory, beyond-file-limit]` | PASS |
+| Plik z baseline obecny, ale nieprzeczytany (hardlink, nieczytelny katalog, limit) | nigdy `BASELINE_FILE_MISSING`; hardlink i nieczytelny katalog dają `REFERENCE_FILE_UNREADABLE`, limit operatora — samą lukę | `sec::test_file_present_but_not_read_is_a_gap_not_a_missing_file_finding[hardlinked, in-unreadable-directory, beyond-file-limit]`, `integ::test_unread_entry_listed_in_the_baseline_is_unreadable_not_new_or_missing` (2 warianty) | PASS |
 | Plik PHP w uploads, którego nie przeczytano | ustalenie po ścieżce z pewnością `low`; poza uploads — brak ustalenia | `sec::test_unread_php_in_uploads_is_still_reported_by_path` (2 warianty), `sec::test_unread_file_outside_uploads_gives_no_finding` | PASS |
 | Pusty katalog logów lub `--files` | luka pokrycia, pokrycie `FAILED`, kod wyjścia 4 | `neg::test_empty_source_directory_is_reported_as_coverage_gap[logs, site]`, `con::test_incomplete_scope_without_findings_is_inconclusive[empty-log-directory, log-without-lines, empty-site-directory]` | PASS |
 | Obcy SQL (PostgreSQL COPY, identyfikatory w `"`, śmieci binarne, pusty plik) | gap „Brak obsługiwanych instrukcji INSERT”, zero ustaleń | `neg::test_foreign_sql_is_reported_as_unparsed_not_clean` (4 warianty) | PASS |
-| `INSERT`/`REPLACE` w nieobsługiwanej składni, instrukcja niedomknięta, komentarz wykonywalny, `DELIMITER`, ukośnik wsteczny poza łańcuchem, wiersz o złej liczbie pól | luka i pokrycie bazy `PARTIAL` albo `FAILED` | `neg::test_unsupported_statement_next_to_supported_one_adds_a_gap`, `con::test_sql_that_the_parser_skipped_lowers_database_coverage` (16 przypadków), `con::test_dump_without_wordpress_tables_is_not_an_analyzed_database` | PASS |
-| Obsługiwane `INSERT` w różnych zapisach | pokrycie bazy pozostaje `ANALYZED` | `con::test_supported_inserts_keep_database_coverage_complete` (8 przypadków) | PASS |
-| Instrukcje SQL inne niż `INSERT`/`REPLACE` (`UPDATE`, `CREATE TRIGGER`…) | luka obniżająca pokrycie | — | NOT COVERED: kod daje tylko stałą notę (`wpincidentlens/cli.py:411`); jednorazowa sonda opisana w `docs/M1_GATE.md` §3 dała pokrycie `ANALYZED` (#7) |
+| `INSERT`/`REPLACE` w nieobsługiwanej składni, instrukcja niedomknięta, komentarz wykonywalny, `DELIMITER`, ukośnik wsteczny poza łańcuchem, wiersz o złej liczbie pól | luka i pokrycie bazy `PARTIAL` albo `FAILED` | `neg::test_unsupported_statement_next_to_supported_one_adds_a_gap`, `con::test_sql_that_the_parser_skipped_lowers_database_coverage` (22 przypadki), `con::test_dump_without_wordpress_tables_is_not_an_analyzed_database` | PASS |
+| Obsługiwane `INSERT` w różnych zapisach | pokrycie bazy pozostaje `ANALYZED` | `con::test_supported_inserts_keep_database_coverage_complete` (9 przypadków) | PASS |
+| Instrukcje SQL inne niż `INSERT`/`REPLACE` (`UPDATE`, `DELETE`, `CREATE TRIGGER`, `DROP VIEW`, `CALL`) | luka z liczbą instrukcji, pokrycie bazy `PARTIAL`; instrukcje nie są analizowane | `con::test_sql_that_the_parser_skipped_lowers_database_coverage[update-statement, delete-statement, create-trigger, drop-view, call-procedure, statement-not-starting-with-a-keyword]` | PASS (od poprawek bramki M1) |
 | Rola administratora bez wiersza `*_users` | ustalenie albo luka | `neg::test_admin_capability_without_user_row_is_not_silently_dropped` | PASS (luka + `PARTIAL`) |
 | Log w obcym formacie / częściowo nieparsowalny | luka z licznikiem | `neg::test_unsupported_log_lines_are_counted_as_coverage_gap[json-lines, partly-parsed]` | PASS |
 
@@ -127,7 +133,7 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | S-01 | Symlink w katalogu logów | pominięty, luka | gap „Pominięto link w logach” | `sec::test_s01_log_symlink_outside_root_is_skipped_with_gap` | PASS |
 | S-01 | Symlink podany wprost jako `--files`, `--database`, `--logs` (katalog i plik), `--baseline` | odmowa, kod 2, komunikat bez celu dowiązania (ADR 0002 B5) | `SystemExit(2)`, brak katalogu wyników | `sec::test_s01_database_symlink_outside_root_is_not_read`, `sec::test_s01_symlink_given_as_any_source_is_refused[files, logs-directory, logs-file, baseline]`, `ing::test_symlink_given_as_source_root_is_refused` (4 warianty) | PASS |
 | S-01 | Hardlink do pliku spoza root | domyślnie nieczytany, luka `SKIPPED_HARDLINK`; z `--allow-hardlinks` czytany i policzony w luce | gap z nazwą pliku; brak SHA celu | `sec::test_s01_hardlink_to_file_outside_root_is_flagged`, `sec::test_s01_hardlinked_file_is_not_hashed_or_analyzed_by_default`, `sec::test_s01_allow_hardlinks_flag_reads_the_file_and_reports_how_many`, `ing::test_hardlinked_file_*` (2 funkcje) | PASS |
-| S-01 | Klucze baseline z `../` i ścieżką bezwzględną | tylko porównywane, nigdy otwierane | brak SHA pliku spoza dowodów | `sec::test_s01_traversal_keys_in_baseline_are_compared_but_never_opened`, `ing::test_symlink_to_parent_directory_does_not_escape_or_loop` | PASS |
+| S-01 | Klucze baseline i manifestu sum z `../`, ścieżką bezwzględną, `./`, pustym segmentem, `\`, bajtem zerowym | odmowa przed analizą, kod 2; klucz nigdy nie jest otwierany jako ścieżka; komunikat bez nazwy pliku spoza dowodów | `SystemExit(2)`, brak nazwy kanarka w komunikacie | `sec::test_s01_traversal_keys_in_baseline_are_refused_before_analysis[parent-traversal, absolute-path]`, `integ::test_unusable_core_manifest_is_a_usage_error_that_echoes_no_value[parent-traversal, absolute-path, dot-segment, empty-segment, backslash, nul-byte, …]`, `ing::test_symlink_to_parent_directory_does_not_escape_or_loop` | PASS |
 | S-01 | Losowe drzewa z dowiązaniami symbolicznymi i twardymi do „kanarka” poza korzeniem (25 ziaren × 4 konfiguracje sesji) | nic spoza korzenia nie jest czytane, poza jawnie dozwolonym i oznaczonym hardlinkiem | brak skrótu i treści kanarka w rekordach i rejestrze | `prop::test_nothing_outside_the_root_is_read_except_an_allowed_marked_hardlink` (100 przypadków) | PASS |
 | S-02 | Podmiana pliku lub katalogu na symlink między enumeracją a otwarciem — hak deterministyczny | cel nieczytany, luka | gap „Łącze symboliczne pominięte”, brak SHA celu | `sec::test_s02_file_swapped_for_symlink_after_check_is_not_read`, `ing::test_entry_swapped_for_symlink_after_enumeration_is_not_followed[file, directory]` | PASS |
 | S-02 | Ta sama podmiana wykonywana w pętli przez **osobny proces** podczas czytania (marker `race`) | pod podmienianą ścieżką tylko oryginał albo jawna odmowa; nic spoza korzenia | etykiety `original` i `blocked` zaobserwowane, zero naruszeń | `prop::test_file_swapped_for_a_symlink_by_another_process_is_never_followed`, `prop::test_directory_swapped_for_a_symlink_by_another_process_is_never_entered` | PASS — próbkowanie ok. 1,5 s na wariant, nie dowód braku okna |
@@ -151,15 +157,17 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | S-06 | Limit niedodatni lub nieskończony | odmowa, kod 2 | komunikat z nazwą limitu | `sec::test_non_positive_limit_is_rejected_as_usage_error` (4 flagi), `case::test_limit_that_is_not_a_positive_finite_number_is_refused` (4 warianty), `ing::test_limits_reject_non_positive_values` (8 wariantów) | PASS |
 | S-06 | Limity na losowych drzewach (25 ziaren × 4 konfiguracje) | żaden limit nie jest przekroczony | liczniki rejestru | `prop::test_limits_are_never_exceeded` (100 przypadków) | PASS |
 | S-06 | Milion małych plików | budżet czasu/pamięci | — | — | NOT COVERED: nie tworzono miliona plików; zmierzono tylko mechanizm limitu |
-| S-06 | Limit czasu wewnątrz parserów SQL i logów oraz w trakcie odczytu jednego pliku | przerwanie z luką | — | — | NOT COVERED: kod sprawdza zegar tylko między wpisami (`wpincidentlens/ingest.py:327`, `:474`) |
+| S-06 | Limit czasu wewnątrz parserów SQL i logów oraz w trakcie odczytu jednego pliku | przerwanie z luką | — | — | NOT COVERED: kod sprawdza zegar tylko między wpisami (`wpincidentlens/ingest.py:337`, `:484`) |
 | S-07 | Plik > limitu (plik rzadki, progi 4/20/30 MiB + 1 B) | treść pominięta z luką; hash i rozmiar w manifeście | gap „Analiza treści pominięta” / „Eksport SQL większy niż” / „Log za duży” | `sec::test_s07_oversized_site_file_is_hashed_but_not_content_scanned`, `sec::test_s07_oversized_sql_dump_is_skipped_with_gap`, `sec::test_s07_oversized_log_is_skipped_with_gap` | PASS |
 | S-07 | 10 GB sparse file | pominięty przed skrótem (limit 2 GiB na plik, `--max-file-bytes`), luka, reszta analizowana | gap „Plik większy niż limit … pominięty bez obliczania skrótu” w 5 s | `sec::test_s07_ten_gigabyte_sparse_file_is_skipped_without_hashing`, `sec::test_s07_size_limit_flags_skip_the_file_and_continue_with_the_rest[max-file-bytes, max-total-bytes]`, `ing::test_file_above_size_limit_is_skipped_before_hashing`, `ing::test_total_volume_limit_skips_what_does_not_fit_and_continues` | PASS |
 | S-07 | Limit treści plików (4 MiB) a SQL i logi | SQL (20 MiB) i logi (30 MiB) zachowują własne progi | reguły DB i logów działają powyżej progu plików | `sec::test_s07_file_scan_limit_does_not_apply_to_sql_and_logs[sql-dump, access-log]` | PASS |
 | S-08 | Wejście wymuszające katastrofalny backtracking (SQL) | parser kończy w budżecie czasu | brak przekroczenia budżetu | `sec::test_s08_crafted_insert_does_not_stall_the_sql_parser`, `sec::test_s08_unterminated_insert_headers_do_not_stall_the_sql_parser` (4 warianty), `sec::test_s08_statement_scanner_is_linear_on_crafted_sql` (5 wariantów), `sec::test_sql_row_splitting_scales_linearly` | PASS |
 | S-08 | Spreparowany wiersz logu | wzorzec kończy w budżecie czasu | jw. | `sec::test_s08_crafted_log_line_does_not_stall_the_log_pattern` (5 wariantów) | PASS |
 | S-08 | Powtarzalna treść PHP dla reguł plikowych | koniec w budżecie | zero ustaleń w budżecie | `sec::test_s08_repetitive_php_does_not_stall_the_file_rules` | PASS |
+| S-08 | Wroga treść dla każdego wzorca reguł treści (13 próbek × 2 rodzaje pliku, 1 MiB) | `content_rules` kończy w 5 s; najwyżej jedno wykrycie na regułę | brak przekroczenia budżetu | `fr::test_s08_hostile_content_does_not_stall_the_file_rules` (26 przypadków) | PASS — zmierzono 1 MiB, limit treści to 4 MiB |
+| S-08 | Wrogi `version.php` dla WPDetector (cudzysłowy, ukośniki, niedomknięte komentarze, 256 KiB przypisań, bajty binarne, plik ponad limit) | analiza kończy w 10 s; brak kandydata, nota „wersja WordPressa nieustalona” | brak przekroczenia budżetu | `wpd::test_hostile_version_file_is_handled_in_bounded_time_without_a_guess` (7 wariantów) | PASS |
 | S-08 | Fuzzing parserów SQL i logów | brak awarii i zawieszeń na losowym wejściu | — | — | NOT COVERED: testy S-08 to ręcznie dobrane wejścia (M6) |
-| S-08 | Timeout YARA | — | — | — | NOT COVERED: brak YARA w PoC (#6) |
+| S-08 | Timeout YARA | — | — | — | NOT COVERED: brak YARA-X w PoC (wyłączone z M2, ADR 0005 pkt 5; bez Issue) |
 | S-09 | INSERT wielowierszowy, `\'`, `''`, sekwencje ucieczki, `NULL`, instrukcja w łańcuchu | sparsowane jako dane | wynik `iter_insert_rows` | `sec::test_s09_escaped_and_multiline_inserts_are_parsed_as_data` (6 wariantów), `sec::test_sql_row_groups_are_split_outside_quotes` (8 wariantów), `cli::test_sql_rows_and_prefix` | PASS |
 | S-09 | Urwany INSERT | brak wierszy | wynik `iter_insert_rows` | `sec::test_s09_truncated_insert_yields_no_rows[open-string, no-terminator]` | PASS |
 | S-10 | Uszkodzone UTF-8 w pliku PHP / SQL / logu | wskaźnik nadal wykryty, raport poprawny | odpowiednia reguła w `findings` | `sec::test_s10_invalid_utf8_does_not_hide_indicators[php-file, sql-dump, access-log]` | PASS |
@@ -169,9 +177,9 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | S-11 | `administrator` z `b:0` | nie jest adminem | zero ustaleń | `sec::test_s11_revoked_administrator_capability_is_not_an_admin` | XFAIL (#7) |
 | S-12 | HTML z `onerror` w ścieżce pliku, nazwie opcji, nazwie pliku logu, polu czasu logu, nazwie symlinka | escapowany w `report.html` | brak surowego znacznika, obecna postać `&lt;img…` | `sec::test_s12_markup_from_evidence_is_escaped_in_html_report[finding-file-path, finding-option-name, finding-log-file-name, gap-log-timestamp, gap-symlink-name]`, `con::test_html_report_escapes_every_new_field` | PASS |
 | S-12 | Znaczniki w `--case-id` | odmowa w CLI (kod 2); raport złożony z pominięciem CLI nadal escapowany | komunikat z nazwą flagi; `&lt;` w HTML | `sec::test_s12_markup_in_case_id_is_refused_by_the_command_line`, `sec::test_s12_markup_in_case_id_of_a_composed_report_is_escaped_in_html_report`, `cli::test_report_escapes_html` | PASS |
-| S-12 | CSP w raporcie HTML | deklaracja polityki | `Content-Security-Policy` | `sec::test_s12_html_report_declares_content_security_policy` | XFAIL (#3 — zamknięte) |
-| S-13 | Kanarek w `wp-config.php` i w kolumnie `user_pass` | nie wypływa do JSON/HTML/stdout | brak łańcucha w wyjściu | `sec::test_s13_canary_secret_never_reaches_any_output[wp-config-password, user-pass-column]` | PASS |
-| S-13 | Kanarek w query stringu logu | nie wypływa | jw. | `sec::test_s13_canary_secret_never_reaches_any_output[log-query-token]` | XFAIL (#3 — zamknięte) |
+| S-12 | CSP w raporcie HTML | deklaracja polityki | `Content-Security-Policy` | `sec::test_s12_html_report_declares_content_security_policy` | XFAIL (#14 — zamknięte) |
+| S-13 | Kanarek w `wp-config.php` (także obok prefiksu tabel), w kolumnie `user_pass`, w pliku trafionym regułą treści | nie wypływa do JSON/HTML/stdout | brak łańcucha w wyjściu | `sec::test_s13_canary_secret_never_reaches_any_output[wp-config-password, user-pass-column]`, `wpd::test_secrets_next_to_the_prefix_never_reach_any_output` (3 warianty), `fr::test_matched_content_never_reaches_the_report` | PASS |
+| S-13 | Kanarek w query stringu logu | nie wypływa | jw. | `sec::test_s13_canary_secret_never_reaches_any_output[log-query-token]` | XFAIL (#14 — zamknięte) |
 | S-14 | Sfałszowany `X-Forwarded-For` dopisany do wiersza logu | adres klienta = pole połączenia; wartość nagłówka nie trafia do raportu | `metadata.client_ip` | `sec::test_s14_forged_forwarded_for_is_not_used_as_client_address` | PASS |
 | S-14 | Konfiguracja zaufanych proxy | — | — | — | NOT COVERED: PoC nie ma takiej konfiguracji (#13) |
 | S-15 | Brak sieci | pełna analiza z zablokowanymi gniazdami; brak importów sieciowych | 6 reguł demo; analiza AST importów | `inv::test_s15_full_analysis_runs_with_sockets_blocked`, `inv::test_s15_engine_imports_no_network_modules` | PASS |
@@ -186,6 +194,72 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | S-17 | Brak uruchomienia PHP ani innych procesów | pełna analiza z zablokowanym `subprocess`/`os.system`/`fork`/`exec`; brak `eval`/`exec` w silniku | 6 reguł demo; analiza AST | `inv::test_s17_full_analysis_runs_with_process_spawning_blocked`, `inv::test_s17_engine_has_no_dynamic_execution_primitives` | PASS |
 | S-18 | Deterministyczne raporty | dwa uruchomienia → identyczny JSON i HTML z pominięciem `analyzed_at_utc`; kolejność odczytu bajtowo posortowana; ten sam rejestr na losowych drzewach | porównanie raportów | `inv::test_s18_two_runs_on_same_evidence_give_identical_json`, `inv::test_s18_two_runs_on_same_evidence_give_identical_html`, `ing::test_entries_are_visited_in_bytewise_sorted_preorder`, `ing::test_two_sessions_report_identical_records_in_identical_order`, `prop::test_two_sessions_over_the_same_tree_give_the_same_ledger` (100), `con::test_reports_from_processes_with_different_hash_seeds_are_identical` | PASS |
 | D7 | Narzędzie pisze wyłącznie `poc-1` | klucze raportu i wpisów `evidence` według ADR 0003 | lista kluczy | `inv::test_report_has_the_poc_1_shape`, `mod::test_report_dictionary_has_the_poc_1_top_level_fields` | PASS |
+
+## Analiza plików WordPressa (M2, T-201)
+
+Wszystkie przypadki są syntetyczne i powstają w `tmp_path`; manifesty to pliki lokalne, nic nie jest pobierane ani wykonywane. Kolumna „Rodzaj” mówi, czy wiersz sprawdza wykrycie (FN), brak fałszywego alarmu (FP), pokrycie dla pominięć, czy odporność.
+
+### WPDetector (`wpd`, 11 funkcji, 30 przypadków)
+
+| Wymaganie | Rodzaj | Oczekiwane zachowanie | Test | Stan |
+|---|---|---|---|---|
+| Standardowe pliki dają kandydatów | FN | obserwacje `WP_VERSION_CANDIDATE`, `WP_DB_VERSION_CANDIDATE`, `WP_LOCALE_CANDIDATE`, `WP_TABLE_PREFIX_CANDIDATE`; zero ustaleń, ocena bez zmian | `wpd::test_standard_files_give_candidates_without_finding_or_assessment_change` | PASS |
+| Pewność zależy od referencji | — | `high` przy pliku zgodnym z baseline, `low` przy różnym | `wpd::test_version_confidence_follows_the_trusted_reference` (2 warianty) | PASS |
+| Brak pliku | pominięcia | nota w pokryciu, bez zgadywania | `wpd::test_missing_files_are_noted_not_guessed` | PASS |
+| Wersja niebędąca jednym literałem (komentarz, napis w napisie, konkatenacja, wywołanie, porównanie, dopisanie, znaczniki w wartości, wartość zbyt długa, niedomknięta) | FP | brak kandydata, nota | `wpd::test_version_that_is_not_one_plain_literal_is_not_reported` (11 wariantów) | PASS |
+| `version.php` jako dowiązanie symboliczne | odporność | cel nieczytany, nota | `wpd::test_version_file_that_is_a_symlink_is_not_followed` | PASS |
+| Powtórzone przypisania; sprzeczne źródła locale | niejednoznaczność | wszyscy kandydaci z pewnością `low`, nota, żaden nie jest wybierany | `wpd::test_duplicated_assignments_stay_candidates_with_low_confidence`, `wpd::test_conflicting_locale_sources_are_all_reported_without_a_winner`, `wpd::test_agreeing_locale_sources_are_not_a_conflict` | PASS |
+| Pliki o podobnych nazwach poza standardowym miejscem | FP | ignorowane | `wpd::test_lookalikes_outside_the_standard_places_are_ignored` | PASS |
+| Sekrety obok prefiksu; wrogi `version.php` | odporność | patrz S-13 i S-08 | `wpd::test_secrets_next_to_the_prefix_never_reach_any_output`, `wpd::test_hostile_version_file_is_handled_in_bounded_time_without_a_guess` | PASS |
+
+### Reguły plików (`fr`, 12 funkcji, 124 przypadki)
+
+| Wymaganie | Rodzaj | Oczekiwane zachowanie | Test | Stan |
+|---|---|---|---|---|
+| Każda z 13 reguł trafia swój wskaźnik i tylko jego | FN + FP | 58 par (plik, treść) → dokładny zbiór reguł; w tym próbki wzorowane na legalnym kodzie (identyfikatory `fp-…`) | `fr::test_rule_fires_only_for_its_indicator` (58 przypadków) | PASS |
+| Każda reguła ma przypadek pozytywny, opis fałszywych alarmów i wpis w `docs/RULES.md`; żadna reguła treści nie ma pewności `high` | kontrakt | tabela `RULES` zgodna z testami i dokumentem | `fr::test_every_rule_has_a_positive_case_and_a_documented_false_positive_note` | PASS |
+| Offset, długość, liczba trafień, wersja reguły | dowód | offset bajtowy pierwszego trafienia; jedno ustalenie na regułę i plik | `fr::test_content_finding_points_to_the_byte_offset_of_the_first_match` (10 reguł), `fr::test_many_matches_in_one_file_give_one_finding_per_rule` | PASS |
+| Pewność zależna od położenia | FP | słabsze heurystyki mają `low` w core, wtyczce i motywie; kod w katalogu zasobów core `medium`, w `languages` `low` | `fr::test_weak_heuristic_is_less_confident_where_code_is_expected` (20 przypadków), `fr::test_code_in_static_core_directory_is_more_confident_than_in_languages` | PASS |
+| Reguły treści same nie dają `STRONG_INDICATORS` | fałszywa pewność | ocena najwyżej `SUSPICIOUS` | `fr::test_content_rules_never_make_a_strong_indicator_on_their_own` | PASS |
+| Dopasowana treść nie trafia do raportu | prywatność | brak kanarka w JSON, HTML i stdout | `fr::test_matched_content_never_reaches_the_report` | PASS |
+| Plik nieodczytany | pominięcia | reguły ścieżki nadal zgłaszają | `fr::test_path_rules_report_a_file_that_was_not_read` (2 warianty) | PASS |
+| Plik objęty regułami treści ponad limit skanu | pominięcia | luka i `PARTIAL`; reguły ścieżki działają | `fr::test_oversized_file_covered_by_content_rules_leaves_a_coverage_gap` (2 warianty) | PASS |
+| Kod za podwójnym rozszerzeniem w uploads | FN | treść czytana i skanowana | `fr::test_code_hidden_behind_a_double_extension_is_content_scanned` | PASS |
+| Wroga treść | odporność | patrz S-08 | `fr::test_s08_hostile_content_does_not_stall_the_file_rules` | PASS |
+| Omijanie reguł (konkatenacja, komentarz w środku wywołania, zmienne pośrednie) | FN | — | — | NOT COVERED: znane ograniczenie (`docs/RULES.md`), brak parsera PHP |
+| Fałszywe alarmy na rzeczywistym kodzie wtyczek i motywów | FP | — | — | NOT COVERED: próbki są krótkie i syntetyczne; korpusu legalnego kodu nie mierzono |
+
+### Integralność względem referencji (`integ`, 32 funkcje, 98 przypadków)
+
+| Wymaganie | Rodzaj | Oczekiwane zachowanie | Test | Stan |
+|---|---|---|---|---|
+| Wersja i opis referencji w ustaleniach baseline | dowód | `reference_version`, `reference` | `integ::test_missing_baseline_file_carries_the_reference_version_and_label` | PASS |
+| Nowy plik w mu-plugins lub drop-in | FN | `NEW_FILE_SINCE_BASELINE`, wyjaśnienie „nie dowodzi włamania” | `integ::test_new_autoloaded_file_is_a_finding_that_does_not_claim_compromise` (2 warianty) | PASS |
+| Plik spoza baseline poza miejscami ładowanymi automatycznie; baseline bez skrótów plików; brak baseline | FP | brak ustalenia | `integ::test_file_absent_from_baseline_is_not_a_finding_outside_autoloaded_locations` (6 wariantów) | PASS |
+| Wpis nieodczytany w miejscu ładowanym automatycznie; nieodczytany katalog `mu-plugins` | pominięcia | ustalenie po ścieżce z pewnością `low` | `integ::test_unread_entry_in_autoloaded_location_is_reported_by_path_with_low_confidence`, `integ::test_unread_mu_plugins_directory_itself_is_reported_by_path` (2 warianty) | PASS |
+| Wpis z referencji nieodczytany (plik albo katalog jej plików) | pominięcia | `REFERENCE_FILE_UNREADABLE`, nie „nowy” i nie „brakujący” | `integ::test_unread_entry_listed_in_the_baseline_is_unreadable_not_new_or_missing` (2 warianty), `integ::test_hardlinked_and_symlinked_core_files_are_not_hashed_but_named_as_unverifiable` | PASS |
+| Plik core zgodny z manifestem | FP | brak ustalenia; MD5 nie trafia do `evidence` | `integ::test_core_file_matching_the_manifest_gives_no_finding_and_md5_stays_out_of_evidence` | PASS |
+| Plik core różny od manifestu | FN | `CORE_CHECKSUM_MISMATCH` z oboma skrótami i referencją | `integ::test_core_checksum_mismatch_reports_both_digests_and_the_reference`, `integ::test_manifest_nested_under_a_version_key_supplies_the_reference_version`, `integ::test_baseline_and_manifest_are_compared_independently` | PASS |
+| Kod spoza manifestu w katalogu głównym, `wp-admin`, `wp-includes` | FN + FP | `CORE_FILE_NOT_IN_MANIFEST`; bez `wp-config.php`, `.htaccess`, `.user.ini`, `php.ini` z katalogu głównego i bez plików niebędących kodem | `integ::test_code_in_core_locations_absent_from_the_manifest_is_a_finding_except_expected_root_config` (13 wariantów), `integ::test_unread_code_in_a_core_location_absent_from_the_manifest_is_reported_by_path` | PASS |
+| Plik z manifestu nieobecny w materiale | FN + FP | `CORE_FILE_MISSING` na dowodzie manifestu; nie dla `wp-content/`, wpisu nieodczytanego ani przerwanego przejścia | `integ::test_core_file_listed_in_the_manifest_but_absent_is_observed_on_the_manifest`, `integ::test_manifest_entry_is_not_reported_missing_when_absence_is_expected_or_unknown` (3 warianty) | PASS |
+| **Wrogi manifest** | odporność | odmowa, kod 2, komunikat bez odrzuconej wartości: zły JSON, tablica, kształt baseline, odpowiedź „not found”, pusty, pusty zagnieżdżony, `../`, ścieżka bezwzględna, `./`, pusty segment, `\`, bajt zerowy, ścieżka > 1024, pusta ścieżka, liczba, SHA-256 zamiast MD5, MD5 wielkimi literami, lista, mieszane zagnieżdżenie, zła wersja zagnieżdżona, sprzeczne wersje, zły opis, nie-UTF-8, klucz zagnieżdżony niebędący wersją, powtórzony klucz | `integ::test_unusable_core_manifest_is_a_usage_error_that_echoes_no_value` (25 wariantów) | PASS |
+| Manifest ponad limit wpisów lub rozmiaru; manifest jako symlink, hardlink, brakujący albo o nazwie pliku baseline | odporność | odmowa, kod 2 | `integ::test_core_manifest_over_the_entry_or_size_limit_is_a_usage_error`, `integ::test_core_manifest_path_is_refused_when_symlinked_hardlinked_missing_or_named_like_the_baseline` | PASS — limity obniżone przez monkeypatch |
+| MD5 a SHA-256 | dowód | MD5 z tego samego pojedynczego odczytu; brak MD5 dla wpisów nieodczytanych; zmiana pliku lub manifestu po analizie nadal wykrywana | `integ::test_md5_is_computed_in_the_same_single_read_as_sha256`, `integ::test_md5_is_absent_for_entries_that_were_not_read`, `integ::test_change_after_analysis_is_still_detected_when_a_manifest_is_used` (2 warianty) | PASS |
+| `NOT_CHECKED` per klasa; słowo „clean”/„czyst” nie pada | fałszywa pewność | powody per klasa; `files` = `PARTIAL`, `INCONCLUSIVE`, kod 3 | `integ::test_file_classes_without_a_reference_are_not_checked_and_never_called_clean`, `integ::test_not_checked_counts_read_and_unread_files_that_no_reference_covers` | PASS |
+| Pliki niebędące kodem bez referencji | FP (zakres) | nota, pokrycie `ANALYZED`, kod 0 | `integ::test_unverified_files_that_are_not_code_are_noted_without_shrinking_the_scope` | PASS |
+| **Kod bez referencji nigdy nie daje pełnego zakresu** (przypadek z przeglądu bezpieczeństwa PR #32): do drzewa zgodnego z baseline i manifestem dodano `shell.php`, plik wtyczki, plik motywu i `.htaccess` | fałszywa pewność | `scope_complete: false`, kod 3; z manifestem `SUSPICIOUS` (`CORE_FILE_NOT_IN_MANIFEST`), z samym baseline `INCONCLUSIVE` | `integ::test_code_added_to_a_tree_that_matches_its_references_never_yields_a_full_scope[baseline-and-manifest, baseline-only]`, `integ::test_supplying_a_reference_never_gives_a_wider_scope_than_the_reference_covers` | PASS |
+| Limit ustaleń na regułę | pominięcia | ponad limit: luka z łączną liczbą wykryć, `PARTIAL` | `integ::test_findings_over_the_per_rule_limit_become_a_visible_gap_with_the_total` | PASS — limit 200 obniżony do 2 przez monkeypatch |
+| Nazwa pliku w nocie `NO_TRUSTED_REFERENCE` | odporność | cytowana jak łańcuch JSON; przecinek i znak nowego wiersza nie zmieniają noty | `integ::test_file_names_in_the_unreferenced_note_are_quoted_so_they_cannot_reshape_it` | PASS |
+| Manifest w pokryciu i w `case.json` | kontrakt | manifest należy do źródła `baseline`, bez nowych źródeł; `sources.core_checksums` tylko gdy podano | `integ::test_manifest_alone_is_reported_under_the_baseline_source_without_new_sources`, `integ::test_case_json_has_no_manifest_entry_when_none_was_given` | PASS |
+| Zgodność manifestu z wersją i locale witryny | — | — | — | NOT COVERED: kod tego nie sprawdza |
+| Baseline z bardzo dużą liczbą wpisów | odporność | — | — | NOT COVERED: brak limitu liczby wpisów (tylko 64 MiB pliku) |
+
+### Klasyfikacja plików (`fc`, 2 funkcje, 18 przypadków)
+
+| Wymaganie | Oczekiwane zachowanie | Test | Stan |
+|---|---|---|---|
+| Standardowy układ WordPressa | CORE, CONFIG, DROPIN, MU_PLUGIN, PLUGIN, THEME, UPLOAD, LANGUAGE | `fc::test_standard_layout_paths_get_their_class` (12 wariantów) | PASS |
+| Ścieżki spoza układu | OTHER | `fc::test_paths_outside_the_standard_layout_are_other` (6 wariantów) | PASS |
 
 ## Własności SecureIngest na losowych drzewach (`prop`, bramka M1)
 
@@ -243,29 +317,26 @@ Ograniczenie opisane w samym pliku testów: katalog przejrzany bez przeszkód ni
 
 ## Zestawienie XFAIL
 
-13 przypadków w 12 funkcjach, wszystkie `xfail(strict=True)`; wszystkie wykonały się jako XFAIL w przebiegu z 2026-11-11 (macOS). Kolumna „Issue” podaje numer z powodu w znaczniku i jego stan na GitHubie.
+7 przypadków w 7 funkcjach, wszystkie `xfail(strict=True)`; wszystkie wykonały się jako XFAIL w przebiegu z 2026-11-12 (macOS, `pytest -q -rx`). Kolumna „Issue” podaje numer z powodu w znaczniku i jego stan na GitHubie.
 
 | Nr | Test | Powód (ze znacznika) | Issue |
 |---|---|---|---|
-| 1 | `pos::test_p2_checksum_mismatch_names_reference_version` | finding nie niesie wersji referencji; baseline nie ma kontraktu wersji | #6 — otwarte |
-| 2 | `pos::test_p5_mu_plugin_added_since_baseline_is_reported` | plik nieobecny w baseline (nowy mu-plugin) nie daje żadnego ustalenia | #6 — otwarte |
-| 3 | `pos::test_p6_signature_finding_carries_match_offset` | brak YARA-X; trafienie sygnatury nie ma offsetu ani wersji reguły | #6 — otwarte |
-| 5 | `pos::test_p3_admin_added_since_baseline_is_new_since_baseline` | brak porównania dwóch migawek DB i reguły `NEW_SINCE_BASELINE` | #7 — otwarte |
-| 6 | `pos::test_p4_option_with_redirect_markup_is_a_database_finding[meta-refresh]` | redirect meta-refresh nie jest objęty regułą opcji | #7 — otwarte |
-| 7 | `pos::test_p4_finding_quotes_option_value_with_secret_redacted` | finding DB nie zawiera cytatu wartości, więc nie ma też redakcji | #7 — otwarte |
-| 8 | `neg::test_n3_admin_without_trusted_list_appears_in_inventory` | raport nie zawiera inwentarza kont administratorów | #7 — otwarte |
-| 10 | `sec::test_s11_revoked_administrator_capability_is_not_an_admin` | rola wykrywana podłańcuchem `administrator` bez parsowania serializacji PHP: `b:0` liczy się jak `b:1` | #7 — otwarte |
-| 12 | `sec::test_s12_html_report_declares_content_security_policy` | raport HTML nie deklaruje Content-Security-Policy | #14 |
-| 13 | `sec::test_s13_canary_secret_never_reaches_any_output[log-query-token]` | query string z logu trafia bez redakcji do `metadata.uri` w `report.json` | #14 |
+| 1 | `pos::test_p3_admin_added_since_baseline_is_new_since_baseline` | brak porównania dwóch migawek DB i reguły `NEW_SINCE_BASELINE` | #7 — otwarte |
+| 2 | `pos::test_p4_option_with_redirect_markup_is_a_database_finding[meta-refresh]` | redirect meta-refresh nie jest objęty regułą opcji | #7 — otwarte |
+| 3 | `pos::test_p4_finding_quotes_option_value_with_secret_redacted` | finding DB nie zawiera cytatu wartości, więc nie ma też redakcji | #7 — otwarte |
+| 4 | `neg::test_n3_admin_without_trusted_list_appears_in_inventory` | raport nie zawiera inwentarza kont administratorów | #7 — otwarte |
+| 5 | `sec::test_s11_revoked_administrator_capability_is_not_an_admin` | rola wykrywana podłańcuchem `administrator` bez parsowania serializacji PHP: `b:0` liczy się jak `b:1` | #7 — otwarte |
+| 6 | `sec::test_s12_html_report_declares_content_security_policy` | raport HTML nie deklaruje Content-Security-Policy | #14 — zamknięte |
+| 7 | `sec::test_s13_canary_secret_never_reaches_any_output[log-query-token]` | query string z logu trafia bez redakcji do `metadata.uri` w `report.json` | #14 — zamknięte |
 
 | Issue | Liczba | Stan |
 |---|---|---|
-| #6 (T-201) | 3 | otwarte |
+| #6 (T-201) | 0 | otwarte; trzy znaczniki zdjęte w M2: wersja referencji w ustaleniu (PR #32), nowy mu-plugin spoza baseline (PR #32), offset trafienia reguły (PR #33) |
 | #7 (T-301) | 5 | otwarte |
-| #14 (T-501) | 2 | znaczniki przeniesione z zamkniętego #3 (CSP, redakcja query stringu) |
+| #14 (T-501) | 2 | **zamknięte**, zakres niezrealizowany (CSP, redakcja query stringu) |
 | #4, #5 | 0 | wszystkie znaczniki zdjęte |
 
-Trzy luki z wierszy 11–13 nie mają dziś otwartego Issue wskazanego w kodzie. `docs/PROGRESS.md` podaje, że luki bez własnego Issue przeniesiono do #13 (logi) i #14 (reguły, HTML, redakcja); #13 jest otwarte, **#14 jest zamknięte**. Zmiana numerów w znacznikach wymaga edycji testów i nie należała do tej aktualizacji.
+Dwie luki z wierszy 6–7 wskazują Issue #14, które jest na GitHubie zamknięte. Zmiana numerów w znacznikach albo ponowne otwarcie Issue wymaga decyzji poza tą aktualizacją (testów nie edytowano).
 
 ## Ograniczenia tej macierzy
 
@@ -275,5 +346,8 @@ Trzy luki z wierszy 11–13 nie mają dziś otwartego Issue wskazanego w kodzie.
 - Wyścigi: deterministyczne haki (`ing`, `sec`) oraz dwa testy z osobnym procesem (`prop`, marker `race`), które są próbkowaniem przez ok. 1,5 s, nie dowodem braku okna.
 - Budżety czasu w testach (`time_limit`) używają `SIGALRM`, więc działają tylko na systemach POSIX. Limit czasu narzędzia sprawdzono podstawionym zegarem.
 - Parsery SQL i logów nie były fuzzowane; testy własności na losowych drzewach obejmują wyłącznie SecureIngest.
+- Reguły plików (M2): próbki pozytywne i „fałszywe alarmy” to krótkie teksty syntetyczne. Nie ma testu omijania reguł (konkatenacja, komentarz w środku wywołania) — to znane ograniczenie, nie sprawdzana własność — ani pomiaru na rzeczywistym kodzie wtyczek i motywów. Test czasu reguł używa 1 MiB, a limit treści to 4 MiB.
+- Integralność (M2): manifesty i baseline w testach mają po kilka wpisów; limity (200 ustaleń, 50 000 wpisów, 8 MiB) sprawdzono po obniżeniu przez monkeypatch. Zgodność manifestu z wersją witryny i baseline z bardzo dużą liczbą wpisów nie mają testu, bo kod ich nie obsługuje.
+- WPDetector (M2): testy obejmują `version.php`, `wp-config.php` i nazwy plików `.mo` w standardowych miejscach; heredoc, `$GLOBALS` i `include` nie są modelowane ani testowane.
 - Testy kontraktu sprawdzają kształt, referencje i regułę oceny; nie mierzą trafności progu `STRONG_INDICATORS` (żadna reguła PoC go nie osiąga). Migracja była sprawdzana na jednym zachowanym raporcie 0.1.0 i na raportach budowanych w teście.
 - `pytest --cov` zapisuje plik `.coverage` w katalogu roboczym (jest w `.gitignore`).
