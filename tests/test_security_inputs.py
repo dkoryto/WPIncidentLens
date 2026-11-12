@@ -1,4 +1,6 @@
 """Odporność na nieufne wejście: S-01–S-14 (rozdz. 14.3). Mapa: docs/TEST_MATRIX.md."""
+import base64
+import hashlib
 import html
 import itertools
 import json
@@ -648,9 +650,13 @@ def test_s12_markup_in_case_id_of_a_composed_report_is_escaped_in_html_report(si
     assert XSS not in page
 
 
-@pytest.mark.xfail(strict=True, reason="raport HTML nie deklaruje Content-Security-Policy (#14)")
 def test_s12_html_report_declares_content_security_policy(site, analyze):
-    assert "Content-Security-Policy" in analyze(site).html
+    page = analyze(site).html
+    style = re.search(r"<style>(.*?)</style>", page, re.S).group(1)
+    digest = base64.b64encode(hashlib.sha256(style.encode("utf-8")).digest()).decode("ascii")
+
+    assert html.escape(f"default-src 'none'; style-src 'sha256-{digest}'; base-uri 'none'; form-action 'none'") in page
+    assert page.count("<style") == 1 and "<script" not in page and " style=" not in page
 
 
 # --- S-13: sekrety-kanarki -----------------------------------------------------------------------

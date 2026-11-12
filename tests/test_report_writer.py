@@ -190,9 +190,10 @@ def test_value_that_cannot_be_encoded_is_escaped_instead_of_losing_the_json_repo
     assert json.loads((out / "report.json").read_bytes())["coverage_gaps"] == ["synthetic \ud800 gap"]
 
 
-def test_value_that_cannot_be_encoded_is_escaped_instead_of_losing_the_html_report(out, document):
+def test_value_that_cannot_be_encoded_is_neutralised_instead_of_losing_the_html_report(out, document):
+    """Samotny surogat (kategoria Cs) zastępuje ``redact.neutralise`` w jedynym miejscu escapowania HTML (T-501)."""
     document["coverage_gaps"] = ["synthetic \ud800 gap"]
 
     publish(out, document)
 
-    assert "synthetic \\ud800 gap" in (out / "report.html").read_text(encoding="utf-8")
+    assert "synthetic � gap" in (out / "report.html").read_text(encoding="utf-8")
