@@ -112,6 +112,13 @@ Atrybuty każdej obserwacji: `value`, `confidence`, `origin`, `basis` (uzasadnie
 
 Źródło prawdy: `wpincidentlens/dbrules.py`; dane serializowane PHP czyta `wpincidentlens/phpserialize.py`, cytaty redaguje `wpincidentlens/redact.py`. Testy: `tests/test_dbrules.py`, `tests/test_phpserialize.py`, `tests/test_redact.py`. Decyzje: [ADR 0006](adr/0006-analiza-bazy-m3.md), pkt 4–8. Reguły bazy są zapisane w kodzie i nie mają wersji.
 
+### Odczyt zrzutu SQL (`sqldump`)
+
+- Obsługiwana jest wyłącznie instrukcja `INSERT INTO <nazwa> [(<kolumny>)] VALUES (…), (…);` z literałami: łańcuch w apostrofach (ucieczki `\x` i `''` jak w MySQL), `NULL`, liczba, `0x…`, `X'…'`, `_binary '…'`. Nazwy: `[A-Za-z0-9_$]{1,64}`, opcjonalnie w odwrotnych apostrofach. Wielkość liter słów kluczowych dowolna.
+- Bez śladu pomijane są tylko: `SET`, `USE`, `LOCK`, `UNLOCK`, `START`, `COMMIT`, `BEGIN`, `CREATE|DROP|ALTER TABLE|DATABASE|SCHEMA`, komentarze (także wykonywalne bez `INSERT`/`REPLACE`) i puste instrukcje.
+- Luki (`PARTIAL`): każda inna instrukcja (liczona pod pierwszym słowem, np. `UPDATE ×1`); `INSERT` poza gramatyką, `REPLACE`, `DELIMITER`, komentarz wykonywalny z `INSERT`/`REPLACE`, polecenie klienta (`\g`, `\d`); wiersz z wyrażeniem zamiast literału (sam wiersz, reszta instrukcji jest czytana); niedomknięta instrukcja na końcu; wartość spoza UTF-8 (dekodowana ze znakiem zastępczym); instrukcja dłuższa niż 16 MiB — od niej reszta zrzutu nie jest analizowana.
+- Znane fałszywe luki: `INSERT … ON DUPLICATE KEY UPDATE`, `INSERT IGNORE` i rozszerzenia narzędzi hostingowych są poprawnym SQL, ale wychodzą poza gramatykę. Luka nie jest ustaleniem, obniża jedynie pokrycie.
+
 ### Które tabele są analizowane
 
 - Prefiks tabel wynika ze zrzutu. Kandydatem jest każda tabela o nazwie `<prefiks>users`, `<prefiks>usermeta` albo `<prefiks>options` (prefiks dowolny, także bez `_` i pusty).

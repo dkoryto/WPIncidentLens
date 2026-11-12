@@ -205,9 +205,11 @@ def _open_root(path: str | os.PathLike[str], expect: str) -> tuple[int, os.stat_
     raise IngestRefusal(ReadStatus.SKIPPED_SPECIAL, _kind(info.st_mode))
 
 
-def _hash_fd(fd: int, expected: int, keep: bool, md5: bool = False) -> tuple[str, int, bytes | None, str | None]:
+def _hash_fd(fd: int, expected: int, keep: bool, md5: bool = False,
+             sink: Callable[[bytes], None] | None = None) -> tuple[str, int, bytes | None, str | None]:
     """Jeden strumieniowy odczyt: skrót, liczba bajtów, (opcjonalnie) treść i (opcjonalnie) MD5 tych samych bajtów.
 
+    ``sink`` dostaje kolejne porcje tych samych bajtów, które wchodzą do skrótu (parser strumieniowy, ADR 0006 pkt 2).
     Plik rosnący nie zatrzyma narzędzia. MD5 nie pełni funkcji bezpieczeństwa (``usedforsecurity=False``).
     """
     digest, kept, got = hashlib.sha256(), [], 0
@@ -222,6 +224,8 @@ def _hash_fd(fd: int, expected: int, keep: bool, md5: bool = False) -> tuple[str
             extra.update(chunk)
         if keep:
             kept.append(chunk)
+        if sink is not None:
+            sink(chunk)
     return digest.hexdigest(), got, b"".join(kept) if keep else None, extra.hexdigest() if extra is not None else None
 
 
@@ -275,12 +279,13 @@ class Session:
 
     def read(self, path: str | os.PathLike[str], source: str, *, expect: str = "any",
              wanted: Callable[[str], bool] | None = None, keep_limit: int | None = None,
-             md5: bool = False) -> Iterator[Evidence]:
+             md5: bool = False, sink: Callable[[bytes], None] | None = None) -> Iterator[Evidence]:
         """Czyta źródło (katalog rekurencyjnie albo pojedynczy plik) i zwraca po jednym ``Evidence`` na wpis.
 
         Treść jest zachowywana tylko dla plików nie większych niż ``keep_limit`` (domyślnie limit skanowania),
         dla których ``wanted(rel)`` jest prawdą. Źródła, którego nie da się otworzyć, dotyczy wpis ``rel == ROOT``.
-        ``md5=True`` dolicza MD5 w tym samym odczycie, bez drugiego otwarcia pliku.
+        ``md5=True`` dolicza MD5 w tym samym odczycie, bez drugiego otwarcia pliku. ``sink`` (tylko dla źródła
+        będącego plikiem) dostaje porcje przeczytanych bajtów; nie jest wołany, gdy pliku nie przeczytano.
         """
         keep_limit = self.limits.max_scan_bytes if keep_limit is None else keep_limit
         if self._expired():
@@ -297,13 +302,14 @@ class Session:
             yield from self._walk(fd, root, wanted, keep_limit, md5)
             return
         try:
-            yield self._read_regular(fd, info, root, (), Path(path).name, wanted, keep_limit, md5)
+            yield self._read_regular(fd, info, root, (), Path(path).name, wanted, keep_limit, md5, sink)
         finally:
             os.close(fd)
 
-    def read_file(self, path: str | os.PathLike[str], source: str, *, keep_limit: int | None = None) -> Evidence:
+    def read_file(self, path: str | os.PathLike[str], source: str, *, keep_limit: int | None = None,
+                  sink: Callable[[bytes], None] | None = None) -> Evidence:
         """Czyta źródło, które musi być pojedynczym zwykłym plikiem."""
-        return list(self.read(path, source, expect="file", keep_limit=keep_limit))[0]
+        return list(self.read(path, source, expect="file", keep_limit=keep_limit, sink=sink))[0]
 
     def finish(self) -> list[str]:
         """Kończy analizę: ponownie weryfikuje przeczytane dowody (B4) i zwraca luki dotyczące całej sesji."""
@@ -394,7 +400,7 @@ class Session:
         return None
 
     def _read_regular(self, fd: int, info: os.stat_result, root: _Root, parts: tuple[str, ...], rel: str,
-                      wanted, keep_limit: int, md5: bool = False) -> Evidence:
+                      wanted, keep_limit: int, md5: bool = False, sink: Callable[[bytes], None] | None = None) -> Evidence:
         self._files += 1
         hardlinked = info.st_nlink > 1
         if self._files > self.limits.max_files:
@@ -408,7 +414,7 @@ class Session:
         shown = _printable(rel)
         keep = info.st_size <= keep_limit and (wanted is None or wanted(shown))
         try:
-            sha, got, content, extra = _hash_fd(fd, info.st_size, keep, md5)
+            sha, got, content, extra = _hash_fd(fd, info.st_size, keep, md5, sink)
             after = os.fstat(fd)
         except OSError as exc:
             return self._skip(root.source, rel, ReadStatus.ERROR, _error_name(exc))

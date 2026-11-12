@@ -37,6 +37,7 @@ Kod bazy jest poza `cli.py`, w modułach bez dostępu do systemu plików (straż
 - `cli.iter_insert_rows` i pomocnicze funkcje parsera są w `sqldump.py`; `cli.scan_database` to `database.scan_database`.
 - Krok przygotowawczy (podział na moduły) nie zmienia zachowania: 2138 passed, 5 skipped, 7 xfailed przed i po.
 - Zmiana w `ingest.py` (podawanie porcji do parsera) jest krytyczna dla bezpieczeństwa i wymaga osobnego przeglądu.
+- Parser ścisły (PR `agent/T-301-strict-parser`): `sqldump.DumpParser` dzieli bajty na instrukcje wyrażeniem bez nawrotów, wznawianym na granicy leksemu, gdy porcja kończy się w środku łańcucha, komentarza albo słowa. Wynik nie zależy od podziału na porcje (test dla każdego punktu podziału i dla porcji jednobajtowych). Wiersz z wyrażeniem jest pomijany i liczony osobno (dawniej: „nieoczekiwana liczba pól”). Instrukcja dłuższa niż 16 MiB przerywa analizę reszty zrzutu z luką i przesunięciem; parser nie próbuje odgadnąć jej końca. Dawny limit 20 MiB na cały zrzut zniknął. Komórki dekodowane są tylko dla tabel o nazwie kończącej się `users`, `usermeta` lub `options`; wiersze pozostałych tabel są sprawdzane gramatyką i liczone.
 - Rollback: revert commitów.
 
 ## Doprecyzowania z implementacji reguł (dbrules, 2026-11-12)
