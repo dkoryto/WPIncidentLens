@@ -1,18 +1,21 @@
 """Analiza zrzutu bazy: odczyt przez SecureIngest, parser wierszy (``sqldump`` albo ``jsonldb``) i reguły (``dbrules``).
 
 Zrzut jest czytany strumieniowo: porcje z tego samego odczytu, w którym SecureIngest liczy SHA-256, trafiają
-wprost do parsera (ADR 0006 pkt 2). Rozmiar zrzutu ogranicza ogólny limit pliku (``--max-file-bytes``).
+wprost do parsera (ADR 0006 pkt 2). Rozmiar zrzutu ogranicza ogólny limit pliku (``--max-file-bytes``). Parser sprawdza
+limit czasu sesji w trakcie pliku; po jego upływie reszta zrzutu nie jest analizowana, ale odczyt i skrót idą do końca.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from . import dbrules, ingest, jsonldb, models, sqldump
+from . import dbrules, ingest, jsonldb, models, redact, sqldump
+from . import rules as registry
 from .analysis import Detection, SourceCoverage
 from .case import DATABASE_FORMATS
 
 MAX_ROWS = 1_000_000  # wierszy tabel rdzenia przekazanych regułom; dalsze są tylko liczone
 MAX_ROW_BYTES = 256 * 1024 * 1024  # szacowana pamięć wierszy czekających na reguły: granica przy zrzucie 2 GiB
+CLOCK_EVERY_ROWS = 32  # co tyle wierszy reguły bazy sprawdzają limit czasu sesji (wiersz z dużą tablicą PHP to ms)
 _ROW_COST, _CELL_COST = 120, 64  # narzut obiektów Pythona na wiersz i na komórkę (lista, krotka, str), z zapasem
 FORMATS = DATABASE_FORMATS  # wybiera operator flagą --database-format; formatu nie zgaduje się po treści (ADR 0006 pkt 9)
 
@@ -24,7 +27,7 @@ def scan_database(path: Path, known_admins: set[str], session: ingest.Session,
     if fmt not in FORMATS:
         raise ValueError(f"nieznany format bazy: {fmt!r}")
     cover, findings, facts = SourceCoverage(), [], []
-    parser = (sqldump.DumpParser if fmt == "sql" else jsonldb.JsonlParser)(wanted=dbrules.is_core_table)
+    parser = (sqldump.DumpParser if fmt == "sql" else jsonldb.JsonlParser)(wanted=dbrules.is_core_table, expired=session.expired)
     rows: list = []
     analysed, held = [0], [0]
 
@@ -45,9 +48,17 @@ def scan_database(path: Path, known_admins: set[str], session: ingest.Session,
         return findings, cover, facts
     consume(parser.close())
     rules = dbrules.RowAnalysis(item)
-    for table, columns, cells, number in rows:
-        rules.feed(table, columns, cells, number)
-    rules.note_tables(parser.tables)
+    for done, (table, columns, cells, number) in enumerate(rows):
+        if done % CLOCK_EVERY_ROWS == 0 and session.expired():
+            cover.degrade(f"Limit czasu analizy {session.limits.max_seconds:g} s przekroczony: reguły bazy zastosowano do "
+                          f"{done} z {len(rows)} wierszy; ustalenia i inwentarz dotyczą tylko tych wierszy")
+            break
+        registry.guarded(cover, "dbrules", rules.feed, table, columns, cells, number, where=f"database/{item.rel}:{number}")
+    registry.guarded(cover, "dbrules", rules.note_tables, parser.tables)
+    if parser.stopped_at is not None:
+        cover.degrade(f"Limit czasu analizy {session.limits.max_seconds:g} s przekroczony w trakcie zrzutu bazy: plik {redact.neutralise(item.rel)} "
+                      f"przeanalizowany do {'instrukcji' if fmt == 'sql' else 'wiersza'} {parser.stopped_at}; "
+                      "dalszej części nie sprawdzono (skrót SHA-256 obejmuje cały plik)")
     # Na serwerze z lower_case_table_names=1 lub 2 tabela WP_USERMETA to wp_usermeta: jej wierszy reguły nie widzą.
     spellings: dict[str, set[str]] = {}
     for table in parser.tables | getattr(parser, "ddl_names", set()):
@@ -68,7 +79,7 @@ def scan_database(path: Path, known_admins: set[str], session: ingest.Session,
         _sql_read_gaps(parser, rules, cover)
     else:
         _jsonl_read_gaps(parser, rules, cover)
-    findings.extend(rules.finish(cover, known_admins, baseline_admins))
+    findings.extend(registry.guarded(cover, "dbrules", rules.finish, cover, known_admins, baseline_admins, default=[]))
     facts.extend(rules.observations)
     if fmt == "sql":
         _sql_grammar_gaps(parser, cover)
@@ -92,7 +103,9 @@ def _sql_read_gaps(parser: sqldump.DumpParser, rules: dbrules.RowAnalysis, cover
     if parser.mode_change_at is not None:
         cover.degrade(f"Zrzut zmienia sposób czytania łańcuchów ({parser.mode_change}, instrukcja od bajtu "
                       f"{parser.mode_change_at}): parser tego trybu nie obsługuje, dalszej części zrzutu nie analizowano")
-    if not parser.tables:
+    if parser.stopped_at is not None:  # brak wierszy może wynikać z limitu czasu (luka w scan_database), nie z formatu
+        pass
+    elif not parser.tables:
         cover.fail("Brak obsługiwanych instrukcji INSERT; parser PoC nie interpretuje tego formatu SQL")
     else:
         _no_core_rows(rules, cover)
@@ -122,7 +135,9 @@ def _jsonl_read_gaps(parser: jsonldb.JsonlParser, rules: dbrules.RowAnalysis, co
         listed = ", ".join(f"{jsonldb.REASONS[reason]} ×{number} (pierwszy: wiersz {first[reason]})"
                            for reason, number in sorted(parser.rejected.items(), key=lambda pair: (-pair[1], first[pair[0]])))
         cover.degrade(f"Pominięto {sum(parser.rejected.values())} wierszy JSONL niezgodnych z kontraktem: {listed}")
-    if not parser.rows:
+    if parser.stopped_at is not None:  # brak wierszy może wynikać z limitu czasu (luka w scan_database), nie z formatu
+        pass
+    elif not parser.rows:
         cover.fail('Plik JSONL nie zawiera żadnego wiersza zgodnego z kontraktem {"table": …, "row": {…}}; '
                    "sprawdź format wybrany flagą --database-format")
     else:

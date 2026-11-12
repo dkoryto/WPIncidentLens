@@ -12,7 +12,7 @@ from pathlib import Path
 from . import case, files, ingest, integrity, models, privacy, report, rules
 from . import database as database_scan
 from .analysis import Detection, SourceCoverage
-from .correlate import DEFAULT_WINDOW_SECONDS, correlate, focus as _focus, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
+from .correlate import DEFAULT_WINDOW_SECONDS, Correlation, check_window, correlate, focus as _focus, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
 from .httplog import FORMATS as FORMATS_OF_LOGS, LogConfig, scan_logs
 from .sqldump import iter_insert_rows  # noqa: F401  (ADR 0001: testy wołają go przez cli)
 from .analysis import evidence_of as _evidence
@@ -136,8 +136,13 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
     requests: list[models.Observation] = []
     if logs:
         evidence = {item.id: item for item in map(_evidence, session.ledger)}
-        focus = _focus(detections, evidence, correlation_window, (log_config or LogConfig()).uncertainty)
+        # Bez ``Focus`` (wyjątek w nim to luka logów) parser trzyma każde żądanie do pliku kodu, do limitu.
+        focus_errors = SourceCoverage()
+        focus = rules.guarded(focus_errors, "correlate", _focus, detections, evidence, correlation_window,
+                              (log_config or LogConfig()).uncertainty)
         found, cover["logs"], requests = _log_scan(scan_logs(logs, session, log_config, focus))
+        for text in focus_errors.reasons:
+            cover["logs"].degrade(text)
         detections.extend(found)
     else:
         cover["logs"].note("Brak logów HTTP")
@@ -171,6 +176,7 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
     klientów, loginy i ``user_id`` kont zastępują pseudonimy. Porównanie z ``known_admins`` odbywa się wcześniej, na loginach.
     """
     session = session or _session()
+    check_window(correlation_window)
     if baseline is not None and integrity.baseline_record(session, core) is None:
         raise ValueError("baseline musi być wczytany przez load_baseline w tej samej sesji odczytu")
     if core is not None and core.record not in session.ledger:
@@ -182,7 +188,10 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
         for name in [source] if source else [name for name in models.SOURCES if cover[name].provided]:
             cover[name].degrade(text)
     evidence = {item.id: item for item in map(_evidence, session.ledger)}
-    correlation = correlate(detections, requests, evidence, correlation_window)
+    correlation = Correlation()
+    if logs:  # bez logów nie ma żądań ani wykryć HTTP: korelacja nie miałaby czego łączyć
+        correlation = rules.guarded(cover["logs"], "correlate", correlate, detections, requests, evidence, correlation_window,
+                                    session.expired, default=Correlation())
     for note in correlation.notes:
         cover["logs"].degrade(note)
     timeline, undated = _timeline(detections, evidence, correlation.requests)

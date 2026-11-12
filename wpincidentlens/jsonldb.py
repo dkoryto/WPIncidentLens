@@ -11,6 +11,8 @@ pod swoim powodem — wywołujący zamienia liczniki na lukę pokrycia. Format w
 Interfejs jak ``sqldump.DumpParser``: ``feed`` dostaje kolejne porcje bajtów i oddaje wiersze
 ``(tabela, kolumny, komórki, numer)``; numer to numer wiersza pliku (od 1). Bufor obejmuje najwyżej jeden wiersz
 pliku i jedną porcję: wiersz dłuższy niż ``MAX_LINE_BYTES`` jest pomijany do najbliższego znaku końca wiersza bez buforowania.
+Limit czasu sesji (``expired``) jest sprawdzany przy każdej porcji i co ``CLOCK_EVERY_LINES`` wierszy; po jego upływie
+dalsza część pliku nie jest analizowana.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ from dataclasses import dataclass, field
 MAX_LINE_BYTES = 16 * 1024 * 1024
 MAX_TABLES = 5000  # różnych nazw tabel zapamiętanych do raportu
 MAX_COLUMNS = 1000  # kolumn w jednym wierszu; tabela WordPressa ma ich kilkanaście
+CLOCK_EVERY_LINES = 256  # co tyle wierszy (oprócz każdej porcji ``feed``) parser sprawdza limit czasu sesji
 _NAME = re.compile(r"[A-Za-z0-9_$]{1,64}")
 _BLANK = b" \t\r"  # białe znaki JSON (\n dzieli wiersze); inne, np. \v, czynią wiersz niepoprawnym
 
@@ -80,6 +83,8 @@ class JsonlParser:
     sprawdzane i liczone. Po ``close()`` ``rejected`` i ``first_rejected`` opisują, czego parser nie przyjął."""
     wanted: Callable[[str], bool] | None = None
     max_line: int = MAX_LINE_BYTES
+    expired: Callable[[], bool] | None = None  # limit czasu sesji (``ingest.Session.expired``)
+    stopped_at: int | None = None  # ostatni przeanalizowany wiersz pliku, gdy limit czasu przerwał plik
     rows: int = 0
     tables: set[str] = field(default_factory=set)
     rejected: Counter = field(default_factory=Counter)        # powód → liczba odrzuconych wierszy pliku
@@ -90,8 +95,12 @@ class JsonlParser:
 
     def feed(self, chunk: bytes) -> list[tuple[str, list[str], list[str | None], int]]:
         out: list = []
+        if self.stopped_at is not None or self._out_of_time():
+            return out
         start = 0
         while (end := chunk.find(b"\n", start)) >= 0:
+            if self._line % CLOCK_EVERY_LINES == 0 and self._line and self._out_of_time():
+                return out
             if self._skipping:
                 self._skipping = False
                 self._line += 1
@@ -117,6 +126,8 @@ class JsonlParser:
     def close(self) -> list[tuple[str, list[str], list[str | None], int]]:
         """Ostatni wiersz bez znaku końca wiersza jest przyjmowany jak każdy inny."""
         out: list = []
+        if self.stopped_at is not None:
+            return out
         if self._skipping:
             self._skipping = False
             self._line += 1
@@ -125,6 +136,15 @@ class JsonlParser:
             self._take(bytes(self._buf), out)
             self._buf.clear()
         return out
+
+    def _out_of_time(self) -> bool:
+        """Po limicie czasu reszta pliku nie jest analizowana (bufor jest zwalniany); odczyt i skrót idą dalej."""
+        if self.expired is None or not self.expired():
+            return False
+        self.stopped_at = self._line
+        self._buf.clear()
+        self._skipping = False
+        return True
 
     def _reject(self, reason: str, line: int) -> None:
         self.rejected[reason] += 1
