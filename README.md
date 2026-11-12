@@ -2,7 +2,7 @@
 
 **Nie jest to gotowe narzędzie produkcyjne ani dowód braku kompromitacji.**
 
-PoC zapewnia działający **offline** przepływ: statyczna analiza kopii katalogu WordPressa, wybranego podzbioru eksportu SQL i logów HTTP → manifest SHA-256 → `report.json` + `report.html` + `case.json`. Zawiera wyłącznie syntetyczne dane testowe.
+PoC zapewnia działający **offline** przepływ: statyczna analiza kopii katalogu WordPressa, wybranego podzbioru eksportu SQL i logów HTTP → manifest SHA-256 → `report.json` + `report.html` + widoki (`evidence-manifest.json`, `observations.jsonl`, `findings.json`, `timeline.json`, `coverage.json`, `run.log`) + `case.json`. Zawiera wyłącznie syntetyczne dane testowe.
 
 ## Test lokalny
 
@@ -70,7 +70,21 @@ Wywołanie waliduje `wpincidentlens/case.py` (CaseManager), zanim zostanie przec
 - `--operator-id` to pseudonim podany przez operatora. Narzędzie nie odczytuje nazwy użytkownika systemu, nazwy hosta ani zmiennych środowiskowych; bez flagi pole ma wartość `null`.
 - Wartość `--known-admin` i loginy w baseline, których nie da się zapisać w UTF-8, oraz ścieżki i skróty w baseline w niepoprawnej postaci są odrzucane (kod 2) przed analizą.
 - `--output` wskazujący dowiązanie symboliczne albo wpis niebędący katalogiem jest odrzucany (kod 2). Sprawdzany jest ostatni składnik ścieżki, nie katalogi nadrzędne.
-- Każdy plik wyników powstaje jako plik tymczasowy w katalogu wyników (uprawnienia `0600`) i jest zamieniany na docelowy dopiero po zapisaniu w całości. Istniejący wpis o nazwie wyniku, także dowiązanie symboliczne, jest zastępowany, a cel dowiązania pozostaje nietknięty. Zamiana trzech plików nie jest jedną operacją: `case.json` jest zamieniany jako ostatni.
+- Każdy plik wyników powstaje jako plik tymczasowy w katalogu wyników (uprawnienia `0600`) i jest zamieniany na docelowy dopiero po zapisaniu w całości. Istniejący wpis o nazwie wyniku, także dowiązanie symboliczne, jest zastępowany, a cel dowiązania pozostaje nietknięty. Zamiana dziewięciu plików nie jest jedną operacją: `case.json` jest zamieniany jako ostatni i podaje SHA-256 pozostałych (`outputs`); plik, którego skrót nie zgadza się z `case.json`, jest pozostałością przerwanego zapisu i jest nieaktualny.
+
+Pliki wyniku (R-40; kształty opisuje `wpincidentlens/outputs.py`). `report.json` jest źródłem prawdy, pozostałe są jego widokami:
+
+| Plik | Zawartość |
+|---|---|
+| `report.json`, `report.html` | pełny raport `poc-1` i jego wersja HTML |
+| `evidence-manifest.json` | `evidence` raportu: identyfikatory, ścieżki logiczne, statusy odczytu, SHA-256 |
+| `observations.jsonl` | jedna obserwacja na wiersz, w kolejności raportu, wyłącznie ASCII |
+| `findings.json`, `timeline.json` | `findings` i `timeline` raportu |
+| `coverage.json` | `coverage`, `coverage_gaps`, `scope_complete`, `assessment` |
+| `run.log` | wiersze JSON (ASCII) ze stałą listą pól: narzędzie i wersja, sprawa, czas analizy, ocena, kod wyjścia, liczniki i status pokrycia per źródło; bez treści dowodów, nazw plików i tekstów swobodnych |
+| `case.json` | opis sprawy i przebiegu (poniżej) |
+
+Każdy widok JSON ma `schema_version` (np. `findings-poc-1`) i `case_id`.
 
 `case.json` (schemat **`case-poc-1`**, [docs/schema/case-poc-1.schema.json](docs/schema/case-poc-1.schema.json)) opisuje sprawę i przebieg. Nie zawiera sekretów, ścieżek hosta, zmiennych środowiskowych ani listy zaufanych administratorów.
 
@@ -84,6 +98,7 @@ Wywołanie waliduje `wpincidentlens/case.py` (CaseManager), zanim zostanie przec
 | `flags` | `allow_hardlinks`, `reverify` |
 | `report` | nazwa pliku raportu i SHA-256 jego zapisanych bajtów |
 | `assessment`, `exit_code` | etykieta triage z raportu i kod wyjścia procesu |
+| `outputs` | SHA-256 każdego innego zapisanego pliku wyniku, po nazwie; pole opcjonalne w schemacie (starsze `case.json` go nie mają) |
 
 ## Kontener Docker
 

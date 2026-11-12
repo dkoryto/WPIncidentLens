@@ -15,12 +15,13 @@ import contextlib
 import errno
 import hashlib
 import html
-import json
 import os
 import secrets
 from pathlib import Path
 
-from . import ingest, models
+from . import ingest, models, outputs
+from .outputs import encode as _encode
+from .outputs import to_json as _json
 
 REPORT_JSON = "report.json"
 REPORT_HTML = "report.html"
@@ -76,15 +77,6 @@ def _publish(dir_fd: int, files: dict[str, bytes]) -> None:
                 os.unlink(temporary, dir_fd=dir_fd)
 
 
-def _encode(text: str) -> bytes:
-    """UTF-8; znak, którego nie da się zakodować (samotny surogat), dostaje postać ``\\uXXXX`` zamiast gubić cały raport."""
-    return text.encode("utf-8", "backslashreplace")
-
-
-def _json(document: dict) -> bytes:
-    return _encode(json.dumps(document, indent=2, ensure_ascii=False))
-
-
 def render_html(report: dict) -> str:
     esc = lambda s: html.escape(str(s), quote=True)
     places = {item["id"]: models.describe_location(item["location"]) for item in report.get("observations", [])}
@@ -124,9 +116,12 @@ def write_html(report: dict, path: Path) -> None:
         os.close(dir_fd)
 
 
-def case_record(case: dict, report: dict, report_sha256: str, exit_code: int) -> dict:
-    """Dokument ``case.json``: opis sprawy sprzed analizy (``CaseContext.describe()``) uzupełniony o jej wynik."""
-    return {
+def case_record(case: dict, report: dict, report_sha256: str, exit_code: int, output_digests: dict[str, str] | None = None) -> dict:
+    """Dokument ``case.json``: opis sprawy sprzed analizy (``CaseContext.describe()``) uzupełniony o jej wynik.
+
+    ``output_digests`` trafia do pola ``outputs`` (opcjonalnego w ``case-poc-1``): SHA-256 każdego innego pliku zapisanego w tym przebiegu.
+    """
+    record = {
         "schema_version": case["schema_version"], "case_id": case["case_id"], "operator_id": case["operator_id"],
         "tool": report["tool"], "tool_version": report["tool_version"],
         "created_at_utc": case["created_at_utc"], "analysis_finished_at_utc": report["analyzed_at_utc"],
@@ -134,16 +129,22 @@ def case_record(case: dict, report: dict, report_sha256: str, exit_code: int) ->
         "report": {"file": REPORT_JSON, "sha256": report_sha256},
         "assessment": report["assessment"], "exit_code": exit_code,
     }
+    if output_digests is not None:
+        record["outputs"] = output_digests
+    return record
 
 
 def write(directory: Path, report: dict, case: dict, exit_code: int) -> None:
-    """Tworzy katalog wyników, jeśli go nie ma, i zapisuje w nim ``report.json``, ``report.html`` oraz ``case.json``.
+    """Tworzy katalog wyników, jeśli go nie ma, i zapisuje w nim ``report.json``, ``report.html``, widoki z ``outputs.VIEWS``
+    oraz ``case.json``.
 
-    ``case.json`` jest zamieniany jako ostatni i podaje SHA-256 zapisanego ``report.json``.
+    Wszystkie pliki przechodzą przez jeden ``_publish``; ``case.json`` jest zamieniany jako ostatni i podaje SHA-256
+    każdego pozostałego pliku (``report`` i ``outputs``).
     """
-    body = _json(report)
-    files = {REPORT_JSON: body, REPORT_HTML: _encode(render_html(report)),
-             CASE_JSON: _json(case_record(case, report, hashlib.sha256(body).hexdigest(), exit_code))}
+    html_page = render_html(report)
+    files = {REPORT_JSON: _json(report), REPORT_HTML: _encode(html_page), **outputs.render(report, exit_code)}
+    digests = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
+    files[CASE_JSON] = _json(case_record(case, report, digests[REPORT_JSON], exit_code, digests))
     dir_fd = _open_directory(directory, create=True)
     try:
         _publish(dir_fd, files)
