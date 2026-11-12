@@ -8,10 +8,10 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import case, files, ingest, integrity, models, report
+from . import case, files, ingest, integrity, models, report, rules
 from . import database as database_scan
 from .analysis import Detection, SourceCoverage
-from .correlate import DEFAULT_WINDOW_SECONDS, correlate, detection_findings, focus as _focus, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
+from .correlate import DEFAULT_WINDOW_SECONDS, correlate, focus as _focus, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
 from .httplog import FORMATS as FORMATS_OF_LOGS, LogConfig, scan_logs
 from .sqldump import iter_insert_rows  # noqa: F401  (ADR 0001: testy wołają go przez cli)
 from .analysis import evidence_of as _evidence
@@ -182,8 +182,8 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
         cover["logs"].degrade(note)
     timeline, undated = _timeline(detections, evidence, correlation.requests)
     cover["files"].note(*undated)
+    findings = {item.id: item for item in [*rules.findings(detections, cover), *correlation.findings]}
     coverage = {source: _coverage(source, cover[source], session.ledger) for source in models.SOURCES}
-    findings = {item.id: item for item in [*detection_findings(detections), *correlation.findings]}
     gaps = {reason for entry in coverage.values() for reason in entry.reasons} | set(session_gaps)
     return models.Report(
         case_id=case_id, tool="WPIncidentLens PoC", tool_version=VERSION, analyzed_at_utc=models.utc_iso(datetime.now(timezone.utc)),

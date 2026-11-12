@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from . import filerules, models, redact
+from . import filerules, models, redact, rules
 from .analysis import Detection
 
 DEFAULT_WINDOW_SECONDS = 900
@@ -82,13 +82,13 @@ def focus(detections: list[Detection], evidence: Mapping[str, models.Evidence], 
     return Focus(frozenset(paths), tuple(merged))
 
 
-def detection_findings(detections: Iterable[Detection]) -> list[models.Finding]:
-    """Jedno ustalenie na wykrycie."""
-    return [models.Finding(found.rule, found.category, found.severity, found.confidence, found.explanation, (found.observation.id,))
-            for found in detections]
+def _finding(rule: str, severity: str, confidence: str, reason: str, observations: tuple[str, ...],
+             notes: list[str]) -> models.Finding:
+    """Ustalenie korelacyjne przez rejestr reguł; naruszenie deklaracji reguły trafia do not (luka pokrycia ``logs``)."""
+    return rules.finding(rule, "correlation", severity, confidence, reason, observations, lambda _source, text: notes.append(text))
 
 
-def _upload_correlation(detections: list[Detection]) -> tuple[list[models.Finding], set[str]]:
+def _upload_correlation(detections: list[Detection], notes: list[str]) -> tuple[list[models.Finding], set[str]]:
     """``SAME_PATH`` dla pliku wykonywalnego w uploads i wykrycia z logu (zachowanie sprzed ADR 0007)."""
     # Atrybut ``path`` żądania jest po ``redact.neutralise``; ścieżka pliku przechodzi to samo, żeby nazwy ze znakami
     # sterującymi albo zmiany kierunku pisma (zapisane w raporcie jako U+FFFD) nadal się spotykały.
@@ -103,10 +103,10 @@ def _upload_correlation(detections: list[Detection]) -> tuple[list[models.Findin
         path = str(attributes.get("path") or str(attributes["uri"]).split("?")[0]).lstrip("/")
         if path in uploads:
             paths.add(path)
-            findings.append(models.Finding(
-                "CORRELATED_UPLOAD_REQUEST", "correlation", "high", "medium",
+            findings.append(_finding(
+                "CORRELATED_UPLOAD_REQUEST", "high", "medium",
                 "Ten sam podejrzany plik występuje w obrazie witryny i w logu HTTP; to korelacja, nie dowód wykonania kodu.",
-                (uploads[path].id, found.observation.id)))
+                (uploads[path].id, found.observation.id), notes))
     return findings, paths
 
 
@@ -176,7 +176,8 @@ def correlate(detections: list[Detection], requests: Iterable[models.Observation
     """
     if isinstance(window_seconds, bool) or not isinstance(window_seconds, int) or window_seconds <= 0:
         raise ValueError("okno korelacji musi być dodatnią liczbą całkowitą sekund")
-    uploads, upload_paths = _upload_correlation(detections)
+    notes: list[str] = []
+    uploads, upload_paths = _upload_correlation(detections, notes)
     usable = sorted((request for request in requests if request.kind == REQUEST_KIND and isinstance(request.attributes.get("path"), str)),
                     key=lambda request: (request.timestamp_utc or "", request.id))
     by_path: dict[str, list[models.Observation]] = {}
@@ -193,8 +194,8 @@ def correlate(detections: list[Detection], requests: Iterable[models.Observation
         if matched:
             shown = matched[:MAX_REQUESTS_PER_FINDING]
             referenced.update((request.id, request) for request in shown)
-            same_path.append(models.Finding("CORRELATED_FILE_REQUEST", "correlation", "medium", "low",
-                                            _same_path_reason(matched, len(shown)), file.observations + tuple(r.id for r in shown)))
+            same_path.append(_finding("CORRELATED_FILE_REQUEST", "medium", "low", _same_path_reason(matched, len(shown)),
+                                      file.observations + tuple(r.id for r in shown), notes))
         if file.mtime_ns is None or not timed:
             continue
         reach = window_seconds * 10**9 + widest * 10**9
@@ -206,10 +207,9 @@ def correlate(detections: list[Detection], requests: Iterable[models.Observation
             matched = [request for _, _, request in close]
             shown = matched[:MAX_REQUESTS_PER_FINDING]
             referenced.update((request.id, request) for request in shown)
-            near.append(models.Finding("REQUEST_NEAR_FILE_CHANGE", "correlation", "medium", "low",
-                                       _near_reason(matched, len(shown), window_seconds), file.observations + tuple(r.id for r in shown)))
+            near.append(_finding("REQUEST_NEAR_FILE_CHANGE", "medium", "low", _near_reason(matched, len(shown), window_seconds),
+                                 file.observations + tuple(r.id for r in shown), notes))
 
-    notes: list[str] = []
     findings = uploads + _capped("CORRELATED_FILE_REQUEST", same_path, notes) + _capped("REQUEST_NEAR_FILE_CHANGE", near, notes)
     kept = {reference for finding in findings for reference in finding.observations}
     return Correlation(tuple(findings), tuple(request for key, request in sorted(referenced.items()) if key in kept), tuple(notes))

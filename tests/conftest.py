@@ -21,6 +21,7 @@ import pytest
 from wpincidentlens import ingest
 from wpincidentlens.cli import EXIT_COMPLETE, EXIT_PARTIAL, EXIT_UNPROCESSED, main
 from wpincidentlens.models import describe_location, validate_report
+from wpincidentlens.rules import REGISTRY_GAP
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 SCHEMA_PATH = Path(__file__).parents[1] / "docs" / "schema" / "report-poc-1.schema.json"
@@ -299,6 +300,9 @@ def analyze(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
         assert schema_errors(report) == []  # …i opublikowany JSON Schema
         case = json.loads((out / "case.json").read_text(encoding="utf-8"))
         assert case_schema_errors(case) == []
+        # Kontrakt rejestru reguł (ADR 0008 pkt 2): każda para (severity, confidence), którą wyemitowała dowolna gałąź
+        # dowolnej reguły w dowolnym teście, jest zadeklarowana w wpincidentlens/rules.py.
+        assert [gap for gap in report["coverage_gaps"] if gap.startswith(REGISTRY_GAP)] == []
         return Run(report, json_text, (out / "report.html").read_text(encoding="utf-8"), capsys.readouterr().out, out, code, case)
 
     return run

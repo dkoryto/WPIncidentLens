@@ -17,7 +17,6 @@ from . import ingest
 from .analysis import Detection, seen_in
 from .fileclass import FileClass, classify
 
-RULESET_VERSION = "2026.11.1"  # zmienia się przy każdej zmianie tabeli RULES albo logiki dopasowania
 
 CODE_SUFFIXES = frozenset({".php", ".phtml", ".phar", ".inc", ".pht", ".php3", ".php4", ".php5", ".php7", ".php8"})
 CONFIG_NAMES = frozenset({".htaccess", ".user.ini", "php.ini"})
