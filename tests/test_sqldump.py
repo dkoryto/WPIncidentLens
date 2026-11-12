@@ -156,7 +156,11 @@ def test_truncated_statement_with_many_unclosed_executable_comments_is_classifie
     b"/*!40101 LOCK TABLES `t` WRITE # c */;",
     b"/*!40101 DROP TABLE `t` -- c\n */;",
     b"/*!40101 LOCK TABLES `t` WRITE \\' */;",
-], ids=["hidden-sql-mode", "hidden-update", "hash-comment-inside", "dash-comment-inside", "unclosed-string-inside"])
+    b"/*!40101 LOCK TABLES `t` WRITE '\\\n' /* ' */;",
+    b"/*!40101 LOCK TABLES `t` WRITE '\\\n' # ' */;",
+    b"/*!40101 LOCK TABLES `t` WRITE '\\\n' -- ' */;",
+], ids=["hidden-sql-mode", "hidden-update", "hash-comment-inside", "dash-comment-inside", "unclosed-string-inside",
+        "backslash-newline-then-block-comment", "backslash-newline-then-hash", "backslash-newline-then-dashes"])
 def test_comment_left_open_by_an_executable_comment_makes_the_statement_unsupported_not_inert(sql):
     """Regresja (przegląd T-601): komentarz z wnętrza ``/*!…*/`` (``/*`` niedomknięte, ``#``, ``--``) zostaje po rozwinięciu;
     instrukcji nie wolno wtedy sklasyfikować jako obojętnej: klasyfikator widziałby co innego niż serwer."""

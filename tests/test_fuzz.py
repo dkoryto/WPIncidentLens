@@ -84,6 +84,8 @@ def mysql_string(draw) -> tuple[str, str]:
             out.append("\\\\")
         elif char == "'":
             out.append("''" if style else "\\'")
+        elif char == "\n" and style == 2:
+            out.append("\\\n")  # ukośnik i surowy LF: nieznana ucieczka, czyli sam LF
         elif char in "\0\n\r\x1a" and style:
             out.append({"\0": "\\0", "\n": "\\n", "\r": "\\r", "\x1a": "\\Z"}[char])
         elif style == 2 and char not in _NOT_ESCAPABLE:
@@ -193,7 +195,7 @@ def sql_state(chunks) -> tuple:
             sorted(parser.ddl_names), parser.names_overflow)
 
 
-SQL_ALPHABET = [b"'", b'"', b"`", b"\\", b";", b"(", b")", b"--", b"-- ", b"#", b"/*", b"*/", b"/*!40101 ", b"*/;", b"\n", b",",
+SQL_ALPHABET = [b"'", b'"', b"`", b"\\", b"\\\n", b"'\\\n", b";", b"(", b")", b"--", b"-- ", b"#", b"/*", b"*/", b"/*!40101 ", b"*/;", b"\n", b",",
                 b"\xff", b"\xc5", b"\xe2\x82", b"0x", b"X'", b"''", b"\\'", b"SET NAMES sjis;", b"SET sql_mode='ANSI_QUOTES';",
                 b"DELIMITER ;;\n", b"INSERT INTO `t` VALUES ", b"VALUES", b"NULL", b"CONCAT(", b"_binary ", b"REPLACE ",
                 b"/*M!999999\\- enable the sandbox mode */", b"ON DUPLICATE KEY UPDATE a=1", b"SELECT ", b"CREATE TABLE `x` ("]

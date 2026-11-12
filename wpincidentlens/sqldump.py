@@ -72,8 +72,8 @@ _UNWRAP_TAIL = re.compile(_UNWRAP_PATTERN.replace(rb"\*/", rb"(?:\*/|\Z)").repla
                           .replace(rb'*+" |', rb'*+(?:"|\\?\Z) |').replace(rb"*+` )", rb"*+(?:`|\Z) )"), re.X | re.S)
 # Kod po rozwinięciu: łańcuchy (domknięte — grupa zamknięcia — albo sięgające końca tekstu) i początki komentarzy.
 _COMMENT_LEFT = re.compile(rb"""'(?:[^'\\]|\\.)*+(?:(')|\\?\Z)|"(?:[^"\\]|\\.)*+(?:(")|\\?\Z)|`[^`]*+(?:(`)|\Z)"""
-                           rb"""|(/\*|--(?=[\x00-\x20\x7f]|\Z)|\#)""")
-_SCRUB = re.compile(rb"'(?:[^'\\]|\\.)*+'|\"(?:[^\"\\]|\\.)*+\"|`[^`]*+`")  # łańcuchy i nazwy poza sprawdzaniem słów
+                           rb"""|(/\*|--(?=[\x00-\x20\x7f]|\Z)|\#)""", re.S)  # re.S: ``\\.`` obejmuje też ``\\`` + LF
+_SCRUB = re.compile(rb"'(?:[^'\\]|\\.)*+'|\"(?:[^\"\\]|\\.)*+\"|`[^`]*+`", re.S)  # łańcuchy i nazwy poza sprawdzaniem słów
 # SET jest obojętny tylko jako lista prostych przypisań (``SET STATEMENT … FOR …`` wykonuje dowolną instrukcję).
 _SET_VALUE = (rb"(?:'(?:[^'\\]|\\.|'')*+'(?:\s*+'(?:[^'\\]|\\.|'')*+')*+|\"(?:[^\"\\]|\\.|\"\")*+\""
               rb"|[-+]?[0-9.]++[A-Za-z0-9.]*+|@@?(?:[A-Za-z_]++\.)?[A-Za-z0-9_$]++|[A-Za-z_][A-Za-z0-9_$]*+)")
