@@ -627,14 +627,22 @@ def _xss_symlink_name(site, evidence):
     return {}
 
 
-@pytest.mark.parametrize("build", [_xss_file_path, _xss_option_name, _xss_log_file_name, _xss_log_timestamp, _xss_symlink_name],
-                         ids=["finding-file-path", "finding-option-name", "finding-log-file-name", "gap-log-timestamp", "gap-symlink-name"])
+@pytest.mark.parametrize("build", [_xss_file_path, _xss_option_name, _xss_log_file_name, _xss_symlink_name],
+                         ids=["finding-file-path", "finding-option-name", "finding-log-file-name", "gap-symlink-name"])
 def test_s12_markup_from_evidence_is_escaped_in_html_report(site, evidence, analyze, build):
     run = analyze(site, **build(site, evidence))
 
     assert html.escape(XSS, quote=True) in run.html
     assert XSS not in run.html
     assert not re.search(r"<(script|img|svg|iframe)\b", run.html, re.I)
+
+
+def test_s12_markup_in_log_time_field_does_not_reach_the_report(site, evidence, analyze):
+    """Pole czasu spoza wzorca czasu zastępuje stały opis (ADR 0008 pkt 4): ani surowo, ani escapowane."""
+    run = analyze(site, **_xss_log_timestamp(site, evidence))
+
+    assert XSS not in run.json_text and html.escape(XSS, quote=True) not in run.html
+    assert logformats.UNREADABLE_TIME in run.json_text
 
 
 def test_s12_markup_in_case_id_is_refused_by_the_command_line(site, refuse):

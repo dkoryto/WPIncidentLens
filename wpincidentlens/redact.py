@@ -32,7 +32,7 @@ _QUERY = re.compile(r"\?[^\s\"'<>\\]+")
 _SECRET = re.compile(
     r"(key|token|passw(?:or)?d|pass|pwd|secret|auth|sig|nonce|session|credential)"
     r"([\w\-\[\]]{0,40}?[\"']?\s{0,3}[=:]\s{0,3})"
-    r"(?:\"[^\"<>]{0,200}\"|'[^'<>]{0,200}'|[^\s\"'<>&;,]+)", re.I)
+    r"(?!\[usunięto\])(?:\"[^\"<>]{0,200}\"|'[^'<>]{0,200}'|[^\s\"'<>&;,]+)", re.I)  # wartość już zastąpiona zostaje
 _AT_DOMAIN = re.compile(r"@(?=[\w\-]{1,63}\.[\w\-])")
 _LOCAL_PART_CHARS = frozenset("._+-")
 _MAX_LOCAL_PART = 64
@@ -40,6 +40,7 @@ _HOST_OR_RUN = re.compile(r"(?P<host>://[^\s/?#\"'<>\\]{1,255})|(?P<run>[A-Za-z0
 _HEX = re.compile(r"[0-9A-Fa-f]+")
 _MIN_MIXED_RUN = 24
 _UNSAFE_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+_MAX_PASSES = 8
 
 
 def neutralise(text: str) -> str:
@@ -73,14 +74,29 @@ def _mask_run(found: re.Match[str]) -> str:
     return run
 
 
-def redact(text: str) -> str:
-    """Tekst po redakcji. Wywołujący ogranicza długość wejścia."""
+def _pass(text: str) -> str:
     text = _USERINFO.sub(rf"\1{MARK}@", text)
     text = _QUERY.sub(f"?{MARK}", text)
     text = _SECRET.sub(rf"\1\2{MARK}", text)
     text = _mask_local_parts(text)
     text = _HOST_OR_RUN.sub(_mask_run, text)
     return neutralise(text)
+
+
+def redact(text: str) -> str:
+    """Tekst po redakcji. Wywołujący ogranicza długość wejścia.
+
+    Funkcja jest idempotentna (``redact(redact(x)) == redact(x)``): pojedyncze przejście nie zawsze nią jest, bo
+    znacznik wstawiony w miejsce wartości w cudzysłowie albo znak zastępczy może odsłonić nowe dopasowanie. Przejścia
+    powtarza się więc do punktu stałego (w praktyce najwyżej trzy); gdy go nie ma po ``_MAX_PASSES``, cały tekst staje
+    się znacznikiem — redakcja zawodzi bezpiecznie.
+    """
+    for _ in range(_MAX_PASSES):
+        cleaned = _pass(text)
+        if cleaned == text:
+            return text
+        text = cleaned
+    return MARK
 
 
 def excerpt(text: str, pattern: re.Pattern[str] | None = None, *, limit: int = EXCERPT_CHARS) -> str:

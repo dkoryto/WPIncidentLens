@@ -95,3 +95,17 @@ def test_redaction_of_hostile_megabyte_is_fast(build):
 
     with time_limit(5):
         redact.redact(text)
+
+
+_PIECES = [*"aA0f9Z_-+=:?@/.\"' \t\n&;,<>[]{}", "key", "token", "pass", "auth", "sig", "://", "http://", MARK, "@example.org",
+           "\u202e", "\x00", "ą", "d41d8cd98f00b204e9800998ecf8427e", CANARY]
+
+
+def test_redact_is_idempotent_on_random_compositions():
+    """Własność: ``redact(redact(x)) == redact(x)``. Ziarno stałe; składniki to fragmenty, na których działają wzorce."""
+    import random
+    chance = random.Random(8)
+    for _ in range(20000):
+        text = "".join(chance.choice(_PIECES) for _ in range(chance.randint(0, 40)))
+        once = redact.redact(text)
+        assert redact.redact(once) == once, text

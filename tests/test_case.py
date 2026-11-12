@@ -274,9 +274,9 @@ def test_case_json_records_default_limits(site, analyze):
 
 
 @pytest.mark.parametrize("flags, expected", [
-    ((), {"allow_hardlinks": False, "reverify": True}),
-    (("--allow-hardlinks", "--no-reverify"), {"allow_hardlinks": True, "reverify": False}),
-], ids=["defaults", "both-set"])
+    ((), {"allow_hardlinks": False, "reverify": True, "pseudonymize": False}),
+    (("--allow-hardlinks", "--no-reverify", "--pseudonymize"), {"allow_hardlinks": True, "reverify": False, "pseudonymize": True}),
+], ids=["defaults", "all-set"])
 def test_case_json_records_flags(site, analyze, flags, expected):
     assert analyze(site, flags=flags).case["flags"] == expected
 

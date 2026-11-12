@@ -142,13 +142,23 @@ def test_every_rejection_reason_except_line_length_is_reachable_from_a_line():
     ("09/Lis/2026:02:14:01 +0100", None),
     ("31/Feb/2026:02:14:01 +0100", None),
     ("01/Jan/0001:00:00:00 +0100", None),
-    ("not-a-date", None),
 ], ids=["plus-zone", "minus-zone", "across-new-year", "no-zone", "impossible-zone", "non-english-month", "impossible-day",
-        "before-year-one-in-utc", "garbage"])
+        "before-year-one-in-utc"])
 def test_combined_time_is_normalised_to_utc_or_kept_raw(stamp, utc):
     record = parse("combined", access_line("/", when=stamp).rstrip("\n"))
 
     assert (record.timestamp_raw, record.timestamp_utc) == (stamp, utc)
+
+
+@pytest.mark.parametrize("fmt, line", [
+    ("combined", access_line("/", when="token=SYNTHETIC-S3cr3t 198.51.100.23").rstrip("\n")),
+    ("json", json.dumps({"time": "token=SYNTHETIC-S3cr3t 198.51.100.23", "remote_addr": "192.0.2.10", "method": "GET", "uri": "/",
+                         "status": 200})),
+], ids=["combined", "json"])
+def test_time_field_that_is_not_a_time_is_not_kept_raw(fmt, line):
+    record = parse(fmt, line)
+
+    assert (record.timestamp_raw, record.timestamp_utc) == (logformats.UNREADABLE_TIME, None)
 
 
 @pytest.mark.parametrize("stamp, utc, precision", [
@@ -158,16 +168,16 @@ def test_combined_time_is_normalised_to_utc_or_kept_raw(stamp, utc):
     ("2026-11-09T02:14:01", None, "second"),
     ("2026-11-09 02:14:01+01:00", None, "second"),
     ("2026-13-09T02:14:01+01:00", None, "second"),
-    ("yesterday", None, "second"),
-], ids=["zulu", "milliseconds", "microseconds", "no-offset", "space-separator", "impossible-month", "garbage"])
+], ids=["zulu", "milliseconds", "microseconds", "no-offset", "space-separator", "impossible-month"])
 def test_json_time_is_normalised_to_utc_with_its_precision(stamp, utc, precision):
     record = parse("json", json_line(time=stamp))
 
     assert (record.timestamp_raw, record.timestamp_utc, record.precision) == (stamp, utc, precision)
 
 
-def test_raw_time_is_bounded():
-    assert len(parse("json", json_line(time="x" * 1000)).timestamp_raw) == logformats.MAX_TIME_CHARS
+@pytest.mark.parametrize("stamp", ["yesterday", "x" * 1000, "2026-11-09T02:14:01+01:00" + "0" * 1000])
+def test_raw_time_outside_the_time_shape_is_replaced(stamp):
+    assert parse("json", json_line(time=stamp)).timestamp_raw == logformats.UNREADABLE_TIME
 
 
 # --- ścieżka ------------------------------------------------------------------------------------

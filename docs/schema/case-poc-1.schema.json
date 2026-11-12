@@ -87,7 +87,11 @@
       "required": ["allow_hardlinks", "reverify"],
       "properties": {
         "allow_hardlinks": {"type": "boolean"},
-        "reverify": {"type": "boolean"}
+        "reverify": {"type": "boolean"},
+        "pseudonymize": {
+          "description": "Opcjonalne: czy raport powstał z --pseudonymize (IP klientów, loginy i user_id jako pseudonimy). Dokumenty sprzed jego wprowadzenia go nie mają.",
+          "type": "boolean"
+        }
       }
     },
     "report": {

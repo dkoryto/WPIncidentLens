@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import case, files, ingest, integrity, models, report, rules
+from . import case, files, ingest, integrity, models, privacy, report, rules
 from . import database as database_scan
 from .analysis import Detection, SourceCoverage
 from .correlate import DEFAULT_WINDOW_SECONDS, correlate, focus as _focus, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
@@ -25,6 +26,8 @@ MAX_FILES = ingest.Limits().max_files
 MAX_SCAN_BYTES = ingest.Limits().max_scan_bytes
 MAX_BASELINE_BYTES = 64 * 1024 * 1024
 MAX_CORE_CHECKSUMS_BYTES = 8 * 1024 * 1024
+PERSONAL_DATA_WARNING = ("Uwaga: raport zawiera dane osobowe (adresy IP klientów, loginy kont); "
+                         "aby zastąpić je pseudonimami, uruchom ponownie z --pseudonymize.")
 
 
 def _session() -> ingest.Session:
@@ -157,13 +160,15 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
                    baseline: dict | None, known_admins: set[str], case_id: str, *,
                    session: ingest.Session | None = None, core: integrity.CoreChecksums | None = None,
                    database_format: str = "sql", correlation_window: int = DEFAULT_WINDOW_SECONDS,
-                   log_config: LogConfig | None = None) -> dict:
+                   log_config: LogConfig | None = None, pseudonymizer: privacy.Pseudonymizer | None = None) -> dict:
     """Zwraca raport ``poc-1`` jako słownik gotowy do zapisu.
 
     ``baseline`` musi pochodzić z ``load_baseline``, a ``core`` z ``load_core_checksums`` tej samej sesji.
     ``database_format`` (``sql`` albo ``jsonl``) wybiera parser zrzutu bazy; formatu nie zgaduje się po treści.
     ``correlation_window`` to okno relacji ``NEAR_IN_TIME`` w sekundach (ADR 0007 pkt 8).
     ``log_config`` to wybory operatora dotyczące logów (format, zaufane proxy, niepewność zegara); domyślnie combined.
+    Teksty swobodne raportu są redagowane w jednym miejscu (``privacy.sanitize``); z ``pseudonymizer`` adresy IP
+    klientów, loginy i ``user_id`` kont zastępują pseudonimy. Porównanie z ``known_admins`` odbywa się wcześniej, na loginach.
     """
     session = session or _session()
     if baseline is not None and integrity.baseline_record(session, core) is None:
@@ -185,11 +190,11 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
     findings = {item.id: item for item in [*rules.findings(detections, cover), *correlation.findings]}
     coverage = {source: _coverage(source, cover[source], session.ledger) for source in models.SOURCES}
     gaps = {reason for entry in coverage.values() for reason in entry.reasons} | set(session_gaps)
-    return models.Report(
+    return privacy.sanitize(models.Report(
         case_id=case_id, tool="WPIncidentLens PoC", tool_version=VERSION, analyzed_at_utc=models.utc_iso(datetime.now(timezone.utc)),
         assessment=models.assess(findings.values(), coverage), disclaimer=DISCLAIMER,
         evidence=tuple(evidence.values()), observations=tuple({item.id: item for item in [*(found.observation for found in detections), *facts, *correlation.requests]}.values()),
-        findings=tuple(findings.values()), coverage=coverage, coverage_gaps=tuple(gaps), timeline=tuple(timeline)).to_dict()
+        findings=tuple(findings.values()), coverage=coverage, coverage_gaps=tuple(gaps), timeline=tuple(timeline)), pseudonymizer).to_dict()
 
 
 def exit_code(report: dict) -> int:
@@ -240,6 +245,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--correlation-window", type=_positive_seconds, default=DEFAULT_WINDOW_SECONDS, metavar="SECONDS",
                         help="Okno relacji NEAR_IN_TIME między żądaniem HTTP a mtime pliku z ustaleniem, w sekundach; "
                              "bliskość w czasie nie dowodzi przyczynowości (%(default)s)")
+    parser.add_argument("--pseudonymize", action="store_true",
+                        help="Zastąp adresy IP klientów, loginy i user_id kont pseudonimami ip-/user-/uid-<16 hex> (HMAC-SHA256 "
+                             "z kluczem losowanym na jedno uruchomienie i nigdzie niezapisywanym): ta sama wartość ma ten sam "
+                             "pseudonim tylko w obrębie jednego raportu. Jawne pozostają m.in. czas rejestracji konta, nazwy "
+                             "w ścieżkach i kluczach (np. slug autora w URL) oraz domeny e-mail w cytatach")
     parser.add_argument("--output", type=Path, required=True)
     defaults = ingest.Limits()
     parser.add_argument("--allow-hardlinks", action="store_true",
@@ -262,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
             case_id=args.case_id, operator_id=args.operator_id, known_admins=args.known_admin,
             allow_hardlinks=args.allow_hardlinks, reverify=not args.no_reverify, core_checksums=args.core_checksums,
             log_format=args.log_format, trusted_proxies=args.trusted_proxy, log_clock_skew=args.log_clock_skew,
+            pseudonymize=args.pseudonymize,
             limits={"max_files": args.max_files, "max_entries": args.max_entries, "max_file_bytes": args.max_file_bytes,
                     "max_total_bytes": args.max_total_bytes, "max_scan_bytes": MAX_SCAN_BYTES, "max_seconds": args.max_seconds,
                     "max_depth": args.max_depth, "max_path_bytes": args.max_path_bytes})
@@ -283,12 +294,15 @@ def main(argv: list[str] | None = None) -> int:
     admins = set(context.known_admins) | set((baseline or {}).get("known_admins", []))
     output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session, core=core,
                             database_format=context.database_format, correlation_window=args.correlation_window,
-                            log_config=LogConfig(context.log_format, context.proxy_networks(), context.log_clock_skew))
+                            log_config=LogConfig(context.log_format, context.proxy_networks(), context.log_clock_skew),
+                            pseudonymizer=privacy.Pseudonymizer() if context.pseudonymize else None)
     code = exit_code(output)
     try:
         report.write(context.output, output, context.describe(), code)
     except report.OutputRefusal as refusal:
         parser.error(f"--output: {refusal}")
+    if not context.pseudonymize and privacy.personal_data(output):
+        print(PERSONAL_DATA_WARNING, file=sys.stderr)
     print(json.dumps({"assessment": output["assessment"], "scope_complete": output["scope_complete"], "findings":len(output["findings"]),
                       "coverage_gaps":len(output["coverage_gaps"]), "exit_code": code, "report":str(context.output / "report.html")}, ensure_ascii=False))
     return code

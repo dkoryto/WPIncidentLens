@@ -54,6 +54,7 @@ class CaseContext:
     log_format: str = "combined"  # wybór operatora (--log-format); nie zgaduje się go po treści
     trusted_proxies: tuple[str, ...] = ()  # sieci w postaci kanonicznej (--trusted-proxy)
     log_clock_skew: float | None = None  # deklarowana niepewność zegara serwera w sekundach (--log-clock-skew)
+    pseudonymize: bool = False  # --pseudonymize: IP klientów, loginy i user_id jako pseudonimy (ADR 0008 pkt 5)
 
     def proxy_networks(self) -> tuple[logformats.Network, ...]:
         return tuple(ipaddress.ip_network(value) for value in self.trusted_proxies)
@@ -73,7 +74,7 @@ class CaseContext:
             "created_at_utc": self.created_at_utc,
             "sources": sources,
             "limits": asdict(self.limits),
-            "flags": {"allow_hardlinks": self.allow_hardlinks, "reverify": self.reverify},
+            "flags": {"allow_hardlinks": self.allow_hardlinks, "reverify": self.reverify, "pseudonymize": self.pseudonymize},
         }
 
 
@@ -151,7 +152,7 @@ def build(*, files: Path, output: Path, case_id: str, database: Path | None = No
           baseline: Path | None = None, operator_id: str | None = None, known_admins: Iterable[str] = (),
           limits: Mapping[str, float] | None = None, allow_hardlinks: bool = False, reverify: bool = True,
           core_checksums: Path | None = None, database_format: str = "sql", log_format: str = "combined",
-          trusted_proxies: Iterable[str] = (), log_clock_skew: float | None = None) -> CaseContext:
+          trusted_proxies: Iterable[str] = (), log_clock_skew: float | None = None, pseudonymize: bool = False) -> CaseContext:
     """Waliduje wywołanie w kolejności: wartości tekstowe i limity, ścieżki źródeł, katalog wyników.
 
     Zgłasza ``CaseError`` z nazwą flagi. Źródło bez uprawnień do odczytu nie jest błędem wywołania:
@@ -186,7 +187,7 @@ def build(*, files: Path, output: Path, case_id: str, database: Path | None = No
         output=_output(output, [path for _, path, _ in given]), limits=checked, allow_hardlinks=allow_hardlinks,
         reverify=reverify, known_admins=admins, created_at_utc=models.utc_iso(datetime.now(timezone.utc)),
         core_checksums=core_checksums, database_format=database_format, log_format=log_format, trusted_proxies=proxies,
-        log_clock_skew=skew)
+        log_clock_skew=skew, pseudonymize=pseudonymize)
 
 
 def is_relative_path(path: object) -> bool:
