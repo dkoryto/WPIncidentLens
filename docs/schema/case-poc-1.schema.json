@@ -107,6 +107,17 @@
       "propertyNames": {"enum": ["report.json", "report.html", "evidence-manifest.json", "observations.jsonl", "findings.json",
                                  "timeline.json", "coverage.json", "run.log"]},
       "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    },
+    "ruleset": {
+      "description": "Opcjonalne: zestaw reguł użyty w przebiegu (wpincidentlens/rules.py) — identyfikator, wersja i SHA-256 kanonicznego JSON rejestru. Zawsze zapisywane przez narzędzie; dokumenty sprzed jego wprowadzenia go nie mają.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "sha256"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$"},
+        "version": {"type": "string", "pattern": "^[0-9]{4}\\.[0-9]{1,2}\\.[0-9]{1,4}$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
     }
   },
   "$defs": {

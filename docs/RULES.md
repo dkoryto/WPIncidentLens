@@ -2,7 +2,16 @@
 
 Dokument opisuje trzy rzeczy: reguły ścieżki i treści (`wpincidentlens/filerules.py`), reguły integralności względem zaufanej referencji (`wpincidentlens/integrity.py`) oraz obserwacje WPDetector (`wpincidentlens/wpdetect.py`), które **nie są ustaleniami**. Reguły bazy danych opisuje sekcja „Reguły bazy danych”, logi HTTP — sekcja „Logi HTTP”, korelację — sekcja „Korelacja plik–żądanie”.
 
-Źródło prawdy dla reguł ścieżki i treści: tabela `RULES` w `wpincidentlens/filerules.py` (`RULESET_VERSION = "2026.11.1"`). Test `tests/test_filerules.py` pilnuje, żeby każda reguła z tabeli była tu opisana i miała przypadek pozytywny, negatywny oraz fałszywy alarm wzorowany na legalnym kodzie.
+Źródło prawdy dla wzorców reguł ścieżki i treści: tabela `RULES` w `wpincidentlens/filerules.py`. Test `tests/test_filerules.py` pilnuje, żeby każda reguła z tabeli była tu opisana i miała przypadek pozytywny, negatywny oraz fałszywy alarm wzorowany na legalnym kodzie.
+
+## Rejestr reguł (`wpincidentlens/rules.py`, ADR 0008 pkt 2)
+
+Jedyny spis wszystkich reguł, z których powstają ustalenia (pliki, integralność, baza, logi HTTP, korelacja): identyfikator, wersja, kategoria, waga (`severity`), dopuszczalne wartości pewności (`confidence`), opis i znane fałszywe alarmy. Reguły plików są przejmowane z `filerules.RULES` bez zmian. Zestaw ma identyfikator `RULESET_ID = "wpincidentlens-poc"`, wersję `RULESET_VERSION = "2026.11.2"` i skrót SHA-256 kanonicznego JSON rejestru (posortowane klucze, bez zbędnych białych znaków); te trzy wartości zapisuje `case.json` w polu `ruleset`.
+
+- Każde ustalenie powstaje w jednej funkcji rejestru (`rules.finding`).
+- Kategoria, waga albo pewność spoza deklaracji reguły: ustalenie **zostaje w postaci wyemitowanej** (ocena nie może przez to spaść), a pokrycie źródła reguły (`file` → `files`, `database` → `database`, `http_log` i `correlation` → `logs`) dostaje lukę „Błąd rejestru reguł: ustalenie reguły … ma wartości spoza deklaracji …” i status `PARTIAL` (spec C10: błąd reguły to luka, nie cisza).
+- Reguła spoza rejestru to błąd kodu narzędzia, nie danych: analiza przerywa się wyjątkiem (`UnknownRule`), co wychwytują testy i CI.
+- Testy (`tests/test_rules.py`): każda reguła emitowana w kodzie jest w rejestrze i odwrotnie; każda stała waga i pewność w kodzie jest zadeklarowana; każda pewność wybierana w czasie analizy ma scenariusz; dwie osobne tabele regresyjne wagi i pewności (spec §9.2); para wersja–skrót jest przypięta; każda reguła rejestru ma wiersz w tabeli „Reguła” tego dokumentu i żaden wiersz nie opisuje reguły spoza rejestru. Każdy raport zapisany w testach nie może mieć luki rejestru reguł.
 
 ## Jak czytać trafienie
 

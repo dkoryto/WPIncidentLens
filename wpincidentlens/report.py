@@ -20,7 +20,7 @@ import os
 import secrets
 from pathlib import Path
 
-from . import ingest, models, outputs, redact
+from . import ingest, models, outputs, redact, rules
 from .outputs import encode as _encode
 from .outputs import to_json as _json
 
@@ -211,6 +211,7 @@ def case_record(case: dict, report: dict, report_sha256: str, exit_code: int, ou
         "sources": case["sources"], "limits": case["limits"], "flags": case["flags"],
         "report": {"file": REPORT_JSON, "sha256": report_sha256},
         "assessment": report["assessment"], "exit_code": exit_code,
+        "ruleset": rules.descriptor(),
     }
     if output_digests is not None:
         record["outputs"] = output_digests

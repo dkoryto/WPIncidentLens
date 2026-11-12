@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from conftest import CANARY, XSS, analyze_demo, case_schema_errors, replace_at, sha256, write
 
-from wpincidentlens import case, cli, ingest
+from wpincidentlens import case, cli, ingest, rules
 
 VALID_IDENTIFIERS = ["A", "0", "_x", "WPINCIDENTLENS-DEMO", "case_1.2-x", "a" * 64]
 INVALID_IDENTIFIERS = {
@@ -178,7 +178,30 @@ def test_case_json_has_the_case_poc_1_shape(demo_case, analyze):
 
     assert record["schema_version"] == "case-poc-1"
     assert list(record) == ["schema_version", "case_id", "operator_id", "tool", "tool_version", "created_at_utc", "analysis_finished_at_utc",
-                            "sources", "limits", "flags", "report", "assessment", "exit_code", "outputs"]
+                            "sources", "limits", "flags", "report", "assessment", "exit_code", "ruleset", "outputs"]
+
+
+def test_case_json_records_the_ruleset_of_the_run(site, analyze):
+    assert analyze(site).case["ruleset"] == {"id": rules.RULESET_ID, "version": rules.RULESET_VERSION, "sha256": rules.ruleset_sha256()}
+
+
+def test_case_json_written_before_the_ruleset_field_still_conforms(demo_case, analyze):
+    """Pole ``ruleset`` jest opcjonalne: case.json sprzed M5 nadal przechodzi walidację schematu ``case-poc-1``."""
+    record = analyze_demo(analyze, demo_case).case
+    del record["ruleset"]
+
+    assert case_schema_errors(record) == []
+
+
+@pytest.mark.parametrize("ruleset", [{"id": "wpincidentlens-poc", "version": "2026.11.2"}, {"id": "x", "version": "1", "sha256": "0" * 64},
+                                     {"id": "Rules/../x", "version": "2026.11.2", "sha256": "0" * 64},
+                                     {"id": "x", "version": "2026.11.2", "sha256": "0" * 64, "path": "/srv"}],
+                         ids=["no-digest", "bad-version", "bad-id", "unknown-field"])
+def test_case_schema_rejects_a_malformed_ruleset(site, analyze, ruleset):
+    record = analyze(site).case
+    record["ruleset"] = ruleset
+
+    assert case_schema_errors(record) != []
 
 
 def test_case_json_conforms_to_the_published_schema(demo_case, analyze):
