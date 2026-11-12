@@ -30,7 +30,19 @@
       "required": ["files", "database", "logs", "baseline"],
       "properties": {
         "files": {"$ref": "#/$defs/source"},
-        "database": {"$ref": "#/$defs/source"},
+        "database": {
+          "description": "Pole format (sql albo jsonl) to wybór --database-format; występuje, gdy bazę podano. Dokumenty sprzed jego wprowadzenia go nie mają.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provided", "name"],
+          "properties": {
+            "provided": {"type": "boolean"},
+            "name": {"$ref": "#/$defs/source/properties/name"},
+            "format": {"enum": ["sql", "jsonl"]}
+          },
+          "if": {"properties": {"provided": {"const": false}}},
+          "then": {"properties": {"name": {"type": "null"}, "format": false}}
+        },
         "logs": {"$ref": "#/$defs/source"},
         "baseline": {"$ref": "#/$defs/source"},
         "core_checksums": {

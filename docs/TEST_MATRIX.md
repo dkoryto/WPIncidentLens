@@ -264,6 +264,22 @@ Wszystkie przypadki są syntetyczne i powstają w `tmp_path`; manifesty to pliki
 | Standardowy układ WordPressa | CORE, CONFIG, DROPIN, MU_PLUGIN, PLUGIN, THEME, UPLOAD, LANGUAGE | `fc::test_standard_layout_paths_get_their_class` (12 wariantów) | PASS |
 | Ścieżki spoza układu | OTHER | `fc::test_paths_outside_the_standard_layout_are_other` (6 wariantów) | PASS |
 
+## Adapter eksportu JSONL (`jsonl` = `test_jsonldb`, T-301, 22 funkcje, 47 przypadków)
+
+| Wymaganie | Rodzaj | Oczekiwane zachowanie | Test | Stan |
+|---|---|---|---|---|
+| Wiersze zgodne z kontraktem | FN | tabela, kolumny, komórki i numer wiersza pliku; liczby jako zapis tekstowy (także ponad limit cyfr `int`), `null`, Unicode, `\r\n`, ostatni wiersz bez znaku końca; wiersze tabel spoza rdzenia sprawdzone i policzone, nieoddane | `jsonl::test_mixed_file_returns_valid_rows_and_counts_every_rejection_by_reason`, `jsonl::test_numbers_keep_their_json_text_beyond_the_integer_digit_limit` | PASS |
+| Każdy powód odrzucenia | odporność | wiersz odrzucony i liczony pod powodem: zły JSON (także BOM, dwa obiekty, głębokie zagnieżdżenie), powtórzony klucz na każdym poziomie, wartość logiczna / tablica / obiekt / `NaN` / `Infinity` / samotny surogat, zła nazwa, zła budowa, nie-UTF-8, `\v` zamiast białego znaku | `jsonl::test_line_outside_the_contract_is_rejected_with_its_reason` (22 warianty), `jsonl::test_vertical_tab_line_is_rejected_not_ignored_as_blank` | PASS |
+| Niezależność od podziału na porcje | odporność | ten sam wynik dla każdego punktu podziału i porcji jednobajtowych | `jsonl::test_result_does_not_depend_on_where_the_chunks_are_split`, `jsonl::test_byte_by_byte_feeding_gives_the_same_result` | PASS |
+| Wiersz ponad 16 MiB, ograniczony bufor | odporność | wiersz pominięty do najbliższego `\n` bez buforowania; bufor ≤ jeden wiersz + jedna porcja; wiersz równy limitowi przyjęty; liczba nazw tabel ograniczona | `jsonl::test_line_over_the_limit_is_skipped_to_the_next_newline_with_a_bounded_buffer`, `jsonl::test_line_exactly_at_the_limit_is_accepted`, `jsonl::test_buffer_never_holds_more_than_one_line_and_one_chunk`, `jsonl::test_table_names_are_bounded` | PASS — limit obniżony do 64 B w teście |
+| Fuzzing adaptera | odporność | 1500 mutacji, ziarno stałe; brak awarii, wynik niezależny od podziału, komórki to `str`/`None` kodowalne w UTF-8 | `jsonl::test_seeded_mutation_fuzz_never_crashes_and_keeps_counters_consistent` | PASS |
+| Nieznany administrator z JSONL | FN | `UNRECOGNIZED_ADMIN`, pokrycie `ANALYZED`, `case.json` z `format: "jsonl"` | `jsonl::test_unknown_administrator_from_jsonl_rows_is_unrecognized` | PASS |
+| Administrator bez listy zaufanej | FP | brak ustalenia, sam inwentarz | `jsonl::test_without_a_trusted_list_an_administrator_is_inventory_not_a_finding` | PASS |
+| Plik z samymi odrzuconymi wierszami; plik bez tabel WordPressa; zrzut SQL podany jako JSONL | pominięcia | `FAILED`, `INCONCLUSIVE`; SQL nie jest parsowany jako SQL | `jsonl::test_file_with_only_rejected_lines_is_failed_and_inconclusive`, `jsonl::test_jsonl_without_wordpress_tables_is_failed`, `jsonl::test_sql_dump_given_as_jsonl_is_not_parsed_as_sql` | PASS |
+| Plik częściowo odrzucony | pominięcia | `PARTIAL`, luka z liczbą wierszy per powód i numerem pierwszego | `jsonl::test_partly_rejected_file_is_partial_with_counts_per_reason` | PASS |
+| Nota pokrycia, format domyślny, odmowa nieznanego formatu, schemat `case.json` | kontrakt | nota opisuje kontrakt JSONL; domyślnie `sql`; `csv` = kod 2; `sources.database.format` opcjonalne, tylko `sql`/`jsonl`, nie dla źródła niepodanego | `jsonl::test_jsonl_coverage_describes_the_jsonl_contract_not_the_sql_grammar`, `jsonl::test_default_format_is_sql_and_is_recorded`, `jsonl::test_unknown_database_format_is_refused`, `jsonl::test_case_build_refuses_an_unknown_database_format`, `jsonl::test_case_schema_pins_the_database_format` (5 wariantów) | PASS |
+| Kompletność eksportu JSONL | — | — | — | NOT COVERED: adapter nie wie, czy narzędzie eksportujące objęło wszystkie tabele i wiersze |
+
 ## Własności SecureIngest na losowych drzewach (`prop`, bramka M1)
 
 Generator `random.Random(seed)`: 25 ziaren × 4 konfiguracje sesji (`default`, `hardlinks`, `tight-a`, `tight-b`), najwyżej 48 wpisów w drzewie; oczekiwania z niezależnego wyliczenia drzewa (`os.walk` bez podążania, `lstat`, własny skrót). Własności end-to-end przez CLI: 6 ziaren × 3 warianty flag.
