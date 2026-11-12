@@ -1,6 +1,7 @@
 """Odporność na nieufne wejście: S-01–S-14 (rozdz. 14.3). Mapa: docs/TEST_MATRIX.md."""
 import html
 import itertools
+import json
 import os
 import re
 import unicodedata
@@ -149,9 +150,10 @@ def _beyond_file_limit(site, tmp_path):
     return ("--max-files", "2")  # baseline i index.php wyczerpują limit; przejście kończy się na earlier.php
 
 
-@pytest.mark.parametrize("build", [_hardlinked, _in_unreadable_directory, _beyond_file_limit],
+@pytest.mark.parametrize("build, expected", [(_hardlinked, {"REFERENCE_FILE_UNREADABLE"}),
+                                             (_in_unreadable_directory, {"REFERENCE_FILE_UNREADABLE"}), (_beyond_file_limit, set())],
                          ids=["hardlinked", "in-unreadable-directory", "beyond-file-limit"])
-def test_file_present_but_not_read_is_a_gap_not_a_missing_file_finding(site, tmp_path, analyze, build):
+def test_file_present_but_not_read_is_a_gap_not_a_missing_file_finding(site, tmp_path, analyze, build, expected):
     (site / "wp-includes").mkdir()
     flags = build(site, tmp_path)
     try:
@@ -159,17 +161,18 @@ def test_file_present_but_not_read_is_a_gap_not_a_missing_file_finding(site, tmp
     finally:
         (site / "wp-includes").chmod(0o700)
 
-    assert run.findings == []
+    assert run.rules == expected  # wpis z referencji, którego nie dało się odczytać, jest nazwany; limit operatora to sama luka
     assert run.has_gap("wp-includes")
 
 
-def test_s01_traversal_keys_in_baseline_are_compared_but_never_opened(site, tmp_path, analyze):
+@pytest.mark.parametrize("key", ["../outside.php", "{outside}"], ids=["parent-traversal", "absolute-path"])
+def test_s01_traversal_keys_in_baseline_are_refused_before_analysis(site, tmp_path, refuse, key):
     outside = write(tmp_path / "outside.php", EVAL_MARKER)
+    baseline = write(tmp_path / "baseline.json", json.dumps({"files": {key.format(outside=outside): "0" * 64}}))
 
-    run = analyze(site, baseline={"files": {"../outside.php": "0" * 64, str(outside): "0" * 64}})
+    message = refuse("--files", str(site), "--baseline", str(baseline))
 
-    assert run.rules == {"BASELINE_FILE_MISSING"}
-    assert sha256(outside) not in run.json_text
+    assert "--baseline" in message and "outside.php" not in message
 
 
 # --- S-02: podmiana w trakcie skanowania (TOCTOU) ------------------------------------------------
@@ -674,7 +677,8 @@ def test_report_never_contains_an_absolute_host_path(evidence, tmp_path, analyze
     finally:
         locked.chmod(0o600)
 
-    assert len(run.gaps) == 8 and run.findings  # EACCES, FIFO, hardlink, symlink ×2, zmiana po odczycie, plik bez wpisu w baseline, nota WPDetector
+    # EACCES, FIFO, hardlink, symlink ×2, zmiana po odczycie, plik bez wpisu w baseline, nota WPDetector, NOT_CHECKED ×2
+    assert len(run.gaps) == 10 and run.findings
     assert str(tmp_path) not in run.json_text + run.html
     assert not re.search(r"/(private|var|tmp|home|Users)/", run.json_text + run.html)
 

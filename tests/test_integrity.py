@@ -1,5 +1,7 @@
 """IntegrityAdapter (T-201, ADR 0005): baseline SHA-256, lokalny manifest sum rdzenia (MD5) i ``NOT_CHECKED`` per klasa.
 
+Plik kodu bez zaufanej referencji obniża pokrycie ``files`` (ADR 0005, pkt 6): brak ustaleń nie daje wtedy pełnego zakresu.
+
 Wyłącznie dane syntetyczne w ``tmp_path``; manifesty to pliki lokalne, nic nie jest pobierane ani wykonywane.
 """
 import hashlib
@@ -7,7 +9,7 @@ import json
 import os
 
 import pytest
-from conftest import sha256, tamper_before_reverification, write
+from conftest import sha256, tamper_before_reverification, trusted, write
 
 from wpincidentlens import cli, ingest, integrity
 from wpincidentlens.ingest import ReadStatus, Session
@@ -97,15 +99,37 @@ def test_unread_entry_in_autoloaded_location_is_reported_by_path_with_low_confid
     assert "treść nieodczytana" in new["explanation"]
 
 
-@pytest.mark.parametrize("listed", [MU_PLUGIN, "wp-content/mu-plugins/loader.php/inner.php"], ids=["entry-itself", "file-below-entry"])
-def test_unread_entry_known_to_the_baseline_is_neither_new_nor_missing(site, evidence, analyze, listed):
+@pytest.mark.parametrize("listed, listed_as", [(MU_PLUGIN, "file"), ("wp-content/mu-plugins/loader.php/inner.php", "directory")],
+                         ids=["entry-itself", "file-below-entry"])
+def test_unread_entry_listed_in_the_baseline_is_unreadable_not_new_or_missing(site, evidence, analyze, listed, listed_as):
     outside = write(evidence / "outside.php")
     (site / "wp-content" / "mu-plugins").mkdir(parents=True)
     os.symlink(outside, site / MU_PLUGIN)
 
-    run = analyze(site, baseline={"files": {**index_only(site)["files"], listed: OLD_SHA}})
+    run = analyze(site, baseline={"wordpress_version": "9.9.9-synthetic", "files": {**index_only(site)["files"], listed: OLD_SHA}})
 
-    assert run.rules == set()
+    unreadable = run.finding("REFERENCE_FILE_UNREADABLE")
+    assert (unreadable["source"], unreadable["severity"], unreadable["confidence"]) == (MU_PLUGIN, "medium", "low")
+    assert unreadable["metadata"] == {"read_status": "SKIPPED_SYMLINK", "listed_in": "baseline", "listed_as": listed_as,
+                                      "reference_version": "9.9.9-synthetic"}
+    assert "SKIPPED_SYMLINK" in unreadable["explanation"] and "nie dowodzi zmiany" in unreadable["explanation"]
+    assert run.rules == {"REFERENCE_FILE_UNREADABLE"}
+
+
+@pytest.mark.parametrize("baseline_lists_loader, expected", [(False, "NEW_FILE_SINCE_BASELINE"), (True, "REFERENCE_FILE_UNREADABLE")],
+                         ids=["nothing-listed-below", "loader-listed-below"])
+def test_unread_mu_plugins_directory_itself_is_reported_by_path(site, evidence, analyze, baseline_lists_loader, expected):
+    write(evidence / "elsewhere" / "loader.php")
+    (site / "wp-content").mkdir()
+    os.symlink(evidence / "elsewhere", site / "wp-content" / "mu-plugins")
+    baseline = index_only(site)
+    if baseline_lists_loader:
+        baseline["files"][MU_PLUGIN] = OLD_SHA
+
+    run = analyze(site, baseline=baseline)
+
+    assert run.rules == {expected}
+    assert (run.finding(expected)["source"], run.finding(expected)["confidence"]) == ("wp-content/mu-plugins", "low")
 
 
 # --- manifest sum rdzenia (MD5) -----------------------------------------------------------------
@@ -118,7 +142,7 @@ def test_core_file_matching_the_manifest_gives_no_finding_and_md5_stays_out_of_e
     assert run.rules == set()
     assert run.evidence("baseline/core-9.9.9.json")["sha256"] == sha256(manifest)
     assert md5(site / "index.php") not in run.json_text
-    assert not run.has_gap("NOT_CHECKED")
+    assert not run.has_gap("NOT_CHECKED") and run.coverage("files")["status"] == "ANALYZED"
 
 
 def test_core_checksum_mismatch_reports_both_digests_and_the_reference(site, tmp_path, analyze):
@@ -155,20 +179,36 @@ def test_baseline_and_manifest_are_compared_independently(site, analyze):
     assert run.finding("BASELINE_FILE_CHANGED")["metadata"].keys() == {"sha256", "baseline_sha256"}
 
 
-@pytest.mark.parametrize("rel, expected", [
-    ("wp-admin/extra.php", {"CORE_FILE_NOT_IN_MANIFEST"}), ("wp-extra.php", {"CORE_FILE_NOT_IN_MANIFEST"}),
-    ("wp-includes/js/extra.js", set()), ("wp-content/plugins/demo/demo.php", set()), ("wp-config.php", set()),
-], ids=["php-in-wp-admin", "php-in-root", "non-code-core-file", "plugin-file", "config-file"])
-def test_only_code_in_core_locations_absent_from_the_manifest_is_a_finding(site, analyze, rel, expected):
-    write(site / rel)
+@pytest.mark.parametrize("rel, flagged", [
+    ("wp-admin/extra.php", True), ("wp-extra.php", True), ("shell.php", True), ("wp-includes/extra.php5", True),
+    ("wp-admin/.htaccess", True), ("wp-includes/.user.ini", True),
+    ("wp-config.php", False), (".htaccess", False), (".user.ini", False), ("php.ini", False),
+    ("wp-includes/js/extra.js", False), ("wp-content/plugins/demo/demo.php", False), ("tools/shell.php", False),
+], ids=["php-in-wp-admin", "wp-prefixed-php-in-root", "other-php-in-root", "php5-in-wp-includes", "htaccess-in-wp-admin",
+        "user-ini-in-wp-includes", "root-wp-config", "root-htaccess", "root-user-ini", "root-php-ini", "non-code-core-file",
+        "plugin-file", "code-in-other-directory"])
+def test_code_in_core_locations_absent_from_the_manifest_is_a_finding_except_expected_root_config(site, analyze, rel, flagged):
+    write(site / rel, "# synthetic placeholder\n")
 
     run = analyze(site, core_checksums=core_manifest(site))
 
-    assert run.rules == expected
-    assert run.has_gap("NO_TRUSTED_REFERENCE: 1 odczytanych plików nie ma wpisu w podanej referencji") is not expected
+    assert run.rules == ({"CORE_FILE_NOT_IN_MANIFEST"} if flagged else set())
+    assert run.has_gap("NO_TRUSTED_REFERENCE: 1 odczytanych plików nie ma wpisu w podanej referencji") is not flagged
     for found in run.findings:
         assert (found["source"], found["severity"], found["confidence"]) == (rel, "medium", "low")
         assert "innej wersji" in found["explanation"]
+    if rel != "wp-includes/js/extra.js":  # każdy z pozostałych to plik kodu bez referencji: zakres niepełny także bez ustalenia
+        assert run.has_gap("NOT_CHECKED") and run.coverage("files")["status"] == "PARTIAL"
+
+
+def test_unread_code_in_a_core_location_absent_from_the_manifest_is_reported_by_path(site, evidence, analyze):
+    (site / "wp-admin").mkdir()
+    os.symlink(write(evidence / "outside.php"), site / "wp-admin" / "extra.php")
+
+    found = analyze(site, core_checksums=core_manifest(site)).finding("CORE_FILE_NOT_IN_MANIFEST")
+
+    assert (found["source"], found["confidence"], found["metadata"]["read_status"]) == ("wp-admin/extra.php", "low", "SKIPPED_SYMLINK")
+    assert "Treść nieodczytana" in found["explanation"]
 
 
 def test_core_file_listed_in_the_manifest_but_absent_is_observed_on_the_manifest(site, tmp_path, analyze):
@@ -199,7 +239,7 @@ def test_manifest_entry_is_not_reported_missing_when_absence_is_expected_or_unkn
     assert run.has_gap(gap)
 
 
-def test_hardlinked_and_symlinked_core_files_are_not_hashed_unless_allowed(site, evidence, analyze):
+def test_hardlinked_and_symlinked_core_files_are_not_hashed_but_named_as_unverifiable(site, evidence, analyze):
     linked = write(site / "wp-includes" / "hardlinked.php")
     os.link(linked, evidence / "second-name.php")
     os.symlink(write(evidence / "outside.php"), site / "wp-includes" / "symlinked.php")
@@ -209,8 +249,10 @@ def test_hardlinked_and_symlinked_core_files_are_not_hashed_unless_allowed(site,
     skipped = analyze(site, core_checksums=manifest)
     allowed = analyze(site, core_checksums=manifest, flags=("--allow-hardlinks",))
 
-    assert skipped.rules == set()
     assert [skipped.evidence(f"files/wp-includes/{name}.php")["sha256"] for name in ("hardlinked", "symlinked")] == [None, None]
+    assert skipped.rules == {"REFERENCE_FILE_UNREADABLE"}  # drugi hardlink nie ucisza kontroli integralności
+    assert {(found["source"], found["metadata"]["read_status"], found["metadata"]["listed_in"]) for found in skipped.findings} == {
+        ("wp-includes/hardlinked.php", "SKIPPED_HARDLINK", "core_manifest"), ("wp-includes/symlinked.php", "SKIPPED_SYMLINK", "core_manifest")}
     assert allowed.finding("CORE_CHECKSUM_MISMATCH")["source"] == "wp-includes/hardlinked.php"
 
 
@@ -227,9 +269,12 @@ def test_hardlinked_and_symlinked_core_files_are_not_hashed_unless_allowed(site,
     json.dumps({"wordpress_version": "1.0", "checksums": {"9.9.9": {"index.php": OLD_MD5}}}),
     json.dumps({"reference": "outside-canary\n", "checksums": {"index.php": OLD_MD5}}),
     b'{"checksums": {"index.php": "\xff"}}',
+    json.dumps({"checksums": {"outside-canary": {"index.php": OLD_MD5}}}),
+    '{"checksums": {"outside-canary.php": "%s", "outside-canary.php": "%s"}}' % (OLD_MD5, "1" * 32),
 ], ids=["invalid-json", "array", "baseline-shape", "api-not-found", "empty", "empty-nested", "parent-traversal", "absolute-path",
         "dot-segment", "empty-segment", "backslash", "nul-byte", "path-too-long", "empty-path", "number-value", "sha256-value",
-        "uppercase-md5", "list-value", "mixed-nesting", "bad-nested-version", "conflicting-versions", "bad-label", "not-utf8"])
+        "uppercase-md5", "list-value", "mixed-nesting", "bad-nested-version", "conflicting-versions", "bad-label", "not-utf8",
+        "nested-key-not-a-version", "duplicate-key"])
 def test_unusable_core_manifest_is_a_usage_error_that_echoes_no_value(site, tmp_path, refuse, content):
     manifest = write(tmp_path / "core.json", content)
 
@@ -299,43 +344,134 @@ def test_change_after_analysis_is_still_detected_when_a_manifest_is_used(site, e
     assert run.coverage(source)["status"] == "PARTIAL"
 
 
-# --- NOT_CHECKED per klasa, pokrycie i case.json ------------------------------------------------
+# --- baseline: ścisła walidacja wpisów ------------------------------------------------------------
+
+@pytest.mark.parametrize("content", [
+    json.dumps({"files": {"index.php": "abc"}}), json.dumps({"files": {"index.php": "A" * 64}}),
+    json.dumps({"files": {"index.php": OLD_MD5}}), json.dumps({"files": {"./outside-canary.php": OLD_SHA}}),
+    json.dumps({"files": {"wp-admin\\outside-canary.php": OLD_SHA}}), json.dumps({"files": {"outside-canary\x00.php": OLD_SHA}}),
+    '{"files": {"outside-canary.php": "%s", "outside-canary.php": "%s"}}' % (OLD_SHA, "1" * 64),
+    '{"files": {}, "files": {"outside-canary.php": "%s"}}' % OLD_SHA,
+], ids=["short-value", "uppercase-sha256", "md5-value", "dot-segment", "backslash", "nul-byte", "duplicate-path", "duplicate-files"])
+def test_baseline_with_malformed_or_duplicated_entries_is_a_usage_error(site, tmp_path, refuse, content):
+    baseline = write(tmp_path / "baseline.json", content)
+
+    message = refuse("--files", str(site), "--baseline", str(baseline))
+
+    assert "--baseline" in message and "outside-canary" not in message
+
+
+# --- NOT_CHECKED per klasa: niezweryfikowany kod nie daje pełnego zakresu -----------------------
+
+def not_checked(run) -> list[str]:
+    return sorted(gap for gap in run.gaps if gap.startswith("NOT_CHECKED"))
+
+
+def unverified(name: str, count: str, code: int) -> str:
+    return f"NOT_CHECKED: integralność plików klasy {name} (plików: {count}, w tym kodu: {code}) niezweryfikowana — brak zaufanej referencji"
+
 
 def test_file_classes_without_a_reference_are_not_checked_and_never_called_clean(complete_case, analyze):
     site = complete_case["site"]
+    del complete_case["baseline"]
     for rel in ("wp-content/plugins/demo/demo.php", "wp-content/plugins/demo/readme.txt", "wp-content/themes/demo/style.css",
-                MU_PLUGIN, "wp-content/object-cache.php", "wp-content/uploads/2026/photo.jpg"):
+                MU_PLUGIN, "wp-content/object-cache.php", "wp-content/uploads/2026/photo.jpg", "wp-config.php", "tools/run.php"):
         write(site / rel, "synthetic placeholder\n")
 
     run = analyze(**complete_case)
 
-    unchecked = sorted(gap for gap in run.gaps if gap.startswith("NOT_CHECKED"))
-    assert unchecked == [f"NOT_CHECKED: integralność plików klasy {name} (plików: {count}) niezweryfikowana — brak zaufanej referencji"
-                         for name, count in (("CORE", 1), ("DROPIN", 1), ("MU_PLUGIN", 1), ("PLUGIN", 2), ("THEME", 1))]
-    assert set(unchecked) <= set(run.coverage("files")["reasons"])
-    assert (run.coverage("files")["status"], run.report["scope_complete"]) == ("ANALYZED", True)  # nota nie obniża statusu (ADR 0003)
+    assert not_checked(run) == [unverified(*row) for row in (
+        ("CONFIG", "1", 1), ("CORE", "1", 1), ("DROPIN", "1", 1), ("MU_PLUGIN", "1", 1), ("OTHER", "1", 1), ("PLUGIN", "2", 1),
+        ("THEME", "1", 0))]
+    assert set(not_checked(run)) <= set(run.coverage("files")["reasons"])
+    assert run.findings == []
+    assert (run.coverage("files")["status"], run.report["assessment"], run.report["scope_complete"], run.exit_code) == (
+        "PARTIAL", "INCONCLUSIVE", False, 3)
     assert not any(word in run.json_text.lower() for word in ("clean", "czyst"))
 
 
-def test_not_checked_counts_only_files_that_no_reference_covers(site, analyze):
+def test_unverified_files_that_are_not_code_are_noted_without_shrinking_the_scope(complete_case, analyze):
+    for rel in ("wp-content/themes/demo/style.css", "wp-content/uploads/2026/photo.jpg", "wp-includes/js/extra.js"):
+        write(complete_case["site"] / rel, "synthetic placeholder\n")
+
+    run = analyze(**complete_case)
+
+    assert not_checked(run) == [unverified("CORE", "1 z 2", 0), unverified("THEME", "1", 0)]
+    assert (run.coverage("files")["status"], run.report["assessment"], run.exit_code) == ("ANALYZED", "NO_INDICATORS_IN_ANALYZED_SCOPE", 0)
+
+
+def test_not_checked_counts_read_and_unread_files_that_no_reference_covers(site, evidence, analyze):
     covered = write(site / "wp-content" / "plugins" / "demo" / "demo.php")
     write(site / "wp-content" / "plugins" / "premium-demo" / "premium.php")
+    os.symlink(write(evidence / "outside.php"), site / "wp-content" / "plugins" / "premium-demo" / "linked.php")
 
     run = analyze(site, baseline={"files": {"wp-content/plugins/demo/demo.php": sha256(covered)}}, core_checksums=core_manifest(site))
 
-    assert [gap for gap in run.gaps if gap.startswith("NOT_CHECKED")] == [
-        "NOT_CHECKED: integralność plików klasy PLUGIN (plików: 1 z 2) niezweryfikowana — brak zaufanej referencji"]
+    assert not_checked(run) == [unverified("PLUGIN", "2 z 3", 2)]
 
+
+@pytest.mark.parametrize("with_manifest, rules, assessment", [(True, {"CORE_FILE_NOT_IN_MANIFEST"}, "SUSPICIOUS"), (False, set(), "INCONCLUSIVE")],
+                         ids=["baseline-and-manifest", "baseline-only"])
+def test_code_added_to_a_tree_that_matches_its_references_never_yields_a_full_scope(complete_case, analyze, with_manifest, rules, assessment):
+    site = complete_case["site"]
+    core = write(site / CORE_FILE)
+    complete_case["baseline"] = trusted(site)
+    manifest = {"checksums": {"index.php": md5(site / "index.php"), CORE_FILE: md5(core)}} if with_manifest else None
+    for rel in ("shell.php", "wp-content/plugins/demo/added.php", "wp-content/themes/demo/functions.php", ".htaccess"):
+        write(site / rel, "# synthetic placeholder\n")
+
+    run = analyze(**complete_case, core_checksums=manifest)
+
+    assert run.rules == rules
+    assert (run.report["assessment"], run.report["scope_complete"], run.exit_code) == (assessment, False, 3)
+    assert not_checked(run) == [unverified("CONFIG", "1", 1), unverified("OTHER", "1", 1), unverified("PLUGIN", "1", 1),
+                                unverified("THEME", "1", 1)]
+    assert run.coverage("files")["status"] == "PARTIAL"
+
+
+def test_supplying_a_reference_never_gives_a_wider_scope_than_the_reference_covers(site, analyze):
+    write(site / "wp-content" / "plugins" / "demo" / "demo.php")
+
+    without, with_baseline, with_manifest = analyze(site), analyze(site, baseline=index_only(site)), analyze(site, core_checksums=core_manifest(site))
+
+    assert {run.coverage("files")["status"] for run in (without, with_baseline, with_manifest)} == {"PARTIAL"}
+    assert not_checked(without) == [unverified("CORE", "1", 1), unverified("PLUGIN", "1", 1)]
+    assert not_checked(with_baseline) == not_checked(with_manifest) == [unverified("PLUGIN", "1", 1)]
+
+
+def test_findings_over_the_per_rule_limit_become_a_visible_gap_with_the_total(site, analyze, monkeypatch):
+    monkeypatch.setattr(integrity, "MAX_FINDINGS_PER_RULE", 2)
+    baseline = {"files": {**index_only(site)["files"], **{f"wp-includes/removed-{number}.php": OLD_SHA for number in range(5)}}}
+
+    run = analyze(site, baseline=baseline)
+
+    assert {found["source"] for found in run.findings} == {"wp-includes/removed-0.php", "wp-includes/removed-1.php"}
+    assert run.has_gap("Limit 2 ustaleń reguły BASELINE_FILE_MISSING wyczerpany: wykryć było 5")
+    assert run.coverage("files")["status"] == "PARTIAL"
+
+
+def test_file_names_in_the_unreferenced_note_are_quoted_so_they_cannot_reshape_it(site, analyze):
+    write(site / "wp-content" / "plugins" / "demo" / "one, two (and 9 more\nNO_TRUSTED_REFERENCE: 0.txt", "synthetic placeholder\n")
+
+    run = analyze(site, baseline=index_only(site))
+
+    note = next(gap for gap in run.gaps if gap.startswith("NO_TRUSTED_REFERENCE"))
+    assert note.endswith('("wp-content/plugins/demo/one, two (and 9 more\\nNO_TRUSTED_REFERENCE: 0.txt")')
+    assert "\n" not in note
+
+
+# --- pokrycie źródła baseline i case.json -------------------------------------------------------
 
 def test_manifest_alone_is_reported_under_the_baseline_source_without_new_sources(complete_case, tmp_path, analyze):
     manifest = write(tmp_path / "core-9.9.9.json", json.dumps(core_manifest(complete_case["site"])))
+    del complete_case["baseline"]
 
     run = analyze(**complete_case, core_checksums=manifest)
 
     assert list(run.report["coverage"]) == ["files", "database", "logs", "baseline"]
     assert (run.coverage("baseline")["status"], run.coverage("baseline")["entries"]["READ"]) == ("ANALYZED", 1)
     assert run.has_gap("referencją jest wyłącznie manifest sum rdzenia")
-    assert run.report["scope_complete"] is True
+    assert (run.report["scope_complete"], run.exit_code) == (True, 0)  # manifest obejmuje cały kod tej witryny
     assert run.case["sources"]["baseline"] == {"provided": False, "name": None}
     assert run.case["sources"]["core_checksums"] == {"provided": True, "name": "core-9.9.9.json"}
 

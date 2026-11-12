@@ -21,6 +21,8 @@ SOURCES = (("files", "dir"), ("database", "file"), ("logs", "any"), ("baseline",
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 _VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}")
 MAX_REFERENCE_LABEL = 120
+MAX_REFERENCE_PATH = 1024
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 _NOT_UTF8 = "tekst, którego nie da się zapisać w UTF-8 (samotny surogat)"
 
 
@@ -139,6 +141,12 @@ def build(*, files: Path, output: Path, case_id: str, database: Path | None = No
         core_checksums=core_checksums)
 
 
+def is_relative_path(path: object) -> bool:
+    """Klucz referencji (baseline, manifest sum): ścieżka względna z ukośnikami ``/``, bez ``..`` i znaków sterujących."""
+    return (isinstance(path, str) and 0 < len(path) <= MAX_REFERENCE_PATH and path.isprintable() and "\\" not in path
+            and all(part not in ("", ".", "..") for part in path.split("/")))
+
+
 def reference_labels(document: Mapping) -> tuple[str | None, str | None]:
     """Opcjonalne pola referencji: ``wordpress_version`` (ścisły wzorzec) i ``reference`` (krótki opis jednowierszowy).
 
@@ -158,7 +166,12 @@ def reference_labels(document: Mapping) -> tuple[str | None, str | None]:
 def check_baseline(baseline: dict) -> dict:
     """Odrzuca baseline z tekstem nie do zapisania w UTF-8 albo z niepoprawnym opisem referencji, zanim zacznie się analiza."""
     files = baseline.get("files", {})
-    if not all(map(_encodable, (*files, *files.values(), *baseline.get("known_admins", [])))):
+    if not all(map(_encodable, baseline.get("known_admins", []))):
         raise CaseError(f"baseline zawiera {_NOT_UTF8}")
+    if not all(map(is_relative_path, files)):
+        raise CaseError("klucze baseline.files muszą być ścieżkami względnymi z ukośnikami „/”, bez „..”, "
+                        f"znaków sterujących i dłuższych niż {MAX_REFERENCE_PATH} znaków")
+    if not all(isinstance(value, str) and _SHA256.fullmatch(value) for value in files.values()):
+        raise CaseError("wartości baseline.files muszą być skrótami SHA-256: 64 małe cyfry szesnastkowe")
     reference_labels(baseline)
     return baseline
