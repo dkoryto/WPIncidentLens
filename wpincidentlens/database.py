@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import dbrules, ingest, jsonldb, models, sqldump
+from . import dbrules, ingest, jsonldb, models, redact, sqldump
 from . import rules as registry
 from .analysis import Detection, SourceCoverage
 from .case import DATABASE_FORMATS
 
 MAX_ROWS = 1_000_000  # wierszy tabel rdzenia przekazanych regułom; dalsze są tylko liczone
 MAX_ROW_BYTES = 256 * 1024 * 1024  # szacowana pamięć wierszy czekających na reguły: granica przy zrzucie 2 GiB
+CLOCK_EVERY_ROWS = 32  # co tyle wierszy reguły bazy sprawdzają limit czasu sesji (wiersz z dużą tablicą PHP to ms)
 _ROW_COST, _CELL_COST = 120, 64  # narzut obiektów Pythona na wiersz i na komórkę (lista, krotka, str), z zapasem
 FORMATS = DATABASE_FORMATS  # wybiera operator flagą --database-format; formatu nie zgaduje się po treści (ADR 0006 pkt 9)
 
@@ -47,11 +48,15 @@ def scan_database(path: Path, known_admins: set[str], session: ingest.Session,
         return findings, cover, facts
     consume(parser.close())
     rules = dbrules.RowAnalysis(item)
-    for table, columns, cells, number in rows:
-        registry.guarded(cover, "dbrules", rules.feed, table, columns, cells, number)
+    for done, (table, columns, cells, number) in enumerate(rows):
+        if done % CLOCK_EVERY_ROWS == 0 and session.expired():
+            cover.degrade(f"Limit czasu analizy {session.limits.max_seconds:g} s przekroczony: reguły bazy zastosowano do "
+                          f"{done} z {len(rows)} wierszy; ustalenia i inwentarz dotyczą tylko tych wierszy")
+            break
+        registry.guarded(cover, "dbrules", rules.feed, table, columns, cells, number, where=f"database/{item.rel}:{number}")
     registry.guarded(cover, "dbrules", rules.note_tables, parser.tables)
     if parser.stopped_at is not None:
-        cover.degrade(f"Limit czasu analizy {session.limits.max_seconds:g} s przekroczony w trakcie zrzutu bazy: plik {item.rel} "
+        cover.degrade(f"Limit czasu analizy {session.limits.max_seconds:g} s przekroczony w trakcie zrzutu bazy: plik {redact.neutralise(item.rel)} "
                       f"przeanalizowany do {'instrukcji' if fmt == 'sql' else 'wiersza'} {parser.stopped_at}; "
                       "dalszej części nie sprawdzono (skrót SHA-256 obejmuje cały plik)")
     # Na serwerze z lower_case_table_names=1 lub 2 tabela WP_USERMETA to wp_usermeta: jej wierszy reguły nie widzą.

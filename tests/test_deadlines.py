@@ -9,14 +9,16 @@ from __future__ import annotations
 import itertools
 import json
 import re
+import time
 from dataclasses import replace
+from datetime import datetime, timezone
 
 import pytest
-from conftest import ADMIN_CAPS, EVAL_MARKER, access_line, admin_sql, option_sql, trusted, write
+from conftest import ADMIN_CAPS, EVAL_MARKER, access_line, admin_sql, option_sql, time_limit, trusted, write
 
-from wpincidentlens import (cli, database, dbrules, files, filerules, httplog, ingest, integrity, jsonldb, models, rules,
-                            sqldump)
-from wpincidentlens.analysis import SourceCoverage
+from wpincidentlens import (cli, correlate, database, dbrules, files, filerules, httplog, ingest, integrity, jsonldb, models,
+                            rules, sqldump)
+from wpincidentlens.analysis import Detection, SourceCoverage
 
 SECRET = "SYNTHETIC-SECRET-/srv/host/path"  # treść wyjątku: nie może trafić do raportu
 
@@ -133,10 +135,11 @@ def test_time_limit_inside_a_dump_is_a_gap_naming_the_place_and_the_hash_covers_
 
     found, cover, _ = database.scan_database(dump, {"trusted"}, session, fmt=fmt)
 
-    [gap] = time_gaps(cover)
+    [gap] = [reason for reason in time_gaps(cover) if "przeanalizowany do" in reason]
     reached = int(re.search(rf"db\.{fmt} przeanalizowany do {unit} (\d+)", gap)[1])
     assert 2 <= reached < content.count("\n")
-    assert [item.rule for item in found] == ["UNRECOGNIZED_ADMIN"]  # wiersze sprzed limitu są ocenione
+    assert found == []  # czas już minął: reguły bazy nie są stosowane do wierszy sprzed przerwania (luka niżej)
+    assert any("reguły bazy zastosowano do 0 z" in reason for reason in time_gaps(cover))
     [record] = [item for item in session.ledger if item.source == "database"]
     assert (record.status, record.size) == (ingest.ReadStatus.READ, dump.stat().st_size)
     assert cli._coverage("database", cover, session.ledger).status == models.CoverageStatus.PARTIAL
@@ -270,9 +273,11 @@ def test_same_run_with_time_left_has_no_indicators_in_analysed_scope(site, evide
 
 # --- wyjątek w regule: luka, nie przerwanie ---------------------------------------------------------
 
-def assert_rule_gap(run, rule: str, source: str) -> None:
-    assert rule_gaps(run.gaps) == [f"{rules.RULE_ERROR_GAP} {rule}: wyjątek ValueError; wynik tej reguły dla części "
-                                   "materiału jest nieznany, pozostałe reguły i pliki analizowano dalej"]
+def assert_rule_gap(run, rule: str, source: str, count: int, first: str | None) -> None:
+    """Jedna luka: reguła, typ wyjątku, liczba wystąpień i pierwsze miejsce w dowodzie — nigdy treść wyjątku."""
+    place = f" (pierwsze: {first})" if first else ""
+    assert rule_gaps(run.gaps) == [f"{rules.RULE_ERROR_GAP} {rule}: wyjątek ValueError ×{count}{place}; wynik tej reguły "
+                                   "dla części materiału jest nieznany, pozostałe reguły i pliki analizowano dalej"]
     assert run.coverage(source)["status"] == "PARTIAL"
     assert "SYNTHETIC-SECRET" not in run.everything and "/srv/host" not in run.everything
 
@@ -286,22 +291,22 @@ def test_exception_in_a_content_rule_is_a_gap_and_other_rules_and_files_continue
     run = analyze(site, baseline=trusted(site))
 
     assert sorted(item["source"] for item in run.findings if item["rule"] == "SUSPICIOUS_PHP_EVAL_DECODE") == ["a.php", "b.php"]
-    assert_rule_gap(run, "LONG_ENCODED_BLOB", "files")
+    assert_rule_gap(run, "LONG_ENCODED_BLOB", "files", 3, "files/a.php")  # a.php, b.php, index.php
 
 
-@pytest.mark.parametrize("target, name, label", [
-    (filerules, "path_rules", "filerules.path_rules"),
-    (integrity.ReferenceComparison, "check", "integrity"),
-    (integrity.ReferenceComparison, "finish", "integrity"),
+@pytest.mark.parametrize("target, name, label, count, first", [
+    (filerules, "path_rules", "filerules.path_rules", 2, "files/a.php"),
+    (integrity.ReferenceComparison, "check", "integrity", 2, "files/a.php"),
+    (integrity.ReferenceComparison, "finish", "integrity", 1, None),
 ], ids=["path-rules", "integrity-check", "integrity-finish"])
-def test_exception_in_a_file_rule_site_is_a_gap_naming_it(site, analyze, monkeypatch, target, name, label):
+def test_exception_in_a_file_rule_site_is_a_gap_naming_it(site, analyze, monkeypatch, target, name, label, count, first):
     monkeypatch.setattr(target, name, raise_secret)
     write(site / "a.php", EVAL_MARKER)
 
     run = analyze(site, baseline=trusted(site))
 
     assert run.rules == {"SUSPICIOUS_PHP_EVAL_DECODE"}  # bez BASELINE_FILE_MISSING dla plików, których check nie objął
-    assert_rule_gap(run, label, "files")
+    assert_rule_gap(run, label, "files", count, first)
 
 
 def test_exception_in_database_row_rules_skips_that_row_only(site, evidence, analyze, monkeypatch):
@@ -318,7 +323,7 @@ def test_exception_in_database_row_rules_skips_that_row_only(site, evidence, ana
     run = analyze(site, database=dump, baseline=trusted(site), known_admins=("siteadmin",))
 
     assert run.rules == {"UNRECOGNIZED_ADMIN"}
-    assert_rule_gap(run, "dbrules", "database")
+    assert_rule_gap(run, "dbrules", "database", 1, "database/db.sql:1")
 
 
 def test_exception_in_the_http_rule_keeps_reading_the_log(site, evidence, analyze, monkeypatch):
@@ -328,7 +333,7 @@ def test_exception_in_the_http_rule_keeps_reading_the_log(site, evidence, analyz
     run = analyze(site, logs=logs, baseline=trusted(site))
 
     assert run.findings == []
-    assert_rule_gap(run, "HTTP_EXECUTABLE_IN_UPLOADS", "logs")
+    assert_rule_gap(run, "HTTP_EXECUTABLE_IN_UPLOADS", "logs", 1, "logs/access.log:1")
     assert run.evidence("logs/access.log")["read_status"] == "READ"
 
 
@@ -339,7 +344,7 @@ def test_exception_in_correlation_is_a_logs_gap(site, evidence, analyze, monkeyp
 
     run = analyze(site, logs=logs, baseline=trusted(site))
 
-    assert_rule_gap(run, "correlate", "logs")
+    assert_rule_gap(run, "correlate", "logs", 1, None)
 
 
 def test_rule_exception_without_findings_is_inconclusive_not_no_indicators(complete_case, analyze, monkeypatch):
@@ -348,7 +353,7 @@ def test_rule_exception_without_findings_is_inconclusive_not_no_indicators(compl
     run = analyze(complete_case["site"], **{key: value for key, value in complete_case.items() if key != "site"})
 
     assert run.findings == [] and run.report["assessment"] == models.Assessment.INCONCLUSIVE
-    assert_rule_gap(run, "dbrules", "database")
+    assert_rule_gap(run, "dbrules", "database", 1, None)
 
 
 def test_same_error_repeated_in_many_files_is_one_gap(site, analyze, monkeypatch):
@@ -375,4 +380,115 @@ def test_ingest_refusals_io_errors_and_unregistered_rules_are_not_swallowed(erro
     with pytest.raises(type(error)):
         rules.guarded(cover, "integrity", fail)
     assert cover.reasons == [] and not cover.partial
+
+
+def test_rule_error_gap_neutralises_the_place_and_counts_repeats():
+    cover = SourceCoverage()
+
+    for _ in range(3):
+        rules.guarded(cover, "dbrules", raise_secret, where="database/a‮b.sql:7")
+
+    [gap] = cover.reasons
+    assert "×3 (pierwsze: database/a" in gap and "‮" not in gap and "SYNTHETIC-SECRET" not in gap
+
+
+# --- przegląd bezpieczeństwa M6: reguły bazy, pojedyncza instrukcja INSERT, korelacja ----------------------
+
+def test_time_limit_while_database_rules_run_is_a_gap_naming_rows_done(evidence, monkeypatch):
+    monkeypatch.setattr(database, "CLOCK_EVERY_ROWS", 1)
+    dump = write(evidence / "db.sql", admin_sql("early") + DUMP)
+    clock = Clock()
+    real = dbrules.RowAnalysis.feed
+
+    def slow(self, *args):  # pierwszy wiersz zużywa resztę czasu
+        clock.now = 1e9
+        return real(self, *args)
+
+    monkeypatch.setattr(dbrules.RowAnalysis, "feed", slow)
+    session = ingest.Session(ingest.Limits(max_seconds=10), clock=clock)
+
+    found, cover, _ = database.scan_database(dump, {"trusted"}, session)
+
+    [gap] = time_gaps(cover)
+    assert "reguły bazy zastosowano do 1 z " in gap and "przeanalizowany do" not in gap
+    assert found == []  # wiersz z rolą (usermeta) nie został oceniony
+    assert cli._coverage("database", cover, session.ledger).status == models.CoverageStatus.PARTIAL
+
+
+INSERT_10 = b"INSERT INTO wp_options VALUES " + b",".join(b"(%d,'a','b','c')" % n for n in range(10)) + b";"
+
+
+def test_time_limit_inside_one_long_insert_stops_without_its_rows(monkeypatch):
+    monkeypatch.setattr(sqldump, "CLOCK_EVERY_TUPLES", 2)
+    parser = sqldump.DumpParser(expired=expires_after(1))  # porcja: jest czas; druga krotka: czas minął
+
+    rows = parser.feed(INSERT_10 + DUMP.encode()) + parser.close()
+
+    assert rows == [] and parser.stopped_at == 0 and parser.unsupported == 0
+
+
+def test_long_insert_with_time_left_gives_every_row(monkeypatch):
+    monkeypatch.setattr(sqldump, "CLOCK_EVERY_TUPLES", 2)
+    parser = sqldump.DumpParser(expired=lambda: False)
+
+    assert len(parser.feed(INSERT_10) + parser.close()) == 10 and parser.stopped_at is None
+
+
+T0_NS = 1_794_190_441 * 10**9
+
+
+def correlation_input(files: int, requests: int):
+    """``files`` plików z ustaleniem i ``requests`` żądań do innych plików kodu, wszystkie w oknie czasu każdego pliku."""
+    log = models.Evidence("log", "logs/access.log", "READ", sha256="b" * 64, size_bytes=1)
+    detections, evidence = [], {log.id: log}
+    for n in range(files):
+        path = f"wp-content/plugins/demo/f{n}.php"
+        record = models.Evidence("file", f"files/{path}", "READ", sha256="a" * 64, size_bytes=1, mtime_ns=T0_NS)
+        fact = models.Observation(record.id, "SYNTHETIC_FILE_FACT", models.Location(path=path), {})
+        detections.append(Detection("BASELINE_FILE_CHANGED", "medium", "high", "file", "ustalenie syntetyczne", fact))
+        evidence[record.id] = record
+    when = models.utc_iso(datetime.fromtimestamp(T0_NS // 10**9, tz=timezone.utc))
+    hits = [models.Observation(log.id, "HTTP_REQUEST", models.Location(path="access.log", line=n + 1),
+                               {"path": f"wp-content/themes/t/a{n}.php", "clock_uncertainty_seconds": None},
+                               timestamp_raw="x", timestamp_utc=when, time_source=models.TimeSource.LOG)
+            for n in range(requests)]
+    return detections, hits, evidence
+
+
+def test_correlation_cost_does_not_grow_with_requests_in_the_window():
+    detections, hits, evidence = correlation_input(1000, 50_000)
+
+    with time_limit(20):
+        started = time.perf_counter()
+        result = correlate.correlate(detections, hits, evidence, 900)
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < 5, elapsed  # przed poprawką ~120 s: każdy plik sortował całe okno 50 000 żądań
+    near = [finding for finding in result.findings if finding.rule_id == "REQUEST_NEAR_FILE_CHANGE"]
+    assert len(near) == correlate.MAX_FINDINGS_PER_RULE
+    assert all(len(finding.observations) == 1 + correlate.MAX_REQUESTS_PER_FINDING for finding in near)
+    assert any("wykryć było 1000" in note for note in result.notes)
+    assert "żądań: 50000" in near[0].reason
+
+
+def test_time_limit_during_correlation_is_a_note_naming_files_done():
+    detections, hits, evidence = correlation_input(5, 3)
+
+    result = correlate.correlate(detections, hits, evidence, 900, expired=expires_after(2))
+
+    assert len(result.findings) == 2
+    assert any("sprawdzono 2 z 5 plików" in note for note in result.notes)
+
+
+def test_correlation_with_time_left_covers_every_file():
+    detections, hits, evidence = correlation_input(5, 3)
+
+    result = correlate.correlate(detections, hits, evidence, 900, expired=lambda: False)
+
+    assert len(result.findings) == 5 and not any("Limit czasu" in note for note in result.notes)
+
+
+def test_invalid_correlation_window_is_a_call_error_not_a_gap(site):
+    with pytest.raises(ValueError, match="okno korelacji"):
+        cli.compose_report(site, None, None, None, set(), "T601-SYNTH", correlation_window=0)
 

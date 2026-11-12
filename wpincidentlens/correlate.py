@@ -6,8 +6,8 @@ nie twierdzi, że żądanie zapisało albo wykonało plik. Relacje są identyfik
 from __future__ import annotations
 
 import bisect
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from . import filerules, models, redact, rules
@@ -57,6 +57,12 @@ class Focus:
         moment = _ns(timestamp_utc)
         at = bisect.bisect_right(self.windows, (moment, float("inf"))) - 1
         return at >= 0 and self.windows[at][0] <= moment <= self.windows[at][1]
+
+
+def check_window(window_seconds: object) -> None:
+    """Okno korelacji to wybór operatora, nie dane: niepoprawne jest błędem wywołania (``ValueError``), nie luką."""
+    if isinstance(window_seconds, bool) or not isinstance(window_seconds, int) or window_seconds <= 0:
+        raise ValueError("okno korelacji musi być dodatnią liczbą całkowitą sekund")
 
 
 def focus(detections: list[Detection], evidence: Mapping[str, models.Evidence], window_seconds: int = DEFAULT_WINDOW_SECONDS,
@@ -151,31 +157,96 @@ def _same_path_reason(matched: list[models.Observation], shown: int) -> str:
             "a konfiguracja serwera może kierować ten URL do innego pliku.")
 
 
-def _near_reason(matched: list[models.Observation], shown: int, window: int) -> str:
-    widened = sum(_uncertainty(request) is not None for request in matched)
-    return (f"Żądania HTTP do plików kodu w oknie ±{window} s od mtime pliku z ustaleniem (relacja NEAR_IN_TIME); żądań: {len(matched)}, "
-            f"{_time_range(matched)}; okno poszerzone o zadeklarowaną niepewność zegara dla {widened}; w ustaleniu wskazano {shown}. "
+def _near_reason(count: int, time_range: str, widened: int, shown: int, window: int) -> str:
+    return (f"Żądania HTTP do plików kodu w oknie ±{window} s od mtime pliku z ustaleniem (relacja NEAR_IN_TIME); żądań: {count}, "
+            f"{time_range}; okno poszerzone o zadeklarowaną niepewność zegara dla {widened}; w ustaleniu wskazano {shown}. "
             f"Bliskość w czasie może być przypadkowa. {_NOT_CAUSAL} mtime jest zmienialny (np. touch, rozpakowanie kopii), "
             "a zegar serwera logów mógł być przesunięty; relacja nie podnosi pewności ustalenia plikowego.")
 
 
-def _capped(rule: str, findings: list[models.Finding], notes: list[str]) -> list[models.Finding]:
-    if len(findings) > MAX_FINDINGS_PER_RULE:
-        notes.append(f"Limit {MAX_FINDINGS_PER_RULE} ustaleń reguły {rule} wyczerpany: wykryć było {len(findings)}; pozostałe pominięto")
+def _capped(rule: str, findings: list[models.Finding], total: int, notes: list[str]) -> list[models.Finding]:
+    """Ustalenia reguły do limitu; ``total`` to wszystkie wykrycia (ponad limit tylko liczone, bez budowania ustaleń)."""
+    if total > MAX_FINDINGS_PER_RULE:
+        notes.append(f"Limit {MAX_FINDINGS_PER_RULE} ustaleń reguły {rule} wyczerpany: wykryć było {total}; pozostałe pominięto")
     return findings[:MAX_FINDINGS_PER_RULE]
 
 
+@dataclass
+class _Clock:
+    """Żądania z czasem UTC o tej samej zadeklarowanej niepewności zegara, posortowane po (czas, id).
+
+    Okno ``NEAR_IN_TIME`` jest w nim przedziałem indeksów (bisect), a najbliższe żądania wybiera przejście od ``mtime``
+    na zewnątrz po blokach równego czasu: koszt na plik nie zależy od liczby żądań w oknie (przegląd M6)."""
+    uncertainty: int | None
+    moments: list[int] = field(default_factory=list)
+    requests: list[models.Observation] = field(default_factory=list)
+    distinct: list[int] = field(default_factory=list)  # różne chwile, rosnąco
+    starts: list[int] = field(default_factory=list)    # indeks pierwszego żądania każdej chwili; na końcu len(requests)
+    ordered: bool = True  # czy tekstowy czas UTC rośnie razem z chwilą (wtedy zakres czasu to końce przedziału)
+
+    def seal(self) -> None:
+        for at, moment in enumerate(self.moments):
+            if not self.distinct or self.distinct[-1] != moment:
+                self.distinct.append(moment)
+                self.starts.append(at)
+        self.starts.append(len(self.moments))
+        texts = [request.timestamp_utc for request in self.requests]
+        self.ordered = all(left <= right for left, right in zip(texts, texts[1:]))
+
+    def window(self, mtime: int, window_seconds: int) -> tuple[int, int]:
+        reach = (window_seconds + (self.uncertainty or 0)) * 10**9
+        return bisect.bisect_left(self.moments, mtime - reach), bisect.bisect_right(self.moments, mtime + reach)
+
+    def span(self, lo: int, hi: int) -> tuple[str, str]:
+        if self.ordered:
+            return self.requests[lo].timestamp_utc, self.requests[hi - 1].timestamp_utc
+        texts = [request.timestamp_utc for request in self.requests[lo:hi]]
+        return min(texts), max(texts)
+
+    def nearest(self, mtime: int, lo: int, hi: int, limit: int) -> list[tuple[int, int, str, models.Observation]]:
+        """Do ``limit`` żądań z przedziału [lo, hi) w porządku (odległość od mtime, chwila, id)."""
+        out: list = []
+        right = bisect.bisect_left(self.distinct, mtime)
+        left = right - 1
+        while len(out) < limit:
+            left_in = left >= 0 and self.starts[left] >= lo
+            right_in = right < len(self.distinct) and self.starts[right] < hi
+            if not (left_in or right_in):
+                break
+            if right_in and (not left_in or self.distinct[right] - mtime < mtime - self.distinct[left]):
+                block, right = right, right + 1
+            else:  # przy równej odległości pierwsza jest wcześniejsza chwila
+                block, left = left, left - 1
+            moment, first = self.distinct[block], self.starts[block]
+            for request in self.requests[first:min(self.starts[block + 1], first + limit - len(out))]:
+                out.append((abs(moment - mtime), moment, request.id, request))
+        return out
+
+
+def _clocks(usable: list[models.Observation]) -> list[_Clock]:
+    grouped: dict[int | None, _Clock] = {}
+    for moment, _, request in sorted((_ns(request.timestamp_utc), request.id, request) for request in usable
+                                     if request.timestamp_utc is not None):
+        uncertainty = _uncertainty(request)  # raz na żądanie
+        clock = grouped.setdefault(uncertainty, _Clock(uncertainty))
+        clock.moments.append(moment)
+        clock.requests.append(request)
+    for clock in grouped.values():
+        clock.seal()
+    return list(grouped.values())
+
+
 def correlate(detections: list[Detection], requests: Iterable[models.Observation], evidence: Mapping[str, models.Evidence],
-              window_seconds: int = DEFAULT_WINDOW_SECONDS) -> Correlation:
+              window_seconds: int = DEFAULT_WINDOW_SECONDS, expired: Callable[[], bool] | None = None) -> Correlation:
     """Korelacje plik–żądanie: ``CORRELATED_UPLOAD_REQUEST``, ``CORRELATED_FILE_REQUEST`` i ``REQUEST_NEAR_FILE_CHANGE``.
 
     ``requests`` to obserwacje ``HTTP_REQUEST`` z atrybutem ``path`` (ADR 0007 pkt 7); inne rodzaje są pomijane.
     Jedno ustalenie na parę (plik, reguła) wskazuje obserwacje pliku i najwyżej ``MAX_REQUESTS_PER_FINDING`` żądań.
     ``NEAR_IN_TIME`` wymaga znanego czasu UTC żądania i ``mtime`` pliku; okno poszerza zadeklarowana niepewność zegara.
-    Wynik nie zależy od kolejności wejścia.
+    Wynik nie zależy od kolejności wejścia. ``expired`` (limit czasu sesji) jest sprawdzany przed każdym plikiem;
+    po jego upływie pozostałe pliki nie są korelowane, a nota (luka pokrycia logów) podaje, ile sprawdzono.
     """
-    if isinstance(window_seconds, bool) or not isinstance(window_seconds, int) or window_seconds <= 0:
-        raise ValueError("okno korelacji musi być dodatnią liczbą całkowitą sekund")
+    check_window(window_seconds)
     notes: list[str] = []
     uploads, upload_paths = _upload_correlation(detections, notes)
     usable = sorted((request for request in requests if request.kind == REQUEST_KIND and isinstance(request.attributes.get("path"), str)),
@@ -183,34 +254,48 @@ def correlate(detections: list[Detection], requests: Iterable[models.Observation
     by_path: dict[str, list[models.Observation]] = {}
     for request in usable:
         by_path.setdefault(request.attributes["path"], []).append(request)
-    timed = sorted((_ns(request.timestamp_utc), request.id, request) for request in usable if request.timestamp_utc is not None)
-    moments = [moment for moment, _, _ in timed]
-    widest = max((_uncertainty(request) or 0 for _, _, request in timed), default=0)
+    clocks = _clocks(usable)
     same_path, near, referenced = [], [], {}
+    same_total = near_total = 0
+    flagged = _flagged_files(detections, evidence)
 
-    for file in _flagged_files(detections, evidence):
+    for done, file in enumerate(flagged):
+        if expired is not None and expired():
+            notes.append(f"Limit czasu analizy przekroczony w trakcie korelacji: sprawdzono {done} z {len(flagged)} plików "
+                         "z ustaleniem plikowym; pozostałych nie korelowano z logami")
+            break
         shown_path = redact.neutralise(file.path)
         matched = by_path.get(shown_path, []) if _is_code(file.path) and shown_path not in upload_paths else []
         if matched:
-            shown = matched[:MAX_REQUESTS_PER_FINDING]
-            referenced.update((request.id, request) for request in shown)
-            same_path.append(_finding("CORRELATED_FILE_REQUEST", "medium", "low", _same_path_reason(matched, len(shown)),
-                                      file.observations + tuple(r.id for r in shown), notes))
-        if file.mtime_ns is None or not timed:
+            same_total += 1
+            if same_total <= MAX_FINDINGS_PER_RULE:
+                shown = matched[:MAX_REQUESTS_PER_FINDING]
+                referenced.update((request.id, request) for request in shown)
+                same_path.append(_finding("CORRELATED_FILE_REQUEST", "medium", "low", _same_path_reason(matched, len(shown)),
+                                          file.observations + tuple(r.id for r in shown), notes))
+        if file.mtime_ns is None:
             continue
-        reach = window_seconds * 10**9 + widest * 10**9
-        start, stop = bisect.bisect_left(moments, file.mtime_ns - reach), bisect.bisect_right(moments, file.mtime_ns + reach)
-        close = [(abs(moment - file.mtime_ns), moment, request) for moment, _, request in timed[start:stop]
-                 if abs(moment - file.mtime_ns) <= (window_seconds + (_uncertainty(request) or 0)) * 10**9]
-        if close:
-            close.sort(key=lambda item: (item[0], item[1], item[2].id))
-            matched = [request for _, _, request in close]
-            shown = matched[:MAX_REQUESTS_PER_FINDING]
-            referenced.update((request.id, request) for request in shown)
-            near.append(_finding("REQUEST_NEAR_FILE_CHANGE", "medium", "low", _near_reason(matched, len(shown), window_seconds),
-                                 file.observations + tuple(r.id for r in shown), notes))
+        windows = [(clock, *clock.window(file.mtime_ns, window_seconds)) for clock in clocks]
+        windows = [(clock, lo, hi) for clock, lo, hi in windows if hi > lo]
+        if not windows:
+            continue
+        near_total += 1
+        if near_total > MAX_FINDINGS_PER_RULE:
+            continue  # ponad limit wykrycie jest tylko liczone
+        candidates = sorted(item for clock, lo, hi in windows
+                            for item in clock.nearest(file.mtime_ns, lo, hi, MAX_REQUESTS_PER_FINDING))
+        shown = [request for *_, request in candidates[:MAX_REQUESTS_PER_FINDING]]
+        referenced.update((request.id, request) for request in shown)
+        spans = [clock.span(lo, hi) for clock, lo, hi in windows]
+        count = sum(hi - lo for _, lo, hi in windows)
+        widened = sum(hi - lo for clock, lo, hi in windows if clock.uncertainty is not None)
+        time_range = f"zakres czasu żądań (UTC): {min(first for first, _ in spans)} – {max(last for _, last in spans)}"
+        near.append(_finding("REQUEST_NEAR_FILE_CHANGE", "medium", "low",
+                             _near_reason(count, time_range, widened, len(shown), window_seconds),
+                             file.observations + tuple(r.id for r in shown), notes))
 
-    findings = uploads + _capped("CORRELATED_FILE_REQUEST", same_path, notes) + _capped("REQUEST_NEAR_FILE_CHANGE", near, notes)
+    findings = (uploads + _capped("CORRELATED_FILE_REQUEST", same_path, same_total, notes)
+                + _capped("REQUEST_NEAR_FILE_CHANGE", near, near_total, notes))
     kept = {reference for finding in findings for reference in finding.observations}
     return Correlation(tuple(findings), tuple(request for key, request in sorted(referenced.items()) if key in kept), tuple(notes))
 

@@ -15,6 +15,7 @@ Wiersz z wyrażeniem (np. ``CONCAT(…)``) jest pomijany i liczony; instrukcja o
 """
 from __future__ import annotations
 
+import itertools
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -25,6 +26,7 @@ MAX_TABLES = 5000  # różnych nazw tabel zapamiętanych do raportu
 # Co tyle zakończonych instrukcji parser sprawdza limit czasu sesji (oprócz sprawdzenia przy każdej porcji ``feed``,
 # które ogranicza pracę między sprawdzeniami do jednej porcji odczytu i jednej instrukcji).
 CLOCK_EVERY_STATEMENTS = 256
+CLOCK_EVERY_TUPLES = 4096  # …i co tyle krotek jednej instrukcji INSERT (instrukcja może mieć do MAX_STATEMENT_BYTES)
 
 # Wszystko, co nie zaczyna komentarza, nie kończy instrukcji i nie jest poleceniem klienta, w jednym przebiegu w C.
 # Łańcuch musi być domknięty w buforze; ``''`` wewnątrz łańcucha to tu „zamknij i otwórz” — dla szukania granicy
@@ -199,6 +201,9 @@ class DumpParser:
                 break  # leksem może ciągnąć się w następnej porcji
             if token["end"]:
                 self._finish_statement(buf[self._start:pos], terminated=True, out=out)
+                if self.stopped_at is not None:  # limit czasu w środku instrukcji INSERT
+                    self._buf, self._start, self._pos = b"", 0, 0
+                    return out
                 if self.mode_change_at is not None:
                     self.mode_change_at += self._offset + self._start
                     self._buf, self._start, self._pos = b"", 0, 0
@@ -420,7 +425,10 @@ class DumpParser:
         decode = self.wanted is None or self.wanted(table)
         rows: list = []
         expressions, pos, end = 0, head.end(), len(text.rstrip())
-        while True:
+        for tuples in itertools.count(1):
+            if tuples % CLOCK_EVERY_TUPLES == 0 and self.expired is not None and self.expired():
+                self.stopped_at = self.statements  # ta instrukcja nie oddaje żadnego wiersza
+                return True
             if decode:
                 cells, after = self._cells(text, pos)
             else:

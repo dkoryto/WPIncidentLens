@@ -20,7 +20,7 @@ import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 
-from . import filerules, ingest, models
+from . import filerules, ingest, models, redact
 from .analysis import Detection, SourceCoverage
 
 RULESET_ID = "wpincidentlens-poc"
@@ -42,23 +42,30 @@ class UnknownRule(LookupError):
 NOT_RULE_ERRORS = (ingest.IngestRefusal, OSError, UnknownRule, MemoryError)
 
 
-def rule_failed(cover: SourceCoverage, rule: str, error: type[BaseException]) -> None:
-    """Luka po wyjątku w regule: tylko identyfikator reguły i nazwa typu wyjątku. Treść wyjątku (``str(exc)``) może
-    zawierać bajty dowodu albo ścieżki hosta, więc nie trafia do raportu. Ten sam błąd powtórzony daje jedną lukę."""
-    text = (f"{RULE_ERROR_GAP} {rule}: wyjątek {error.__name__}; wynik tej reguły dla części materiału jest nieznany, "
-            "pozostałe reguły i pliki analizowano dalej")
-    if text not in cover.reasons:
-        cover.degrade(text)
+def rule_failed(cover: SourceCoverage, rule: str, error: type[BaseException], where: str | None = None, count: int = 1) -> None:
+    """Luka po wyjątku w regule: identyfikator reguły, nazwa typu wyjątku, liczba wystąpień i pierwsze miejsce
+    (ścieżka dowodu po ``redact.neutralise``). Treść wyjątku (``str(exc)``) może zawierać bajty dowodu albo ścieżki
+    hosta, więc nie trafia do raportu. Ten sam błąd powtórzony daje jedną lukę z licznikiem."""
+    key = (rule, error.__name__)
+    seen = cover.rule_errors.get(key)
+    if seen is None:
+        cover.degrade("")
+        seen = cover.rule_errors[key] = [0, redact.neutralise(where)[:200] if where else None, len(cover.reasons) - 1]
+    seen[0] += count
+    first = f" (pierwsze: {seen[1]})" if seen[1] else ""
+    cover.reasons[seen[2]] = (f"{RULE_ERROR_GAP} {rule}: wyjątek {error.__name__} ×{seen[0]}{first}; wynik tej reguły dla części "
+                              "materiału jest nieznany, pozostałe reguły i pliki analizowano dalej")
 
 
-def guarded(cover: SourceCoverage, rule: str, call: Callable, *args, default=None):
-    """``call(*args)``; wyjątek oceny reguły zamienia w lukę ``cover`` (``rule_failed``) i zwraca ``default``."""
+def guarded(cover: SourceCoverage, rule: str, call: Callable, *args, default=None, where: str | None = None):
+    """``call(*args)``; wyjątek oceny reguły zamienia w lukę ``cover`` (``rule_failed``, ``where`` = miejsce w dowodzie)
+    i zwraca ``default``."""
     try:
         return call(*args)
     except NOT_RULE_ERRORS:
         raise
     except Exception as error:
-        rule_failed(cover, rule, type(error))
+        rule_failed(cover, rule, type(error), where)
         return default
 
 

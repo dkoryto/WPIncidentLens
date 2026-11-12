@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import filerules, ingest, integrity, models, rules, wpdetect
+from . import filerules, ingest, integrity, models, redact, rules, wpdetect
 from .analysis import Detection, SourceCoverage
 
 
@@ -30,10 +30,13 @@ def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core:
     detector = wpdetect.WPDetector(baseline)
     scan_limit = session.limits.max_scan_bytes
 
+    where: str | None = None  # wpis, którego dotyczy bieżąca ocena reguły (pierwsze miejsce w luce po wyjątku)
+
     def guard(rule: str, call, *args, default=None):
-        return rules.guarded(scan.cover, rule, call, *args, default=default)
+        return rules.guarded(scan.cover, rule, call, *args, default=default, where=where)
 
     for item in session.read(root, "files", expect="dir", wanted=filerules.wants_content, md5=core is not None):
+        where = f"files/{item.rel}"
         scan.cover.note(*item.gaps)
         checked = guard("integrity", comparison.check, item)
         if checked is None:  # wpis nie trafił do porównania: jego „brak” względem referencji byłby fałszywym ustaleniem
@@ -44,7 +47,7 @@ def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core:
         if item.sha256 is None:
             continue
         if item.size > scan_limit:
-            text = f"Analiza treści pominięta, plik > {scan_limit} B: {item.rel}"
+            text = f"Analiza treści pominięta, plik > {scan_limit} B: {redact.neutralise(item.rel)}"
             if filerules.wants_content(item.rel):
                 scan.cover.degrade(text)
             else:  # reguły treści dotyczą tylko plików kodu; taki plik nie byłby skanowany także poniżej limitu
@@ -55,9 +58,10 @@ def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core:
             scan.detections.extend(found)
             if found.skipped:
                 scan.cover.degrade(
-                    f"Limit czasu analizy {session.limits.max_seconds:g} s przekroczony w trakcie reguł treści: plik {item.rel} "
+                    f"Limit czasu analizy {session.limits.max_seconds:g} s przekroczony w trakcie reguł treści: plik {redact.neutralise(item.rel)} "
                     f"przeanalizowany do reguły {found.applied} z {found.applied + len(found.skipped)}; "
                     f"niezastosowane: {', '.join(found.skipped)}")
+    where = None
     scan.detections.extend(guard("integrity", comparison.finish, session, scan.cover, default=[]))
     scan.observations.extend(guard("wpdetect", detector.finish, scan.cover, default=[]))
     return scan

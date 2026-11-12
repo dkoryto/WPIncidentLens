@@ -25,6 +25,8 @@ class SourceCoverage:
     failed: bool = False   # źródło podano, ale nic z niego nie przeanalizowano
     partial: bool = False  # część materiału pominięta przez limit albo nieobsługiwany format
     reasons: list[str] = field(default_factory=list)
+    # (reguła, typ wyjątku) → [liczba, pierwsze miejsce, indeks luki w ``reasons``] (``rules.rule_failed``)
+    rule_errors: dict = field(default_factory=dict, repr=False)
 
     def note(self, *texts: str) -> None:
         """Informacja o zakresie (np. stałe ograniczenie parsera); sama nie obniża statusu."""
