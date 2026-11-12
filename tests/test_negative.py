@@ -55,7 +55,6 @@ def test_n3_admin_without_trusted_list_is_a_gap_not_an_alert(site, evidence, ana
     assert run.has_gap("brak wiarygodnej listy porównawczej")
 
 
-@pytest.mark.xfail(strict=True, reason="raport nie zawiera inwentarza kont administratorów (#7)")
 def test_n3_admin_without_trusted_list_appears_in_inventory(site, evidence, analyze):
     database = write(evidence / "db.sql", admin_sql("siteadmin"))
 

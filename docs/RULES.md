@@ -1,6 +1,6 @@
 # Reguły plików (FileAnalyzer, IntegrityAdapter) i obserwacje WPDetector
 
-Dokument opisuje trzy rzeczy: reguły ścieżki i treści (`wpincidentlens/filerules.py`), reguły integralności względem zaufanej referencji (`wpincidentlens/integrity.py`) oraz obserwacje WPDetector (`wpincidentlens/wpdetect.py`), które **nie są ustaleniami**. Reguły bazy danych i logów (`wpincidentlens/cli.py`) nie są tu opisane.
+Dokument opisuje trzy rzeczy: reguły ścieżki i treści (`wpincidentlens/filerules.py`), reguły integralności względem zaufanej referencji (`wpincidentlens/integrity.py`) oraz obserwacje WPDetector (`wpincidentlens/wpdetect.py`), które **nie są ustaleniami**. Reguły bazy danych opisuje sekcja „Reguły bazy danych” na końcu; reguła logów (`wpincidentlens/cli.py`) nie jest tu opisana.
 
 Źródło prawdy dla reguł ścieżki i treści: tabela `RULES` w `wpincidentlens/filerules.py` (`RULESET_VERSION = "2026.11.1"`). Test `tests/test_filerules.py` pilnuje, żeby każda reguła z tabeli była tu opisana i miała przypadek pozytywny, negatywny oraz fałszywy alarm wzorowany na legalnym kodzie.
 
@@ -107,3 +107,67 @@ Atrybuty każdej obserwacji: `value`, `confidence`, `origin`, `basis` (uzasadnie
 - Reguła logów HTTP (`HTTP_EXECUTABLE_IN_UPLOADS` w `wpincidentlens/cli.py`) zna tylko rozszerzenia `.php`, `.phtml` i `.phar`; żądanie do `.pht`, `.php5` albo `photo.php.jpg` w uploads nie daje ustalenia z logu ani korelacji.
 - Integralność: narzędzie nie sprawdza, czy manifest sum rdzenia odpowiada wersji i locale witryny (kandydat WPDetector nie jest z nim porównywany); manifestów wtyczek i motywów nie ma; liczba wpisów baseline nie ma limitu poza rozmiarem pliku (64 MiB), manifest ma limit 50 000 wpisów i 8 MiB.
 - WPDetector nie jest parserem PHP: heredoc, tekst poza `<?php … ?>`, `$GLOBALS['wp_version']` i `include` nie są modelowane; `wp-config.php` położony katalog wyżej niż witryna nie jest widziany; kandydaci z plików nie są porównywani z bazą (opcja `WPLANG`, prefiks w zrzucie SQL).
+
+## Reguły bazy danych (`dbrules`, T-301)
+
+Źródło prawdy: `wpincidentlens/dbrules.py`; dane serializowane PHP czyta `wpincidentlens/phpserialize.py`, cytaty redaguje `wpincidentlens/redact.py`. Testy: `tests/test_dbrules.py`, `tests/test_phpserialize.py`, `tests/test_redact.py`. Decyzje: [ADR 0006](adr/0006-analiza-bazy-m3.md), pkt 4–8. Reguły bazy są zapisane w kodzie i nie mają wersji.
+
+### Które tabele są analizowane
+
+- Prefiks tabel wynika ze zrzutu. Kandydatem jest każda tabela o nazwie `<prefiks>users`, `<prefiks>usermeta` albo `<prefiks>options` (prefiks dowolny, także bez `_` i pusty).
+- Wybór prefiksu: (1) para `users` + `usermeta`, w której `usermeta` ma klucz `<prefiks>capabilities`; (2) w razie braku — sama para; (3) w razie braku pary — dowolna tabela rdzenia (zrzut częściowy). Jeżeli kandydatów w danym kroku jest kilku, wygrywa ten, od którego zaczynają się wszystkie pozostałe (tabele wtyczek nazywają się `<prefiks><wtyczka>_…`). Gdy takiego nie ma, reguły bazy **nie są stosowane do żadnego prefiksu** i powstaje luka.
+- Tabela wtyczki kończąca się na `users` lub `options` (np. `wp_myplugin_users`) nie jest tabelą rdzenia: jej wiersze są pomijane bez luki.
+- Luki (`PARTIAL`): druga para `users` + `usermeta` o innym prefiksie; układ multisite (`<prefiks>blogs`, `<prefiks>sitemeta`, `<prefiks><n>_options|posts|postmeta`) — analizowana jest tylko witryna główna, super administratorzy (`site_admins`) są poza zakresem; wiersz uprawnień z kluczem `…capabilities` o innym prefiksie niż tabele; więcej niż 50 różnych prefiksów.
+
+### Role
+
+- Administratorem jest konto, którego wartość `<prefiks>capabilities` daje się odczytać jako tablica PHP z kluczem `administrator` o wartości prawdziwej (reguły prawdziwości PHP). Nazwa roli jako **wartość**, inna wielkość liter albo dłuższy klucz nie są rolą.
+- Wartości, której nie da się odczytać (ucięta, zła długość, obiekt zamiast tablicy, śmieci po wartości, ponad 64 KiB), nie przeszukuje się podłańcuchem: powstaje luka z liczbą kont i najwyżej pięcioma `user_id`.
+- Klucz `administrator` z wartością fałszywą (`b:0`): konto **nie** jest liczone jako administrator, ale powstaje luka. WordPress wyznacza role po kluczach tablicy uprawnień (`WP_User::get_role_caps()`), więc takie konto może mieć uprawnienia administratora — wymaga ręcznej weryfikacji.
+- `<prefiks>user_level` nie jest źródłem roli; trafia tylko jako atrybut pomocniczy do inwentarza konta, które jest administratorem.
+
+### Ustalenia
+
+| Reguła | Waga | Pewność | Rodzaj obserwacji | Co wykrywa | Fałszywe alarmy |
+|---|---|---|---|---|---|
+| `UNRECOGNIZED_ADMIN` | high | medium | `ADMINISTRATOR_ACCOUNT` | Administrator spoza listy `--known-admin`, gdy baseline nie ma listy `known_admins` | Niepełna lista operatora; konto założone legalnie |
+| `NEW_SINCE_BASELINE` | high | medium | `ADMINISTRATOR_ACCOUNT` | Administrator spoza listy `known_admins` z baseline (i spoza `--known-admin`): konto nowe względem migawki | Nieaktualna migawka; konto założone legalnie po jej wykonaniu |
+| `SUSPICIOUS_DB_MARKUP` | medium | low | `OPTION_VALUE_WITH_ACTIVE_MARKUP` (`excerpt`, `value_chars`) | Wartość opcji zawiera `<script`, `<iframe`, `<object`, `<embed`, `<meta … http-equiv=refresh`, atrybut zdarzenia (`on…=`) w znaczniku, schemat `javascript:` (także z tabulacją lub końcem wiersza w środku) albo `data:text/html` | Fragmenty analityki i reklam, osadzone filmy i mapy, `onclick=` w widżetach, proza „JavaScript: …” |
+
+- Jedno ustalenie na konto: `NEW_SINCE_BASELINE`, gdy baseline ma niepustą listę `known_admins`, w przeciwnym razie `UNRECOGNIZED_ADMIN`. Nazwa podana przez `--known-admin` jest zaufana także wtedy, gdy nie ma jej w baseline. Bez żadnej listy nie ma ustalenia — jest inwentarz i nota o braku listy porównawczej. Pusta lista `known_admins` w baseline znaczy „brak listy”.
+- Jedno ustalenie `SUSPICIOUS_DB_MARKUP` na wiersz opcji. `excerpt` to najwyżej 200 znaków wokół pierwszego trafienia, po redakcji (niżej). Wartość opcji dłuższa niż 1 MiB znaków nie jest sprawdzana: luka z liczbą takich wartości.
+- Najwyżej 200 kont administratorów w raporcie (ustalenia i inwentarz razem); nadmiar to luka z łączną liczbą.
+- Raport HTML nie pokazuje atrybutów obserwacji, więc cytat jest tylko w `report.json`.
+
+### Inwentarz (obserwacje bez ustalenia)
+
+Nie wpływa na `assessment`. Samo istnienie administratora albo zadania cron nie jest alertem.
+
+| Rodzaj obserwacji | Atrybuty | Skąd |
+|---|---|---|
+| `ADMINISTRATOR_ACCOUNT` | `username` (do 200 znaków), `user_id`, `registered` (tylko w postaci `RRRR-MM-DD GG:MM:SS`), `user_level` | wiersz `<prefiks>capabilities` i wiersz konta w `<prefiks>users`. Bez adresu e-mail, skrótu hasła i innych danych konta. Login bywa adresem e-mail — trafia wtedy do raportu jako login |
+| `CRON_HOOK` | `hook` (do 120 znaków), `next_run` (najbliższy czas uruchomienia, liczba) | opcja `cron`; jedna obserwacja na nazwę zadania, najwyżej 200 na wiersz opcji |
+| `ACTIVE_PLUGIN` | `plugin` (do 200 znaków) | opcja `active_plugins`; najwyżej 200 |
+
+Opcja `cron` albo `active_plugins`, której nie da się odczytać, wpis o nieoczekiwanej postaci i przekroczony limit to luki. Administrator bez wiersza w tabeli użytkowników to luka (bez loginu nie da się go porównać z listą).
+
+### Dane serializowane PHP
+
+- Odczytywane: `N`, `b`, `i`, `d`, `s`, `a`. Obiekty (`O:`), serializacja własna (`C:`), wyliczenia (`E:`) i referencje (`R:`, `r:`) zostają nieprzezroczystym znacznikiem; nazwa klasy jest pomijana i nie trafia do raportu. Nic nie jest odtwarzane ani wykonywane.
+- Limity: 1 MiB, głębokość 32, 50 000 elementów. Przekroczenie, błąd składni i dane po wartości to błąd, czyli luka w regule, która wartości potrzebowała.
+- Długości łańcuchów są w **bajtach UTF-8** i muszą się zgadzać dokładnie. Zrzut przekodowany z innego zestawu znaków (np. tabela latin1 zrzucona jako UTF-8) ma złe długości łańcuchów ze znakami spoza ASCII: taka wartość jest nieczytelna (luka), długość nie jest zgadywana w znakach. Tablice uprawnień są w praktyce w ASCII.
+
+### Redakcja cytatu (`redact`)
+
+Kolejno: dane logowania w adresie (`://użytkownik:hasło@`), wszystko po `?` w adresie, wartość po nazwie zawierającej `key`, `token`, `password`/`passwd`/`pass`/`pwd`, `secret`, `auth`, `sig`, `nonce`, `session`, `credential`, część lokalna adresu e-mail, ciągi ≥ 16 cyfr szesnastkowych i ciągi ≥ 24 znaków `A-Z a-z 0-9 + _ -` z literą i cyfrą, na końcu znaki sterujące i formatujące (zmiana kierunku pisma, zerowa szerokość) → `U+FFFD`. Nazwa hosta po `://` zostaje — jest wskaźnikiem. Cały tekst jest redagowany przed wycięciem fragmentu.
+
+Redakcja jest zachowawcza (usuwa też `author: …` albo długi identyfikator z cyfrą) i nie jest gwarancją: sekret krótki, bez cyfr i poza rozpoznawalnym parametrem zostaje. Funkcja jest przewidziana także dla adresów z logów (T-501).
+
+### Ograniczenia reguł bazy
+
+- Rola `administrator` to jedyne sprawdzane uprawnienie. Konto z uprawnieniem nadanym wprost (np. `manage_options` w tablicy uprawnień), rola niestandardowa o uprawnieniach administratora i zmieniona definicja ról w opcji `<prefiks>user_roles` nie są wykrywane.
+- Multisite: witryny podrzędne i `site_admins` nie są analizowane (luka).
+- Loginy porównuje się z listą dokładnie, znak po znaku; podobne znaki z innych alfabetów nie są wykrywane.
+- `SUSPICIOUS_DB_MARKUP` dopasowuje tekst, nie HTML: nie widzi znaczników zapisanych encjami (`&#60;script`), kodowaniem base64 ani sklejanych w JavaScripcie; obejmuje tylko tabelę opcji (nie `posts`, `postmeta`, `usermeta`).
+- Obecność obiektu serializowanego w wartości opcji nie jest ustaleniem ani obserwacją (WordPress sam zapisuje obiekty, np. w transientach aktualizacji).
+- Częstości fałszywych alarmów nie mierzono na rzeczywistych bazach.

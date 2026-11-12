@@ -196,7 +196,8 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
     scan = files.scan_files(root, baseline, session, core)
     detections, cover["files"], facts = scan.detections, scan.cover, list(scan.observations)
     if database:
-        found, cover["database"], database_facts = database_scan.scan_database(database, known_admins, session)
+        found, cover["database"], database_facts = database_scan.scan_database(
+            database, known_admins, session, baseline_admins=set((baseline or {}).get("known_admins", [])))
         detections.extend(found)
         facts.extend(database_facts)
     else:

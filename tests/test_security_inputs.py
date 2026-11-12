@@ -560,7 +560,6 @@ def test_s11_serialized_php_object_is_inert_text(site, evidence, analyze):
     assert "SyntheticEvil" not in run.everything
 
 
-@pytest.mark.xfail(strict=True, reason="rola wykrywana podłańcuchem 'administrator' bez parsowania serializacji PHP: b:0 liczy się jak b:1 (#7)")
 def test_s11_revoked_administrator_capability_is_not_an_admin(site, evidence, analyze):
     database = write(evidence / "db.sql", admin_sql("editor", caps='a:2:{s:6:"editor";b:1;s:13:"administrator";b:0;}'))
 
