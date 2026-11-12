@@ -6,7 +6,7 @@ PoC zapewnia działający **offline** przepływ: statyczna analiza kopii katalog
 
 ## Test lokalny
 
-Wymagany Python 3.12. Szczegóły środowiska i faktyczne wyniki: [docs/BASELINE.md](docs/BASELINE.md).
+Wymagany Python 3.12. Aktualne wyniki testów: [docs/TEST_MATRIX.md](docs/TEST_MATRIX.md); środowisko i wyniki z pierwszego etapu (T-001): [docs/BASELINE.md](docs/BASELINE.md).
 
 ```bash
 python3.12 -m venv .venv && . .venv/bin/activate
@@ -16,17 +16,29 @@ python -m pytest -q
 python -m wpincidentlens --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output results --case-id DEMO-001
 ```
 
+`--baseline PLIK` to zaufany JSON operatora: `{"files": {"ścieżka/względna.php": "<sha256>"}, "known_admins": ["login"]}`, opcjonalnie z `wordpress_version` i `reference`, które trafiają do ustaleń jako opis referencji.
+
 Opcjonalnie `--core-checksums PLIK` wskazuje **lokalny** plik JSON z sumami MD5 rdzenia w kształcie `api.wordpress.org/core/checksums/1.0` (`{"checksums": {"wp-admin/about.php": "<md5>", …}}`; można dopisać `wordpress_version` i `reference`). Narzędzie niczego nie pobiera z sieci. Manifest jest wpisem `evidence` źródła `baseline`; MD5 służy tylko do porównania z manifestem (ustalenia `CORE_CHECKSUM_MISMATCH`, `CORE_FILE_NOT_IN_MANIFEST`, `CORE_FILE_MISSING`), skrótem dowodu pozostaje SHA-256. Manifest innej wersji lub locale daje rozbieżności; niepoprawny manifest to błąd wywołania (kod 2). Klasy plików bez referencji są w pokryciu oznaczane `NOT_CHECKED`.
 
-Plik kodu (PHP i pokrewne, `.htaccess`, `.user.ini`, `php.ini`), którego nie porównano z żadną referencją — baseline ani manifestem — obniża pokrycie `files` do `PARTIAL`: zakres jest niepełny, przebieg bez ustaleń daje `INCONCLUSIVE`, a kod wyjścia to 3 (ADR 0005, pkt 6). Dotyczy to także demo powyżej: plik PHP w uploads nie ma referencji. Wpis wymieniony w referencji, którego nie dało się odczytać (dowiązanie, drugi hardlink, brak uprawnień), daje ustalenie `REFERENCE_FILE_UNREADABLE`. Każda reguła integralności zgłasza najwyżej 200 ustaleń na przebieg; nadmiar jest luką z łączną liczbą wykryć. Baseline i manifest z powtórzonym kluczem, ścieżką niewzględną albo skrótem w złej postaci są odrzucane (kod 2).
+Plik kodu (PHP i pokrewne, `.htaccess`, `.user.ini`, `php.ini`), którego nie porównano z żadną referencją — baseline ani manifestem — obniża pokrycie `files` do `PARTIAL`: zakres jest niepełny, przebieg bez ustaleń daje `INCONCLUSIVE`, a kod wyjścia to 3 (ADR 0005, pkt 6). Dotyczy to także demo powyżej: `fixtures/baseline.json` nie zawiera skrótów plików, więc żaden plik kodu nie ma referencji i polecenie kończy się kodem 3 z oceną `SUSPICIOUS` (zapis wyniku: [demo/report.json](demo/report.json)). Wpis wymieniony w referencji, którego nie dało się odczytać (dowiązanie, drugi hardlink, brak uprawnień), daje ustalenie `REFERENCE_FILE_UNREADABLE`. Każda reguła integralności zgłasza najwyżej 200 ustaleń na przebieg; nadmiar jest luką z łączną liczbą wykryć. Baseline i manifest z powtórzonym kluczem, ścieżką niewzględną albo skrótem w złej postaci są odrzucane (kod 2).
 
-Otwórz `results/report.html`. Kod wyjścia opisuje pełność analizy, nie wynik: `0` — zakres pełny, `3` — analiza częściowa (np. brak bazy lub logów), `4` — podane źródło nieprzetworzone, `2` — błąd wywołania. Ocenę podaje pole `assessment` w `report.json`.
+Otwórz `results/report.html`. Kod wyjścia opisuje pełność analizy, nie wynik: `0` — zakres pełny, `3` — analiza częściowa (np. brak bazy lub logów, plik kodu bez zaufanej referencji, pominięty wpis, limit), `4` — podane źródło nieprzetworzone, `2` — błąd wywołania. Ocenę podaje pole `assessment` w `report.json`.
+
+## Co analizuje PoC (stan po M2)
+
+- **Pliki — reguły ścieżki i treści** (13 reguł, opis i fałszywe alarmy: [docs/RULES.md](docs/RULES.md)): kod PHP i podwójne rozszerzenia w uploads, kod w katalogach zasobów i tłumaczeń, `eval`/`assert` na zdekodowanej treści lub danych żądania, dane żądania przy wykonaniu komendy, w `include` i jako cel zapisu pliku, `preg_replace /e`, długie bloby, `.htaccess` włączający PHP w uploads, `auto_prepend_file`/`auto_append_file`. Każda to heurystyka; żadna nie daje pewności `high`.
+- **Pliki — integralność względem referencji**: `BASELINE_FILE_CHANGED`, `BASELINE_FILE_MISSING`, `NEW_FILE_SINCE_BASELINE` (mu-plugins i drop-ins), `CORE_CHECKSUM_MISMATCH`, `CORE_FILE_NOT_IN_MANIFEST`, `CORE_FILE_MISSING`, `REFERENCE_FILE_UNREADABLE`.
+- **WPDetector**: wersja WordPressa, wersja bazy, locale i prefiks tabel jako kandydaci z pewnością (`observations`), bez ustalenia i bez wpływu na ocenę.
+- **Baza (wybrane `INSERT`)**: administrator spoza zaufanej listy, aktywny znacznik HTML lub schemat JS w opcji.
+- **Logi (format combined)**: żądanie do pliku `.php`, `.phtml` lub `.phar` w uploads oraz korelacja ścieżki z plikiem w obrazie witryny.
+
+Brak ustalenia w którymkolwiek z tych obszarów nie oznacza, że witryna nie została naruszona.
 
 ## Bezpieczny odczyt dowodów (T-101)
 
 Materiał dowodowy otwiera wyłącznie moduł `wpincidentlens/ingest.py`: względem deskryptora katalogu, z `O_NOFOLLOW`, czytając tylko zwykłe pliki i katalogi (Linux i macOS; na platformie bez `dir_fd`/`O_NOFOLLOW` narzędzie odmawia pracy). Skrót SHA-256 i analizowana treść pochodzą z jednego odczytu, a po analizie dowody są weryfikowane ponownie. Zmiany zachowania względem wcześniejszego PoC:
 
-- Ścieżka `--files`, `--database`, `--logs` lub `--baseline` będąca dowiązaniem symbolicznym jest **odrzucana** (kod wyjścia 2) — podaj ścieżkę rzeczywistą. Symlinki wewnątrz drzewa są nadal pomijane z luką.
+- Ścieżka `--files`, `--database`, `--logs`, `--baseline` lub `--core-checksums` będąca dowiązaniem symbolicznym jest **odrzucana** (kod wyjścia 2) — podaj ścieżkę rzeczywistą. Symlinki wewnątrz drzewa są nadal pomijane z luką.
 - Pliki z wieloma dowiązaniami twardymi (`st_nlink > 1`) są domyślnie **pomijane** z luką `SKIPPED_HARDLINK`. Kopie z deduplikacją (np. `rsync --link-dest`) wymagają `--allow-hardlinks`.
 - `--output` nie może leżeć w żadnym źródle dowodów ani go zawierać; niepoprawny lub nieczytelny `--baseline` to błąd wywołania (kod 2). Baseline jest wpisem w `evidence`.
 - Limity dotyczą wszystkich źródeł łącznie; po przekroczeniu analiza jest częściowa i powstaje nazwana luka w `coverage_gaps`. Komunikaty luk zawierają tylko ścieżki względne do źródła i nazwę błędu (np. `EACCES`).
@@ -43,7 +55,7 @@ Materiał dowodowy otwiera wyłącznie moduł `wpincidentlens/ingest.py`: wzglę
 | `--max-depth` | 64 | limit głębokości katalogów; głębszy katalog nie jest przeglądany |
 | `--max-path-bytes` | 4096 | limit długości ścieżki względnej do źródła; dłuższa ścieżka jest pomijana |
 
-Każdy limit musi być dodatni i skończony, inaczej wywołanie jest odrzucane (kod 2). Stałe limity: treść plików analizowana do 4 MiB, SQL do 20 MiB, log do 30 MiB. Bezpieczny odczyt nie zastępuje izolacji: nie wykrywa punktów montowania w drzewie ani zmian cofniętych przed ponowną weryfikacją; materiał montuj tylko do odczytu, z `nodev`.
+Każdy limit musi być dodatni i skończony, inaczej wywołanie jest odrzucane (kod 2). Stałe limity: treść plików analizowana do 4 MiB, SQL do 20 MiB, log do 30 MiB, baseline do 64 MiB, manifest sum rdzenia do 8 MiB i 50 000 wpisów. Bezpieczny odczyt nie zastępuje izolacji: nie wykrywa punktów montowania w drzewie ani zmian cofniętych przed ponowną weryfikacją; materiał montuj tylko do odczytu, z `nodev`.
 
 ## Sprawa i zapis wyników (T-101)
 
@@ -77,18 +89,20 @@ mkdir -p results && chmod 777 results  # TYLKO jednorazowy lokalny PoC; nigdy na
 cd docker && docker compose run --build --rm wpincidentlens
 ```
 
-Tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability, non-root. Wymaga poprawnych uprawnień do odczytu dowodów i zapisu wyniku przez UID 65532. Pliki wyników mają uprawnienia `0600` i właściciela UID 65532, więc inny użytkownik hosta odczyta je dopiero po zmianie właściciela lub uprawnień.
+`docker/compose.yaml` deklaruje tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability i non-root; tej izolacji nie zmierzono (zakres M6). Wymaga poprawnych uprawnień do odczytu dowodów i zapisu wyniku przez UID 65532. Pliki wyników mają uprawnienia `0600` i właściciela UID 65532, więc inny użytkownik hosta odczyta je dopiero po zmianie właściciela lub uprawnień.
 
 ## Ograniczenia PoC
 
-- Wykrywa tylko kilka heurystyk PHP, nie zawiera produkcyjnych reguł YARA-X ani weryfikacji oficjalnych checksumów. Integracje przewidziano w pełnej specyfikacji.
+- Reguły plików to heurystyki tekstowe bez parsera PHP: łączenie łańcuchów, komentarz w środku wywołania i zmienne pośrednie je omijają (lista ograniczeń: [docs/RULES.md](docs/RULES.md)). Nie ma YARA-X. Częstości fałszywych alarmów nie mierzono na rzeczywistych wtyczkach i motywach.
+- Sumy rdzenia są porównywane tylko z manifestem podanym lokalnie przez operatora; narzędzie nie sprawdza, czy manifest odpowiada wersji i locale witryny, i nie ma manifestów wtyczek ani motywów. Kod wtyczek i motywów da się zweryfikować wyłącznie własnym baseline; bez niego zostaje `NOT_CHECKED` i kod wyjścia 3.
+- Wersja, locale i prefiks tabel z WPDetector to kandydaci odczytani z plików, które napastnik mógł zmienić; nie są porównywani z bazą ani z wersją manifestu.
 - Parsowanie SQL jest celowo ograniczone do wybranych składni `INSERT INTO`; nie interpretuje złożonych dumpów, `BLOB`, triggerów, procedur, multisite ani całej składni MySQL. Brak informacji jest jawnie zgłaszany.
 - Brak parsera PHP serialization, więc nie rozpoznaje ukrytych zmian w serializowanych opcjach.
 - Nie analizuje logów poza formatem Apache/Nginx combined. Czas z logu jest zapisywany dosłownie i, gdy ma strefę, także w UTC; zegar serwera nie jest weryfikowany, a **wektor ataku nie jest ustalany**.
 - Symlinki, pliki specjalne i (domyślnie) pliki z wieloma dowiązaniami twardymi są pomijane z luką; pliki powyżej 4 MiB są haszowane, ale ich zawartość nie jest skanowana. Brak uczenia maszynowego i nie ma wykonywania PHP.
 - Testowe detekcje są heurystykami i mogą mieć false positive / false negative.
 - Nie wdraża pełnej chain of custody, sygnowania dowodów ani modeli uprawnień. Nie uruchamiaj na poufnych realnych danych bez przeglądu bezpieczeństwa.
-- Raport HTML nie wyświetla niekontrolowanego kodu, lecz metadane IP/URL mogą nadal być danymi osobowymi; przechowuj bezpiecznie.
+- Wartości wstawiane do raportu HTML są escapowane, ale raport nie deklaruje Content-Security-Policy. Adresy IP i URL z logów (także query string) trafiają do raportu bez redakcji i mogą być danymi osobowymi; przechowuj bezpiecznie.
 
 ## Schemat JSON
 
@@ -97,12 +111,12 @@ Tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability, non-r
 | Pole | Zawartość |
 |---|---|
 | `evidence` | każdy wpis materiału wejściowego, także pominięty: ścieżka względna do źródła, `read_status` (`READ`, `SKIPPED_SYMLINK`, `SKIPPED_HARDLINK`, `SKIPPED_SPECIAL`, `SKIPPED_LIMIT`, `ERROR`, `CHANGED`), SHA-256 i rozmiar, jeśli bajty przeczytano |
-| `observations` | fakty odczytane przez parsery (np. plik PHP w uploads, żądanie HTTP), bez oceny; każda wskazuje dowód i miejsce: ścieżkę, wiersz logu albo tabelę |
+| `observations` | fakty odczytane przez parsery (np. plik PHP w uploads, żądanie HTTP), bez oceny; każda wskazuje dowód i miejsce: ścieżkę, wiersz logu albo tabelę. Obserwacja reguły treści ma atrybuty `rule_version`, `offset`, `length`, `match_count`, nigdy dopasowaną treść. Kandydaci WPDetector (`WP_*_CANDIDATE`) są obserwacjami bez ustalenia |
 | `findings` | interpretacje: reguła, `severity` i `confidence` jako niezależne skale, wyjaśnienie oraz lista obserwacji, na których ustalenie się opiera |
 | `coverage` | dla `files`, `database`, `logs` i `baseline`: status (`ANALYZED`, `PARTIAL`, `NOT_PROVIDED`, `FAILED`), liczniki wpisów według statusu odczytu i powody |
 | `coverage_gaps` | wszystkie ograniczenia analizy jako teksty |
 | `timeline` | orientacyjne znaczniki czasu w UTC ze źródłem (`log`, `mtime`); nie dowód kolejności ani przyczynowości |
-| `scope_complete` | `true`, gdy pliki, baza i logi zostały przeanalizowane w całości |
+| `scope_complete` | `true`, gdy pliki, baza i logi mają pokrycie `ANALYZED`. Dla plików wymaga to m.in. porównania każdego pliku kodu z referencją (baseline albo manifest sum rdzenia); bez pełnej referencji jest `false` |
 
 Identyfikatory (`ev_…`, `obs_…`, `fnd_…`) są skrótami treści: ten sam materiał daje te same identyfikatory w każdym uruchomieniu.
 
@@ -113,7 +127,7 @@ Identyfikatory (`ev_…`, `obs_…`, `fnd_…`) są skrótami treści: ten sam m
 | `STRONG_INDICATORS` | istnieje ustalenie o wadze `high` lub `critical` i pewności `high`. Obecne heurystyki PoC nie osiągają tego progu |
 | `SUSPICIOUS` | istnieje jakiekolwiek inne ustalenie |
 | `NO_INDICATORS_IN_ANALYZED_SCOPE` | brak ustaleń przy pełnym zakresie (`scope_complete`) |
-| `INCONCLUSIVE` | brak ustaleń przy niepełnym zakresie: brak bazy lub logów, pominięte lub zmienione wpisy, przekroczony limit, nieobsługiwany format |
+| `INCONCLUSIVE` | brak ustaleń przy niepełnym zakresie: brak bazy lub logów, plik kodu bez zaufanej referencji, pominięte lub zmienione wpisy, przekroczony limit, nieobsługiwany format |
 
 Raporty w starszym schemacie 0.1.0 przenosi czysta funkcja `wpincidentlens.migrate.migrate_0_1_0(report: dict) -> dict`. Stary raport nie niósł pokrycia ani statusów odczytu, więc wynik oznacza je jako `UNKNOWN_LEGACY`, ustalenia opiera na obserwacjach syntetycznych `LEGACY_FINDING`, a ocenę przenosi ostrożnie: `INDICATORS_FOUND` → `SUSPICIOUS`, `NO_INDICATORS_IN_ANALYZED_SCOPE` → `INCONCLUSIVE`. Migracja nie ma wejścia w CLI; narzędzie zapisuje wyłącznie `poc-1`.
 

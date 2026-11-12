@@ -163,6 +163,7 @@ Poza zakresem T-102 pozostają także: redakcja i pseudonimizacja (B8, #14) — 
 Przyjęte przez agenta prowadzącego z delegacji właściciela (2026-11-11); każdą można odwrócić nowym ADR.
 
 1. **Brak baseline nie czyni zakresu niepełnym.** Zlecenie i specyfikacja §9.1 wymieniają jako źródła krytyczne pliki, bazę i logi. Wariant ostrożniejszy (baseline wymagany do „braku wskaźników”) sprawiłby, że bez zaufanej migawki wynikiem byłoby zawsze `INCONCLUSIVE`. Brak baseline jest raportowany jako powód w `coverage.baseline` i w `coverage_gaps`.
+   **Nota 2026-11-12: zastąpione w części przez ADR 0005 pkt 6.** Źródło `baseline` nadal może mieć status `NOT_PROVIDED` i samo nie obniża zakresu, ale plik kodu bez żadnej referencji obniża pokrycie `files` do `PARTIAL`, więc przebieg bez pełnej referencji nie daje już `NO_INDICATORS_IN_ANALYZED_SCOPE` ani kodu 0.
 2. **`--no-reverify` nie obniża oceny.** Flaga jest jawnym wyborem operatora, odnotowanym jako luka; zmiana wykryta w trakcie odczytu nadal daje `CHANGED`. Wariant ostrożniejszy: traktować wyłączoną weryfikację jak niepełny zakres.
 3. **Kod wyjścia `3` przy niepodanej bazie lub logach.** Przyjęto, że „analiza w całości” oznacza pełny zakres wspierany, nie tylko podany materiał. Automatyzacja uruchamiająca narzędzie na samych plikach dostanie `3`.
 4. **`STRONG_INDICATORS` jest dziś nieosiągalny** (§6).

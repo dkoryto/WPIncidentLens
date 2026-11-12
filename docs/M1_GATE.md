@@ -11,6 +11,16 @@
 
 Powiązane dokumenty: `docs/TEST_MATRIX.md` (wyniki i lista testów), `docs/THREAT_MODEL.md` (Z-01–Z-17), `docs/REQUIREMENTS_TRACEABILITY.md` (mapa wymagań), ADR 0002 i ADR 0003.
 
+> **Nota 2026-11-12 (po M2, commit `6c4cc87`).** Raport opisuje stan z 2026-11-11 i nie był przepisywany; numery linii `wpincidentlens/cli.py` i `ingest.py` oraz liczby testów dotyczą commita `4cac876`. Po scaleniu M2 (PR #30–#33, ADR 0005) nieaktualne są następujące stwierdzenia:
+>
+> - §1 i tabela kodów wyjścia: pokaz na `fixtures/` nie kończy się już kodem 0 z `scope_complete: true`, tylko kodem 3 z `scope_complete: false` — plik kodu bez zaufanej referencji obniża pokrycie `files` (ADR 0005 pkt 6). Kod 0 wymaga dodatkowo, żeby każdy plik kodu miał wpis w baseline albo w manifeście sum rdzenia.
+> - „Brak baseline nie czyni zakresu niepełnym” (wariant z ADR 0003) jest zastąpiony w części przez ADR 0005 pkt 6.
+> - Luki nr 3 i 6 („plik nieobecny w baseline”, „`.htaccess` i `.user.ini` bez reguły”): plik spoza referencji jest liczony w `NOT_CHECKED` i dla kodu obniża pokrycie, nowy plik w mu-plugins lub drop-in daje ustalenie `NEW_FILE_SINCE_BASELINE`, a pliki konfiguracji mają reguły `HTACCESS_ENABLES_PHP_IN_UPLOADS` i `PHP_AUTO_PREPEND_CONFIG`. Luki nr 1, 2 i 5 (stratne dekodowanie, instrukcje SQL inne niż `INSERT`/`REPLACE`) zamknęły już poprawki opisane w §0 tego raportu (PR #28).
+> - Test `sec::test_s01_traversal_keys_in_baseline_are_compared_but_never_opened` nazywa się teraz `sec::test_s01_traversal_keys_in_baseline_are_refused_before_analysis`: klucz baseline z `../` albo ścieżką bezwzględną jest odrzucany przed analizą (kod 2).
+> - Funkcja `scan_files` nie jest już w `cli.py`, tylko w `wpincidentlens/files.py`.
+>
+> Stan aktualny: `docs/TEST_MATRIX.md`, `docs/THREAT_MODEL.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/PROGRESS.md`.
+
 ## 1. Co uruchomiono
 
 Świeże środowisko (`uv venv --python 3.12`, `pip install -e '.[dev]'`), macOS 27.0.1 (Darwin 27.0.0, arm64, APFS), Python 3.12.11, pytest 8.4.2, ruff 0.8.6.

@@ -3,10 +3,10 @@
   "tool": "WPIncidentLens PoC",
   "tool_version": "0.1.0-poc",
   "case_id": "DEMO-001",
-  "analyzed_at_utc": "2026-11-11T17:36:16.628184+00:00",
+  "analyzed_at_utc": "2026-11-12T00:26:57.792759+00:00",
   "analyzed_at_time_source": "tool_clock",
   "assessment": "SUSPICIOUS",
-  "scope_complete": true,
+  "scope_complete": false,
   "disclaimer": "Brak alertów nie dowodzi braku włamania. PoC, nie certyfikacja śledcza.",
   "findings": [
     {
@@ -44,14 +44,14 @@
       ]
     },
     {
-      "id": "fnd_942658e9ba8edf891b4e8885a51cf812",
+      "id": "fnd_b093038e3d8a8adae5292e776649ea20",
       "rule_id": "SUSPICIOUS_PHP_EVAL_DECODE",
       "category": "file",
       "severity": "high",
       "confidence": "medium",
-      "reason": "Wykryto łańcuch eval(base64_decode(...)); to heurystyka, nie dowód malware.",
+      "reason": "Wykryto wykonanie zdekodowanej treści, np. łańcuch eval(base64_decode(...)); to heurystyka, nie dowód malware.",
       "observations": [
-        "obs_a5cfcd3391a74c0e0b0dfa7856f160eb"
+        "obs_32e32db1279bf01e100471e9c7fba7e9"
       ]
     },
     {
@@ -91,6 +91,40 @@
       "time_source": null
     },
     {
+      "id": "obs_0be0335bf67aca32ec808c9c1e9f6c98",
+      "evidence_id": "ev_94cb65e7b146a109f8671808c7af86ba",
+      "kind": "WP_TABLE_PREFIX_CANDIDATE",
+      "location": {
+        "path": "wp-config.php"
+      },
+      "attributes": {
+        "basis": "brak zaufanej referencji dla pliku; wartość jest wskazówką",
+        "confidence": "medium",
+        "origin": "TABLE_PREFIX_ASSIGNMENT",
+        "value": "demo_"
+      },
+      "timestamp_raw": null,
+      "timestamp_utc": null,
+      "time_source": null
+    },
+    {
+      "id": "obs_32e32db1279bf01e100471e9c7fba7e9",
+      "evidence_id": "ev_e26da2a4531021b991e43de7a3e6f6eb",
+      "kind": "EVAL_BASE64_DECODE_PATTERN",
+      "location": {
+        "path": "wp-content/uploads/2026/11/cache-view.php"
+      },
+      "attributes": {
+        "length": 19,
+        "match_count": 1,
+        "offset": 72,
+        "rule_version": 2
+      },
+      "timestamp_raw": null,
+      "timestamp_utc": null,
+      "time_source": null
+    },
+    {
       "id": "obs_8f09ebe185e5221250f7a894f3c868ef",
       "evidence_id": "ev_5d7d0fb9113455411b0531b6e76297ae",
       "kind": "HTTP_REQUEST_FOR_PHP_IN_UPLOADS",
@@ -107,18 +141,6 @@
       "timestamp_raw": "09/Nov/2026:02:14:01 +0100",
       "timestamp_utc": "2026-11-09T01:14:01+00:00",
       "time_source": "log"
-    },
-    {
-      "id": "obs_a5cfcd3391a74c0e0b0dfa7856f160eb",
-      "evidence_id": "ev_e26da2a4531021b991e43de7a3e6f6eb",
-      "kind": "EVAL_BASE64_DECODE_PATTERN",
-      "location": {
-        "path": "wp-content/uploads/2026/11/cache-view.php"
-      },
-      "attributes": {},
-      "timestamp_raw": null,
-      "timestamp_utc": null,
-      "time_source": null
     },
     {
       "id": "obs_ec5d5c74cb575db85f702c65d780587e",
@@ -222,7 +244,7 @@
   ],
   "coverage": {
     "files": {
-      "status": "ANALYZED",
+      "status": "PARTIAL",
       "entries": {
         "READ": 3,
         "SKIPPED_SYMLINK": 0,
@@ -232,7 +254,12 @@
         "ERROR": 0,
         "CHANGED": 0
       },
-      "reasons": []
+      "reasons": [
+        "NOT_CHECKED: integralność plików klasy CONFIG (plików: 1, w tym kodu: 1) niezweryfikowana — brak zaufanej referencji",
+        "NOT_CHECKED: integralność plików klasy CORE (plików: 1, w tym kodu: 1) niezweryfikowana — brak zaufanej referencji",
+        "NOT_CHECKED: integralność plików klasy UPLOAD (plików: 1, w tym kodu: 1) niezweryfikowana — brak zaufanej referencji",
+        "WPDetector: locale nieustalone: brak jednoznacznego źródła w plikach (ustawienie może być zapisane tylko w bazie); wersja WordPressa nieustalona: brak pliku wp-includes/version.php"
+      ]
     },
     "database": {
       "status": "ANALYZED",
@@ -280,7 +307,11 @@
   },
   "coverage_gaps": [
     "Baseline nie zawiera skrótów plików (files): porównanie plików z referencją niewykonane",
-    "Parser SQL PoC obsługuje wybrane INSERT; nie obsługuje triggerów, procedur, pełnej składni ani multisite"
+    "NOT_CHECKED: integralność plików klasy CONFIG (plików: 1, w tym kodu: 1) niezweryfikowana — brak zaufanej referencji",
+    "NOT_CHECKED: integralność plików klasy CORE (plików: 1, w tym kodu: 1) niezweryfikowana — brak zaufanej referencji",
+    "NOT_CHECKED: integralność plików klasy UPLOAD (plików: 1, w tym kodu: 1) niezweryfikowana — brak zaufanej referencji",
+    "Parser SQL PoC obsługuje wybrane INSERT; nie obsługuje triggerów, procedur, pełnej składni ani multisite",
+    "WPDetector: locale nieustalone: brak jednoznacznego źródła w plikach (ustawienie może być zapisane tylko w bazie); wersja WordPressa nieustalona: brak pliku wp-includes/version.php"
   ],
   "timeline": [
     {
