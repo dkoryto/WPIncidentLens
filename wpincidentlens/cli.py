@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from . import case, files, ingest, integrity, models, report
 from . import database as database_scan
-from .analysis import Detection, SourceCoverage, decoded, is_lossy
+from .analysis import Detection, SourceCoverage
+from .correlate import findings_of as _findings, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
+from .httplog import LOG_PATTERN, MAX_LOG_BYTES, scan_logs  # noqa: F401  (testy wołają je przez cli)
 from .sqldump import iter_insert_rows  # noqa: F401  (ADR 0001: testy wołają go przez cli)
 from .analysis import evidence_of as _evidence
 
@@ -22,7 +23,6 @@ EXIT_COMPLETE, EXIT_PARTIAL, EXIT_UNPROCESSED = 0, 3, 4
 # Materiał dowodowy otwiera wyłącznie wpincidentlens.ingest (ADR 0002 D4); ten moduł dostaje już przeczytane bajty.
 MAX_FILES = ingest.Limits().max_files
 MAX_SCAN_BYTES = ingest.Limits().max_scan_bytes
-MAX_LOG_BYTES = 30 * 1024 * 1024
 MAX_BASELINE_BYTES = 64 * 1024 * 1024
 MAX_CORE_CHECKSUMS_BYTES = 8 * 1024 * 1024
 
@@ -30,63 +30,6 @@ MAX_CORE_CHECKSUMS_BYTES = 8 * 1024 * 1024
 def _session() -> ingest.Session:
     """Sesja odczytu z limitami domyślnymi; stałe MAX_* są czytane w chwili wywołania."""
     return ingest.Session(ingest.Limits(max_files=MAX_FILES, max_scan_bytes=MAX_SCAN_BYTES))
-
-
-LOG_PATTERN = re.compile(r'^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"(GET|POST|PUT|PATCH|DELETE|HEAD)[ \t]+(\S+)[ \t]+[^\"\s][^\"]*"\s+(\d{3})\b')
-
-def _log_time_utc(stamp: str) -> str | None:
-    """Czas z logu combined jako UTC; ``None``, gdy zapisu nie da się jednoznacznie znormalizować (np. brak strefy)."""
-    try:
-        return models.utc_iso(datetime.strptime(stamp, "%d/%b/%Y:%H:%M:%S %z"))
-    except (ValueError, OverflowError):
-        return None
-
-
-def scan_logs(root: Path, session: ingest.Session | None = None) -> tuple[list[Detection], SourceCoverage]:
-    findings, cover = [], SourceCoverage()
-    hashed, observed, skipped, matched = 0, 0, 0, 0
-    for item in (session or _session()).read(root, "logs", keep_limit=MAX_LOG_BYTES):
-        name = PurePosixPath(item.rel).name
-        if item.status is ingest.ReadStatus.SKIPPED_SYMLINK and item.rel != ingest.ROOT:
-            cover.note(f"Pominięto link w logach: {name}")
-        else:
-            cover.note(*item.gaps)
-        if item.sha256 is None:
-            continue
-        hashed += 1
-        if item.size > MAX_LOG_BYTES:
-            cover.degrade(f"Log za duży do parsowania w PoC: {name}")
-            continue
-        if item.content is None:
-            cover.degrade(f"Treść logu niedostępna po odczycie (plik zmienił się w trakcie): {name}")
-            continue
-        if is_lossy(item.content):
-            cover.degrade(f"Log nie jest poprawnym UTF-8: zdekodowano ze znakami zastępczymi: {name}")
-        for ln, line in enumerate(decoded(item.content), start=1):
-            observed += 1
-            m = LOG_PATTERN.match(line)
-            if not m:
-                skipped += 1
-                continue
-            matched += 1
-            ip, timestamp, method, uri, status = m.groups()
-            if method in {"POST", "GET"} and re.search(r"/wp-content/uploads/[^?\s]+\.(?:php|phtml|phar)(?:\?|$)", uri, re.I):
-                moment = _log_time_utc(timestamp)
-                if moment is None:
-                    cover.note("Nie można znormalizować czasu logu: " + timestamp[:64])
-                request = models.Observation(
-                    _evidence(item).id, "HTTP_REQUEST_FOR_PHP_IN_UPLOADS", models.Location(path=item.rel, line=ln),
-                    {"uri": uri[:300], "method": method, "status": int(status), "client_ip": ip[:64]},
-                    timestamp_raw=timestamp[:64], timestamp_utc=moment, time_source=models.TimeSource.LOG)
-                findings.append(Detection("HTTP_EXECUTABLE_IN_UPLOADS", "high", "medium", "http_log",
-                    "Żądanie HTTP do pliku PHP w uploads; brak dowodu wykonania kodu.", request))
-    if observed and not matched:
-        cover.fail("Logi nie odpowiadają obsługiwanemu formatowi Apache/Nginx combined")
-    elif observed and skipped:
-        cover.degrade(f"Nie sparsowano {skipped}/{observed} wierszy logów")
-    elif hashed and not observed and not cover.partial:
-        cover.fail("Logi nie zawierają żadnego wiersza do analizy")
-    return findings, cover
 
 
 class _DuplicateKey(ValueError):
@@ -161,32 +104,6 @@ def _coverage(source: str, cover: SourceCoverage, ledger: list[ingest.Evidence])
     return models.Coverage(source, status, entries, tuple(reasons))
 
 
-def _timeline(detections: list[Detection], evidence: dict[str, models.Evidence]) -> tuple[list[models.TimelineEvent], list[str]]:
-    """Prosta oś czasu PoC oraz opisy plików, których mtime nie da się zapisać jako daty.
-
-    Czas z logu zależy od zegara serwera, a mtime pliku jest zmienialny: żaden nie dowodzi czasu ataku.
-    """
-    events, undated = [], []
-    for found in detections:
-        fact = found.observation
-        if found.rule == "HTTP_EXECUTABLE_IN_UPLOADS" and fact.timestamp_utc is not None:
-            events.append(models.TimelineEvent(
-                fact.timestamp_utc, models.TimeSource.LOG, "HTTP access log; synchronizacja zegara niezweryfikowana", found.rule,
-                models.describe_location(fact.location.to_dict()), "medium", fact.evidence_id, fact.id))
-    flagged = {found.observation.evidence_id for found in detections if found.category == "file"}
-    for item in evidence.values():
-        if item.id in flagged and item.origin_kind is models.OriginKind.FILE and item.mtime_ns is not None:
-            try:
-                moment = models.utc_iso(datetime.fromtimestamp(item.mtime_ns / 1e9, tz=timezone.utc))
-            except (ValueError, OverflowError, OSError):  # system plików może deklarować datę spoza zakresu datetime
-                undated.append(f"Nie można zapisać mtime jako czasu UTC: {item.logical_path}")
-                continue
-            events.append(models.TimelineEvent(
-                moment, models.TimeSource.MTIME, "Filesystem mtime: zmienialny; nie oznacza czasu ataku", "SUSPICIOUS_FILE_MTIME",
-                item.logical_path, "low", item.id))
-    return events, undated
-
-
 def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline: dict | None, known_admins: set[str],
                   session: ingest.Session, core: integrity.CoreChecksums | None = None, database_format: str = "sql",
                   ) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation]]:
@@ -219,23 +136,6 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
             cover["baseline"].note("Manifest sum rdzenia (MD5) obejmuje tylko pliki dystrybucji WordPressa; zgodność z nim "
                                    "nie mówi nic o wtyczkach, motywach, uploads ani konfiguracji")
     return detections, cover, facts
-
-
-def _findings(detections: list[Detection]) -> list[models.Finding]:
-    """Jedno ustalenie na wykrycie oraz korelacja: żądanie HTTP do pliku, który jest też w obrazie witryny."""
-    findings = [models.Finding(found.rule, found.category, found.severity, found.confidence, found.explanation, (found.observation.id,))
-                for found in detections]
-    uploads = {found.observation.location.path: found.observation for found in detections if found.rule == "EXECUTABLE_IN_UPLOADS"}
-    for found in detections:
-        if found.rule != "HTTP_EXECUTABLE_IN_UPLOADS":
-            continue
-        path = str(found.observation.attributes["uri"]).split("?")[0].lstrip("/")
-        if path in uploads:
-            findings.append(models.Finding(
-                "CORRELATED_UPLOAD_REQUEST", "correlation", "high", "medium",
-                "Ten sam podejrzany plik występuje w obrazie witryny i w logu HTTP; to korelacja, nie dowód wykonania kodu.",
-                (uploads[path].id, found.observation.id)))
-    return findings
 
 
 def compose_report(root: Path, database: Path | None, logs: Path | None,
