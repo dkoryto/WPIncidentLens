@@ -16,6 +16,8 @@ python -m pytest -q
 python -m wpincidentlens --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output results --case-id DEMO-001
 ```
 
+Opcjonalnie `--core-checksums PLIK` wskazuje **lokalny** plik JSON z sumami MD5 rdzenia w kształcie `api.wordpress.org/core/checksums/1.0` (`{"checksums": {"wp-admin/about.php": "<md5>", …}}`; można dopisać `wordpress_version` i `reference`). Narzędzie niczego nie pobiera z sieci. Manifest jest wpisem `evidence` źródła `baseline`; MD5 służy tylko do porównania z manifestem (ustalenia `CORE_CHECKSUM_MISMATCH`, `CORE_FILE_NOT_IN_MANIFEST`, `CORE_FILE_MISSING`), skrótem dowodu pozostaje SHA-256. Manifest innej wersji lub locale daje rozbieżności; niepoprawny manifest to błąd wywołania (kod 2). Klasy plików bez referencji są w pokryciu oznaczane `NOT_CHECKED`.
+
 Otwórz `results/report.html`. Kod wyjścia opisuje pełność analizy, nie wynik: `0` — zakres pełny, `3` — analiza częściowa (np. brak bazy lub logów), `4` — podane źródło nieprzetworzone, `2` — błąd wywołania. Ocenę podaje pole `assessment` w `report.json`.
 
 ## Bezpieczny odczyt dowodów (T-101)
@@ -58,7 +60,7 @@ Wywołanie waliduje `wpincidentlens/case.py` (CaseManager), zanim zostanie przec
 | `schema_version`, `case_id`, `operator_id` | wersja schematu, identyfikator sprawy, pseudonim operatora albo `null` |
 | `tool`, `tool_version` | jak w `report.json` |
 | `created_at_utc`, `analysis_finished_at_utc` | czas walidacji wywołania i czas zakończenia analizy (równy `analyzed_at_utc` raportu); UTC, zegar narzędzia |
-| `sources` | dla `files`, `database`, `logs`, `baseline`: `provided` oraz `name` — wyłącznie ostatni składnik podanej ścieżki (`null`, gdy źródła nie podano albo ścieżka nie ma nazwy, np. `.`) |
+| `sources` | dla `files`, `database`, `logs`, `baseline`: `provided` oraz `name` — wyłącznie ostatni składnik podanej ścieżki (`null`, gdy źródła nie podano albo ścieżka nie ma nazwy, np. `.`); `core_checksums` w tym samym kształcie tylko wtedy, gdy podano `--core-checksums` |
 | `limits` | wszystkie limity odczytu użyte w przebiegu |
 | `flags` | `allow_hardlinks`, `reverify` |
 | `report` | nazwa pliku raportu i SHA-256 jego zapisanych bajtów |

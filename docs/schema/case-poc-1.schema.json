@@ -32,7 +32,11 @@
         "files": {"$ref": "#/$defs/source"},
         "database": {"$ref": "#/$defs/source"},
         "logs": {"$ref": "#/$defs/source"},
-        "baseline": {"$ref": "#/$defs/source"}
+        "baseline": {"$ref": "#/$defs/source"},
+        "core_checksums": {
+          "description": "Opcjonalne: lokalny manifest sum rdzenia WordPress.org podany w --core-checksums. Pole występuje tylko wtedy, gdy manifest podano; w report.json manifest należy do źródła baseline.",
+          "$ref": "#/$defs/source"
+        }
       }
     },
     "limits": {
