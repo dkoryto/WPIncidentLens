@@ -22,6 +22,7 @@ SOURCES = (("files", "dir"), ("database", "file"), ("logs", "any"), ("baseline",
 DATABASE_FORMATS = ("sql", "jsonl")  # format pliku --database (``database.FORMATS``)
 LOG_FORMATS = tuple(logformats.FORMATS)  # format wierszy --logs (``httplog.FORMATS``)
 MAX_TRUSTED_PROXIES = 64
+MIN_PROXY_PREFIX = {4: 8, 6: 32}  # najkrótszy prefiks sieci zaufanego proxy dla IPv4 i IPv6
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 _VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}")
 MAX_REFERENCE_LABEL = 120
@@ -115,6 +116,9 @@ def _proxies(values: Iterable[str]) -> tuple[str, ...]:
             network = ipaddress.ip_network(value, strict=False)
         except ValueError:
             raise CaseError("--trusted-proxy: oczekiwano adresu IP albo sieci CIDR (np. 10.0.0.0/8, 2001:db8::/32)") from None
+        if network.prefixlen < MIN_PROXY_PREFIX[network.version]:
+            # Zbyt szeroka sieć uczyniłaby zaufanymi wpisy forwarded_for dopisane przez samego klienta.
+            raise CaseError("--trusted-proxy: sieć szersza niż /8 (IPv4) albo /32 (IPv6) nie może być zaufanym proxy")
         if str(network) not in networks:
             networks.append(str(network))
     if len(networks) > MAX_TRUSTED_PROXIES:

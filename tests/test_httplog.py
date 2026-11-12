@@ -1,12 +1,15 @@
 """Analiza logów HTTP (ADR 0007 pkt 2–7): strumieniowy podział na wiersze, pokrycie per plik, reguła, opcje operatora."""
 import ipaddress
+import itertools
 import json
 import random
+import re
+import time
 
 import pytest
 from conftest import CANARY, UPLOAD_PHP, access_line, time_limit, write
 
-from wpincidentlens import httplog, ingest
+from wpincidentlens import cli, correlate, httplog, ingest
 from wpincidentlens.httplog import LogConfig, LogFileParser
 
 RULE = "HTTP_EXECUTABLE_IN_UPLOADS"
@@ -343,11 +346,16 @@ def test_without_clock_skew_the_uncertainty_is_null(site, evidence, analyze):
     (("--trusted-proxy", "10.0.0.0/33"), "--trusted-proxy"),
     (("--trusted-proxy", "proxy.example.invalid"), "--trusted-proxy"),
     (("--trusted-proxy", ""), "--trusted-proxy"),
+    (("--trusted-proxy", "0.0.0.0/0"), "szersza niż /8"),
+    (("--trusted-proxy", "10.0.0.0/7"), "szersza niż /8"),
+    (("--trusted-proxy", "::/0"), "/32 (IPv6)"),
+    (("--trusted-proxy", "2001:db8::/31"), "/32 (IPv6)"),
     (("--log-clock-skew", "-1"), "--log-clock-skew"),
     (("--log-clock-skew", "nan"), "--log-clock-skew"),
     (("--log-clock-skew", "inf"), "--log-clock-skew"),
     (("--log-format", "w3c"), "--log-format"),
-], ids=["prefix-too-long", "hostname", "empty", "negative-skew", "nan-skew", "infinite-skew", "unknown-format"])
+], ids=["prefix-too-long", "hostname", "empty", "ipv4-everything", "ipv4-wider-than-8", "ipv6-everything", "ipv6-wider-than-32",
+        "negative-skew", "nan-skew", "infinite-skew", "unknown-format"])
 def test_invalid_log_option_is_a_usage_error(site, refuse, flags, message):
     assert message in refuse("--files", str(site), *flags)
 
@@ -421,11 +429,204 @@ def test_lossy_lines_are_counted_and_still_analysed(site, evidence, analyze):
 
 
 def test_request_limit_is_a_gap(site, evidence, analyze, monkeypatch):
+    """Limit puli korelacji dotyczy tylko korelacji: reguła uploads ma własny limit (przegląd M4, pkt 2)."""
     monkeypatch.setattr(httplog, "MAX_REQUESTS", 2)
+    write(site / UPLOAD_PHP)  # ustalenie plikowe: żądania do tej ścieżki są materiałem korelacji
     logs = write(evidence / "logs" / "access.log", access_line("/" + UPLOAD_PHP) * 3).parent
 
     run = analyze(site, logs=logs)
 
-    assert len([item for item in run.findings if item["rule"] == RULE]) == 2
+    assert len([item for item in run.findings if item["rule"] == RULE]) == 3
     assert run.has_gap("Limit 2 żądań do plików kodu albo")
-    assert run.has_gap("przekroczony: pominięto 1")
+    assert run.has_gap("przekroczony: pominięto 1; nie sprawdzono ich korelacją")
+
+
+# --- poprawki po przeglądzie bezpieczeństwa M4 ----------------------------------------------------
+
+DEEP = "/" + "a/" * 2040 + "x.php"  # ~4 KiB ścieżki z krótkich segmentów
+
+
+def test_s08_script_path_is_linear_in_the_number_of_segments():
+    """Przegląd M4, pkt 1: dawniej każdy ``/`` budował i sprawdzał cały prefiks (≈ 90 ms na wiersz)."""
+    path = DEEP.lstrip("/")
+    with time_limit(2):
+        started = time.perf_counter()
+        for _ in range(200):
+            assert httplog._script_path(path) == path
+        assert (time.perf_counter() - started) / 200 < 0.005
+
+
+def test_s08_log_of_deep_paths_is_parsed_in_bounded_time():
+    parser = LogFileParser()
+    data = access_line(DEEP, status=404).encode() * 500
+
+    with time_limit(5):
+        parser.feed(data)
+        parser.close()
+
+    assert (parser.parsed, len(parser.held)) == (500, 500)
+
+
+@pytest.mark.parametrize("path, script", [
+    ("a/b.php/c/d.php", "a/b.php"), ("wp-content/uploads/x.php.jpg/y.php", "wp-content/uploads/x.php.jpg"),
+    ("wp-content/x.php.jpg/y.php", "wp-content/x.php.jpg/y.php"), ("wp-content/uploads.php.jpg/a", None),
+    (".php/a", None), ("a/x.php.", None), ("WP-CONTENT/UPLOADS/A.PHP.GIF", "WP-CONTENT/UPLOADS/A.PHP.GIF"), ("", None),
+], ids=["first-code-segment", "double-extension-in-uploads", "double-extension-outside-uploads", "uploads-segment-itself",
+        "hidden-name", "trailing-dot", "uppercase", "root"])
+def test_script_path_decides_per_segment_like_the_file_rules(path, script):
+    assert httplog._script_path(path) == script
+
+
+def test_file_rule_name_helpers_agree_with_purepath_on_random_names():
+    from pathlib import PurePosixPath
+
+    from wpincidentlens import filerules
+    rng = random.Random(4011)
+    for _ in range(3000):
+        name = "".join(rng.choice("aP.hpi3nc") for _ in range(rng.randint(1, 9)))
+        if name in (".", ".."):
+            continue
+        assert filerules.is_code_name(name) == (PurePosixPath(name).suffix.lower() in filerules.CODE_SUFFIXES), name
+
+
+def _clock_session(max_seconds: float) -> ingest.Session:
+    """Zegar sesji przesuwa się o 1 s przy każdym odczycie: limit mija po ustalonej liczbie sprawdzeń."""
+    return ingest.Session(ingest.Limits(max_seconds=max_seconds), clock=itertools.count().__next__)
+
+
+def test_time_limit_stops_parsing_inside_a_file_with_a_gap_naming_the_line(evidence, monkeypatch):
+    monkeypatch.setattr(httplog, "CLOCK_EVERY_LINES", 2)
+    lines = [access_line("/" + UPLOAD_PHP)] + [access_line("/about/")] * 30 + [access_line("/wp-content/uploads/late.php")]
+    log = write(evidence / "logs" / "access.log", "".join(lines))
+    session = _clock_session(6)
+
+    scan = httplog.scan_logs(log.parent, session)
+
+    [gap] = [reason for reason in scan.cover.reasons if "Limit czasu analizy" in reason]
+    reached = int(re.search(r"access\.log przeanalizowany do wiersza (\d+)", gap)[1])
+    assert 1 <= reached < len(lines)
+    assert [found.observation.location.line for found in scan.detections] == [1]
+    [record] = [item for item in session.ledger if item.source == "logs"]
+    assert (record.status, record.size) == (ingest.ReadStatus.READ, log.stat().st_size)  # skrót obejmuje cały plik
+    assert cli._coverage("logs", scan.cover, session.ledger).status == "PARTIAL"
+
+
+def test_without_a_time_limit_hit_the_whole_file_is_parsed(evidence):
+    log = write(evidence / "logs" / "access.log", access_line("/about/") * 600 + access_line("/" + UPLOAD_PHP))
+
+    scan = httplog.scan_logs(log.parent, ingest.Session())
+
+    assert [found.observation.location.line for found in scan.detections] == [601]
+    assert not any("Limit czasu" in reason for reason in scan.cover.reasons)
+
+
+def test_flood_of_code_requests_does_not_suppress_the_uploads_rule():
+    """Przegląd M4, pkt 2: wyczerpana pula korelacji (404, wp-login.php) nie wyłącza reguły uploads."""
+    budget = httplog._Budget(left=3)
+    parser = LogFileParser(budget=budget)
+    parser.feed(access_line("/wp-login.php", status=404).encode() * 10 + access_line("/" + UPLOAD_PHP).encode())
+    parser.close()
+
+    assert budget.dropped == 8
+    assert [held.path for held, _ in parser.hits] == [UPLOAD_PHP]
+
+
+def test_flood_end_to_end_keeps_the_rule_finding(site, evidence, analyze, monkeypatch):
+    monkeypatch.setattr(httplog, "MAX_REQUESTS", 2)
+    flood = access_line("/xmlrpc.php", method="POST") * 20
+    logs = write(evidence / "logs" / "access.log", flood + access_line("/" + UPLOAD_PHP)).parent
+
+    run = analyze(site, logs=logs)
+
+    assert run.finding(RULE)["metadata"]["path"] == UPLOAD_PHP
+    assert not run.has_gap("żądań do plików kodu albo")  # bez ustaleń plikowych korelacja nie trzyma żadnego żądania
+
+
+def test_rule_findings_over_their_limit_become_a_gap_with_the_total(evidence, monkeypatch):
+    monkeypatch.setattr(httplog, "MAX_RULE_FINDINGS", 2)
+    log = write(evidence / "logs" / "access.log", access_line("/" + UPLOAD_PHP) * 5)
+
+    scan = httplog.scan_logs(log.parent, ingest.Session(), focus=correlate.Focus())
+
+    assert len(scan.detections) == 2 and scan.requests == []
+    assert any("Limit 2 wykryć reguły HTTP_EXECUTABLE_IN_UPLOADS wyczerpany" in reason and "było 5" in reason
+               for reason in scan.cover.reasons)
+    assert scan.cover.partial
+
+
+def test_focus_holds_only_requests_correlation_can_use(evidence):
+    near = "09/Nov/2026:02:14:01 +0100"  # 01:14:01 UTC
+    log = write(evidence / "logs" / "access.log", "".join([
+        access_line("/wp-content/plugins/demo/x.php", when="01/Jan/2026:00:00:00 +0000"),
+        access_line("/wp-login.php", when="01/Jan/2026:00:00:00 +0000"),
+        access_line("/wp-login.php", when=near),
+        access_line("/wp-login.php", when="09/Nov/2026:01:29:02 +0000"),
+        access_line("/index.php", when="09/Nov/2026"),
+    ]))
+    mtime = int(correlate._ns("2026-11-09T01:14:01+00:00"))
+    focus = correlate.Focus(frozenset({"wp-content/plugins/demo/x.php"}), ((mtime - 900 * 10**9, mtime + 900 * 10**9),))
+
+    scan = httplog.scan_logs(log.parent, ingest.Session(), focus=focus)
+
+    assert [request.location.line for request in scan.requests] == [1, 3]
+
+
+@pytest.mark.parametrize("target", ["/wp-content/uploads/x.php%00.jpg", "/wp-content/uploads/a%2Fshell.php",
+                                    "/../wp-content/uploads/shell.php", "/wp-content/uploads/x.php/" + "a" * 5000],
+                         ids=["encoded-nul", "encoded-slash", "dot-dot-above-root", "too-long"])
+def test_unresolved_request_that_looks_like_code_degrades_the_coverage(site, evidence, analyze, target):
+    logs = write(evidence / "logs" / "access.log", access_line("/about/") + access_line(target)).parent
+
+    run = analyze(site, logs=logs)
+
+    assert run.coverage("logs")["status"] == "PARTIAL"
+    assert run.has_gap("1 żądań wygląda na żądania plików kodu") and run.has_gap("(pierwsze: access.log:2)")
+
+
+@pytest.mark.parametrize("name", ["a\u00a0b.php", "shell\t.php", "\u202egpj.php", "x\u200b.php"],
+                         ids=["nbsp", "tab", "right-to-left-override", "zero-width-space"])
+def test_webshell_name_with_invisible_or_control_characters_is_flagged_and_neutralised(site, evidence, analyze, name):
+    """Przegląd M4, pkt 3: dawniej ścieżka nie była przypisywana (nota), a pokrycie zostawało ANALYZED."""
+    encoded = "".join(f"%{byte:02X}" if byte > 0x7E or byte < 0x21 else chr(byte) for byte in name.encode())
+    logs = write(evidence / "logs" / "access.log", access_line("/wp-content/uploads/" + encoded)).parent
+
+    run = analyze(site, logs=logs)
+
+    path = run.finding(RULE)["metadata"]["path"]
+    assert path.startswith("wp-content/uploads/") and path.endswith(".php")
+    assert not any(char in run.json_text + run.html for char in "\u202e\u200b")
+    assert run.coverage("logs")["status"] == "ANALYZED"
+
+
+def test_log_escaped_file_name_is_correlated_with_the_real_file(site, evidence, analyze):
+    """Przegląd M4, pkt 4: Apache zapisuje bajty UTF-8 w ``%r`` jako ``\\xNN``."""
+    write(site / "wp-content/uploads/2026/11/sh\u00e9ll.php", "<?php // synthetic")
+    logs = write(evidence / "logs" / "access.log", access_line("/wp-content/uploads/2026/11/sh\\xc3\\xa9ll.php")).parent
+
+    run = analyze(site, logs=logs)
+
+    assert run.finding(RULE)["metadata"]["path"] == "wp-content/uploads/2026/11/sh\u00e9ll.php"
+    assert "CORRELATED_UPLOAD_REQUEST" in run.rules
+
+
+def test_path_bytes_outside_utf8_are_a_note(site, evidence, analyze):
+    logs = write(evidence / "logs" / "access.log", access_line("/wp-content/uploads/a\\xff.php")).parent
+
+    run = analyze(site, logs=logs)
+
+    assert RULE in run.rules and run.has_gap("1 żądań ma ścieżkę, której bajty po dekodowaniu nie są poprawnym UTF-8")
+
+
+@pytest.mark.parametrize("target", ['http://u:p\\"w@h.invalid/x.php', "http://u:p'w@h.invalid/x.php", "http://u:p<w@h.invalid/x.php",
+                                    "http://u:p>w@h.invalid/x.php", "https://a@b:" + CANARY + "@h.invalid/x.php"],
+                         ids=["double-quote", "apostrophe", "less-than", "greater-than", "at-in-password"])
+def test_userinfo_is_removed_from_the_uri_structurally(target):
+    """Przegląd M4, pkt 5: wzorzec ``redact`` zatrzymuje się na cudzysłowie i ``<``; host po ostatnim ``@`` zostaje."""
+    uri = httplog.redacted_uri(target)
+
+    assert uri.endswith("://[usunięto]@h.invalid/x.php")
+    assert "p'w" not in uri and "p<w" not in uri and "p>w" not in uri and "w@" not in uri and CANARY not in uri
+
+
+def test_absolute_form_without_userinfo_keeps_the_host():
+    assert httplog.redacted_uri("http://site.invalid/wp-content/uploads/x.php?a=1") == "http://site.invalid/wp-content/uploads/x.php?[usunięto]"

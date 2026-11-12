@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from . import filerules, models
+from . import filerules, models, redact
 from .analysis import Detection
 
 DEFAULT_WINDOW_SECONDS = 900
@@ -40,6 +40,48 @@ class _File:
     observations: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class Focus:
+    """Które żądania do plików kodu korelacja może wykorzystać (ADR 0007 pkt 7, przegląd M4): ścieżki plików kodu
+    z ustaleniem plikowym (``SAME_PATH``) i przedziały czasu ``mtime`` ± (okno + niepewność zegara) plików z ustaleniem
+    (``NEAR_IN_TIME``). Parser logów trzyma w pamięci tylko żądania pasujące do niego, więc zalew żądań do innych
+    ścieżek kodu nie wyczerpuje limitu żądań. Ścieżki są po ``redact.neutralise``, jak atrybut ``path`` żądania."""
+    paths: frozenset[str] = frozenset()
+    windows: tuple[tuple[int, int], ...] = ()  # rozłączne, rosnące przedziały [początek, koniec] w ns od epoki
+
+    def wants(self, path: str, timestamp_utc: str | None) -> bool:
+        if path in self.paths:
+            return True
+        if timestamp_utc is None or not self.windows:
+            return False
+        moment = _ns(timestamp_utc)
+        at = bisect.bisect_right(self.windows, (moment, float("inf"))) - 1
+        return at >= 0 and self.windows[at][0] <= moment <= self.windows[at][1]
+
+
+def focus(detections: list[Detection], evidence: Mapping[str, models.Evidence], window_seconds: int = DEFAULT_WINDOW_SECONDS,
+          uncertainty: int | None = None) -> Focus:
+    """``Focus`` z ustaleń plikowych znanych przed analizą logów; ``uncertainty`` to niepewność zegara logów w sekundach.
+
+    Obejmuje wszystko, czego ``correlate`` może użyć: ``SAME_PATH`` dla plików kodu i ``NEAR_IN_TIME`` z tą samą
+    granicą okna (włącznie) poszerzoną o niepewność zegara zadeklarowaną dla wszystkich żądań przebiegu.
+    """
+    reach = (window_seconds + max(uncertainty or 0, 0)) * 10**9
+    paths, spans = set(), []
+    for file in _flagged_files(detections, evidence):
+        if _is_code(file.path):
+            paths.add(redact.neutralise(file.path))
+        if file.mtime_ns is not None:
+            spans.append((file.mtime_ns - reach, file.mtime_ns + reach))
+    merged: list[tuple[int, int]] = []
+    for start, stop in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], stop))
+        else:
+            merged.append((start, stop))
+    return Focus(frozenset(paths), tuple(merged))
+
+
 def detection_findings(detections: Iterable[Detection]) -> list[models.Finding]:
     """Jedno ustalenie na wykrycie."""
     return [models.Finding(found.rule, found.category, found.severity, found.confidence, found.explanation, (found.observation.id,))
@@ -48,12 +90,17 @@ def detection_findings(detections: Iterable[Detection]) -> list[models.Finding]:
 
 def _upload_correlation(detections: list[Detection]) -> tuple[list[models.Finding], set[str]]:
     """``SAME_PATH`` dla pliku wykonywalnego w uploads i wykrycia z logu (zachowanie sprzed ADR 0007)."""
-    uploads = {found.observation.location.path: found.observation for found in detections if found.rule == "EXECUTABLE_IN_UPLOADS"}
+    # Atrybut ``path`` żądania jest po ``redact.neutralise``; ścieżka pliku przechodzi to samo, żeby nazwy ze znakami
+    # sterującymi albo zmiany kierunku pisma (zapisane w raporcie jako U+FFFD) nadal się spotykały.
+    uploads = {redact.neutralise(found.observation.location.path): found.observation for found in detections
+               if found.rule == "EXECUTABLE_IN_UPLOADS" and found.observation.location.path is not None}
     findings, paths = [], set()
     for found in detections:
         if found.rule != "HTTP_EXECUTABLE_IN_UPLOADS":
             continue
-        path = str(found.observation.attributes["uri"]).split("?")[0].lstrip("/")
+        # ``path`` z parsera logów jest znormalizowany i nieredagowany; ``uri`` po redakcji może mieć zamaskowaną nazwę pliku.
+        attributes = found.observation.attributes
+        path = str(attributes.get("path") or str(attributes["uri"]).split("?")[0]).lstrip("/")
         if path in uploads:
             paths.add(path)
             findings.append(models.Finding(
@@ -141,7 +188,8 @@ def correlate(detections: list[Detection], requests: Iterable[models.Observation
     same_path, near, referenced = [], [], {}
 
     for file in _flagged_files(detections, evidence):
-        matched = by_path.get(file.path, []) if _is_code(file.path) and file.path not in upload_paths else []
+        shown_path = redact.neutralise(file.path)
+        matched = by_path.get(shown_path, []) if _is_code(file.path) and shown_path not in upload_paths else []
         if matched:
             shown = matched[:MAX_REQUESTS_PER_FINDING]
             referenced.update((request.id, request) for request in shown)
@@ -189,8 +237,11 @@ def timeline(detections: list[Detection], evidence: dict[str, models.Evidence],
             events.append(models.TimelineEvent(
                 fact.timestamp_utc, models.TimeSource.LOG, "HTTP access log; synchronizacja zegara niezweryfikowana", found.rule,
                 models.describe_location(fact.location.to_dict()), "medium", fact.evidence_id, fact.id))
+    # Ten sam wiersz logu bywa i wykryciem reguły uploads, i żądaniem korelacji: na osi czasu ma być raz.
+    shown = {(found.observation.evidence_id, found.observation.location) for found in detections
+             if found.rule == "HTTP_EXECUTABLE_IN_UPLOADS" and found.observation.timestamp_utc is not None}
     for request in requests:
-        if request.timestamp_utc is not None:
+        if request.timestamp_utc is not None and (request.evidence_id, request.location) not in shown:
             events.append(models.TimelineEvent(
                 request.timestamp_utc, models.TimeSource.LOG, _request_basis(request), TIMELINE_EVENT,
                 models.describe_location(request.location.to_dict()), "medium", request.evidence_id, request.id))

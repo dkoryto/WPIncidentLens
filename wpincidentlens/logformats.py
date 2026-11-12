@@ -18,6 +18,7 @@ import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import NamedTuple
 from datetime import datetime, timedelta, timezone
 
 from . import models
@@ -50,16 +51,20 @@ _LAYOUTS = {
     "common": re.compile(_PREFIX + _TAIL),
     "combined": re.compile(_PREFIX + f" {_QUOTED} {_QUOTED}" + _TAIL),
 }
-_METHOD = re.compile(r"[A-Z]{1,20}")
+_METHOD = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,32}")  # token z RFC 7230; PHP dostaje każdą metodę
 _PROTOCOL = re.compile(r"HTTP/[0-9](?:\.[0-9])?")
 _HOSTNAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}+)")
 _CLF_TIME = re.compile(r"([0-9]{2})/([A-Z][a-z]{2})/([0-9]{4}):([0-9]{2}):([0-9]{2}):([0-9]{2}) ([+-])([0-9]{2})([0-9]{2})")
 _ISO_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})?")
 _MONTHS = {name: number for number, name in enumerate(
     ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), start=1)}
-_SCHEME_AUTHORITY = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{0,31}://[^/?#]*+")
+SCHEME_AUTHORITY = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]{0,31})://(?P<authority>[^/?#]*+)")
 _SLASHES = re.compile(r"/{2,}")
-_PERCENT = re.compile(r"%([0-9A-Fa-f]{2})")
+_PERCENT = re.compile(rb"%([0-9A-Fa-f]{2})")
+_ENCODED_SLASH = re.compile(rb"%2[Ff]")
+# Ucieczki, którymi Apache (``ap_escape_logitem``) i Nginx zapisują w ``%r`` bajty spoza ASCII drukowalnego.
+_LOG_ESCAPE = re.compile(rb'\\(?:x([0-9A-Fa-f]{2})|(["\\bnrtv]))')
+_LOG_ESCAPED_BYTES = {b'"': b'"', b"\\": b"\\", b"b": b"\b", b"n": b"\n", b"r": b"\r", b"t": b"\t", b"v": b"\v"}
 _MAX_BYTES_DIGITS = 18  # liczba bajtów odpowiedzi poniżej 10**18: mieści się w int64 raportu
 _JSON_REQUIRED = {"time": str, "remote_addr": str, "method": str, "uri": str, "status": int}
 _JSON_OPTIONAL = {"bytes", "forwarded_for"}
@@ -77,6 +82,7 @@ class HttpRecord:
     status: int
     bytes: int | None
     forwarded_for: str | None = None  # tylko json@1
+    escaped: bool = False  # cel z ucieczkami logu Apache/Nginx (\xNN, \", \\): formaty tekstowe
 
 
 class _Rejected(ValueError):
@@ -102,7 +108,7 @@ def _text_record(fmt: str, line: str) -> HttpRecord:
     method, target = _request_line(found["request"])
     stamp = found["time"][:MAX_TIME_CHARS]
     return HttpRecord(_client(found["client"]), stamp, _clf_time_utc(stamp), "second", method, target,
-                      _status(int(found["status"]) if len(found["status"]) == 3 else 0), _size(found["bytes"]))
+                      _status(int(found["status"]) if len(found["status"]) == 3 else 0), _size(found["bytes"]), escaped=True)
 
 
 def _request_line(request: str) -> tuple[str, str]:
@@ -224,43 +230,58 @@ def _iso_time_utc(stamp: str) -> tuple[str | None, str]:
 
 # --- ścieżka i adres klienta --------------------------------------------------------------------
 
-def request_path(target: str) -> str | None:
-    """Cel żądania → ścieżka względna bez wiodącego ``/`` (pkt 4); ``None``, gdy ścieżki nie da się bezpiecznie ustalić.
+class Resolved(NamedTuple):
+    """Wynik ``resolve_target``: ścieżka (``None``, gdy nie da się jej przypisać do pliku), czy bajty ścieżki po
+    dekodowaniu nie były poprawnym UTF-8 (``lossy``) i zdekodowany tekst celu bez query (do oceny, czy cel
+    nieprzypisany wygląda na żądanie kodu)."""
+    path: str | None
+    lossy: bool
+    text: str
 
-    Kolejno: usunięcie schematu i hosta (forma absolutna), query i fragmentu; jednokrotne dekodowanie ``%XX``;
-    scalenie ``//``; rozwiązanie segmentów ``.`` i ``..`` tak jak serwer przed odwzorowaniem na plik. ``None``:
-    ``..`` wychodzi ponad katalog główny, znak sterujący po dekodowaniu, ścieżka dłuższa niż ``MAX_PATH_CHARS``
-    albo cel w innej formie (np. ``*``). Wielkość liter zostaje; o rozszerzeniu decydują reguły bez względu na nią.
+
+def request_path(target: str, escaped: bool = False) -> str | None:
+    """Cel żądania → ścieżka względna bez wiodącego ``/`` (pkt 4); ``None``, gdy ścieżki nie da się bezpiecznie ustalić."""
+    return resolve_target(target, escaped).path
+
+
+def resolve_target(target: str, escaped: bool = False) -> Resolved:
+    """Cel żądania → ``Resolved`` (ADR 0007 pkt 4).
+
+    Kolejno: usunięcie schematu i hosta (forma absolutna), query i fragmentu; dla formatów tekstowych (``escaped``)
+    odwrócenie ucieczek logu (``\\xNN``, ``\\"``, ``\\\\``, ``\\n`` …) na bajtach; jednokrotne dekodowanie ``%XX``
+    na bajtach i UTF-8 (bajty niepoprawne → znak zastępczy, ``lossy``); scalenie ``//``; rozwiązanie segmentów
+    ``.`` i ``..`` tak jak serwer przed odwzorowaniem na plik. ``path`` jest ``None``, gdy ``..`` wychodzi ponad katalog
+    główny, ścieżka zawiera bajt NUL albo zakodowany ukośnik ``%2F`` (domyślnie odrzucany przez Apache), jest dłuższa
+    niż ``MAX_PATH_CHARS`` albo cel ma inną formę (np. ``*``). Inne znaki sterujące i formatujące zostają: wywołujący
+    neutralizuje je przed zapisem do raportu. Wielkość liter zostaje; o rozszerzeniu decydują reguły bez względu na nią.
     """
-    if (authority := _SCHEME_AUTHORITY.match(target)) is not None:
+    if (authority := SCHEME_AUTHORITY.match(target)) is not None:
         target = target[authority.end():] or "/"
     cut = min((at for at in (target.find("?"), target.find("#")) if at >= 0), default=len(target))
-    raw = target[:cut]
-    if not raw.startswith("/"):
-        return None
-    decoded = _percent_decoded(raw)
-    if len(decoded) > MAX_PATH_CHARS or not decoded.isprintable():
-        return None
+    raw = target[:cut].encode("utf-8", "surrogatepass")
+    if escaped:
+        raw = _LOG_ESCAPE.sub(_log_byte, raw)
+    decoded_bytes = _PERCENT.sub(lambda found: bytes((int(found[1], 16),)), raw)
+    try:
+        decoded, lossy = decoded_bytes.decode("utf-8"), False
+    except UnicodeDecodeError:
+        decoded, lossy = decoded_bytes.decode("utf-8", "replace"), True
+    if (not raw.startswith(b"/") or len(decoded) > MAX_PATH_CHARS or "\0" in decoded
+            or _ENCODED_SLASH.search(raw) is not None):
+        return Resolved(None, lossy, decoded)
     resolved: list[str] = []
     for segment in _SLASHES.sub("/", decoded).split("/")[1:]:
         if segment == "..":
             if not resolved:
-                return None
+                return Resolved(None, lossy, decoded)
             resolved.pop()
         elif segment not in ("", "."):
             resolved.append(segment)
-    return "/".join(resolved)
+    return Resolved("/".join(resolved), lossy, decoded)
 
 
-def _percent_decoded(text: str) -> str:
-    """Jednokrotne dekodowanie ``%XX`` na bajtach, potem UTF-8 ze znakami zastępczymi (bez ``urllib``: S-15)."""
-    out, done = bytearray(), 0
-    for found in _PERCENT.finditer(text):
-        out += text[done:found.start()].encode("utf-8")
-        out.append(int(found[1], 16))
-        done = found.end()
-    out += text[done:].encode("utf-8")
-    return out.decode("utf-8", "replace")
+def _log_byte(found: re.Match[bytes]) -> bytes:
+    return bytes((int(found[1], 16),)) if found[1] is not None else _LOG_ESCAPED_BYTES[found[2]]
 
 
 def ip_or_none(text: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
