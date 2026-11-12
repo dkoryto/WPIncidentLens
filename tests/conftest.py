@@ -92,16 +92,16 @@ def _quote(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
-def admin_sql(*logins: str, caps: str = ADMIN_CAPS, password: str = "x") -> str:
+def admin_sql(*logins: str, caps: str = ADMIN_CAPS, password: str = "x", prefix: str = "wp_") -> str:
     """mysqldump-podobne INSERT-y: każdy login dostaje wiersz users i usermeta z rolą."""
     users = ",".join(f"({i},'{login}','{password}','{login}','{login}@example.invalid','','2026-01-01 00:00:00','',0,'{login}')"
                      for i, login in enumerate(logins, start=1))
-    meta = ",".join(f"({i},{i},'wp_capabilities','{caps}')" for i, _ in enumerate(logins, start=1))
-    return f"INSERT INTO `wp_users` VALUES {users};\nINSERT INTO `wp_usermeta` VALUES {meta};\n"
+    meta = ",".join(f"({i},{i},'{prefix}capabilities','{_quote(caps)}')" for i, _ in enumerate(logins, start=1))
+    return f"INSERT INTO `{prefix}users` VALUES {users};\nINSERT INTO `{prefix}usermeta` VALUES {meta};\n"
 
 
-def option_sql(name: str, value: str) -> str:
-    return ("INSERT INTO `wp_options` (`option_id`,`option_name`,`option_value`,`autoload`) "
+def option_sql(name: str, value: str, prefix: str = "wp_") -> str:
+    return (f"INSERT INTO `{prefix}options` (`option_id`,`option_name`,`option_value`,`autoload`) "
             f"VALUES (1,'{_quote(name)}','{_quote(value)}','yes');\n")
 
 

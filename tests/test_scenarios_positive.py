@@ -46,7 +46,6 @@ def test_p3_admin_outside_trusted_list_is_flagged_without_attribution(site, evid
     assert "ATTACKER" not in run.json_text.upper()
 
 
-@pytest.mark.xfail(strict=True, reason="brak porównania dwóch migawek DB i reguły NEW_SINCE_BASELINE (#7)")
 def test_p3_admin_added_since_baseline_is_new_since_baseline(site, evidence, analyze):
     database = write(evidence / "db.sql", admin_sql("siteadmin", "newadmin"))
 
@@ -59,8 +58,7 @@ def test_p3_admin_added_since_baseline_is_new_since_baseline(site, evidence, ana
     '<script>location.href="https://redirect.example.net/"</script>',
     '<iframe src="https://redirect.example.net/"></iframe>',
     '<a href="javascript:location.replace(1)">x</a>',
-    pytest.param('<meta http-equiv="refresh" content="0;url=https://redirect.example.net/">',
-                 marks=pytest.mark.xfail(strict=True, reason="redirect meta-refresh nie jest objęty regułą opcji (#7)")),
+    '<meta http-equiv="refresh" content="0;url=https://redirect.example.net/">',
 ], ids=["script", "iframe", "javascript-scheme", "meta-refresh"])
 def test_p4_option_with_redirect_markup_is_a_database_finding(site, evidence, analyze, value):
     database = write(evidence / "db.sql", option_sql("custom_footer", value))
@@ -70,7 +68,6 @@ def test_p4_option_with_redirect_markup_is_a_database_finding(site, evidence, an
     assert run.finding("SUSPICIOUS_DB_MARKUP")["source"] == "wp_options:custom_footer"
 
 
-@pytest.mark.xfail(strict=True, reason="finding DB nie zawiera cytatu wartości, więc nie ma też redakcji (#7)")
 def test_p4_finding_quotes_option_value_with_secret_redacted(site, evidence, analyze):
     value = f'<script>location.href="https://redirect.example.net/?key={CANARY}"</script>'
     database = write(evidence / "db.sql", option_sql("custom_footer", value))

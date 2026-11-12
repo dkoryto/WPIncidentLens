@@ -560,11 +560,26 @@ def test_s11_serialized_php_object_is_inert_text(site, evidence, analyze):
     assert "SyntheticEvil" not in run.everything
 
 
-@pytest.mark.xfail(strict=True, reason="rola wykrywana podłańcuchem 'administrator' bez parsowania serializacji PHP: b:0 liczy się jak b:1 (#7)")
-def test_s11_revoked_administrator_capability_is_not_an_admin(site, evidence, analyze):
+def test_s11_administrator_role_key_with_false_value_is_still_an_admin(site, evidence, analyze):
+    """WordPress wyznacza role po kluczach tablicy uprawnień, więc ``b:0`` pod kluczem roli nie ukrywa administratora."""
     database = write(evidence / "db.sql", admin_sql("editor", caps='a:2:{s:6:"editor";b:1;s:13:"administrator";b:0;}'))
 
-    assert analyze(site, database=database, known_admins=("siteadmin",)).findings == []
+    run = analyze(site, database=database, known_admins=("siteadmin",))
+
+    assert run.finding("UNRECOGNIZED_ADMIN")["metadata"] == {
+        "username": "editor", "user_id": "1", "registered": "2026-01-01 00:00:00", "role_value": "false"}
+
+
+@pytest.mark.parametrize("caps", [
+    'a:1:{s:6:"editor";s:13:"administrator";}', 'a:1:{s:17:"not_administrator";b:1;}', 'a:1:{i:0;s:13:"administrator";}',
+], ids=["word-as-value", "word-inside-another-key", "word-in-a-list"])
+def test_s11_word_administrator_outside_the_role_key_is_not_an_admin(site, evidence, analyze, caps):
+    database = write(evidence / "db.sql", admin_sql("editor", caps=caps))
+
+    run = analyze(site, database=database, known_admins=("siteadmin",))
+
+    assert run.findings == []
+    assert run.coverage("database")["status"] == "ANALYZED"
 
 
 # --- S-12: aktywny HTML w wartościach trafiających do raportu ------------------------------------

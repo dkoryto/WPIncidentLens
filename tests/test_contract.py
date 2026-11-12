@@ -509,7 +509,7 @@ def test_published_schema_is_a_valid_draft_2020_12_schema(schema):
 def test_report_generated_for_the_fixtures_validates_against_the_published_schema(demo_case, analyze):
     report = analyze_demo(analyze, demo_case).report
 
-    assert (len(report["findings"]), len(report["observations"]), len(report["evidence"])) == (6, 6, 6)
+    assert (len(report["findings"]), len(report["observations"]), len(report["evidence"])) == (6, 7, 6)  # siódma obserwacja: znany administrator w inwentarzu
     assert schema_errors(report) == []
 
 

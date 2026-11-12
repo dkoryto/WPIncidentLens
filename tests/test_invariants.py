@@ -23,7 +23,7 @@ def _sources(package: Path) -> list[Path]:
 SOURCES = _sources(PACKAGE)
 NETWORK_MODULES = {"socket", "ssl", "urllib", "http", "ftplib", "smtplib", "asyncio", "requests", "httpx", "xmlrpc"}
 EXECUTION_MODULES = {"subprocess", "multiprocessing", "ctypes", "pickle", "marshal", "importlib", "runpy", "pty"}
-DEMO_RULES = {"EXECUTABLE_IN_UPLOADS", "SUSPICIOUS_PHP_EVAL_DECODE", "UNRECOGNIZED_ADMIN",
+DEMO_RULES = {"EXECUTABLE_IN_UPLOADS", "SUSPICIOUS_PHP_EVAL_DECODE", "NEW_SINCE_BASELINE",
               "SUSPICIOUS_DB_MARKUP", "HTTP_EXECUTABLE_IN_UPLOADS", "CORRELATED_UPLOAD_REQUEST"}
 
 

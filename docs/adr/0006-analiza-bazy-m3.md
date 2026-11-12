@@ -38,3 +38,12 @@ Kod bazy jest poza `cli.py`, w modułach bez dostępu do systemu plików (straż
 - Krok przygotowawczy (podział na moduły) nie zmienia zachowania: 2138 passed, 5 skipped, 7 xfailed przed i po.
 - Zmiana w `ingest.py` (podawanie porcji do parsera) jest krytyczna dla bezpieczeństwa i wymaga osobnego przeglądu.
 - Rollback: revert commitów.
+
+## Doprecyzowania z implementacji reguł (dbrules, 2026-11-12)
+
+- **Pkt 4, wybór prefiksu.** Kolejność: para `users` + `usermeta` potwierdzona kluczem `<prefiks>capabilities`, potem sama para, potem dowolna tabela rdzenia (zrzut częściowy). Przy kilku kandydatach wygrywa ten, od którego zaczynają się wszystkie pozostałe; gdy takiego nie ma, reguły nie są stosowane do żadnego prefiksu (luka). Tabela wtyczki z przyrostkiem `users`/`options` jest pomijana bez luki.
+- **Pkt 5, długości łańcuchów.** Długość to bajty UTF-8 tekstu zrzutu i musi zgadzać się dokładnie. Niezgodność (zrzut przekodowany z innego zestawu znaków) to błąd odczytu i luka; długości nie zgaduje się w znakach.
+- **Pkt 5, rola wynika z klucza (zastępuje ostatnie zdanie pkt 5; decyzja właściciela z 2026-11-12).** Administratorem jest konto, którego tablica uprawnień ma **klucz** `administrator`, niezależnie od wartości. Powód: WordPress wyznacza role po kluczach tablicy uprawnień (`WP_User::get_role_caps()`: `array_keys( $this->caps )` filtrowane przez `is_role`), a potem dołącza uprawnienia roli; wartość fałszywa pod kluczem roli ich nie odbiera. Liczenie `b:0` jako „nie administrator” dawałoby sposób na ukrycie konta. Fałszywy alarm na nietypowym wierszu jest w narzędziu triage tańszym błędem. Wartość fałszywa jest widoczna: atrybut `role_value: "false"`, zdanie w wyjaśnieniu ustalenia i nota pokrycia.
+- **Pkt 7, dwie listy.** Zaufane są nazwy z obu list. Konto spoza nich daje jedno ustalenie: `NEW_SINCE_BASELINE`, gdy baseline ma niepustą listę `known_admins`, inaczej `UNRECOGNIZED_ADMIN`. `RowAnalysis.finish` i `database.scan_database` mają opcjonalny argument `baseline_admins`.
+- **Pkt 6.** Obserwacja konta ma jeden rodzaj, `ADMINISTRATOR_ACCOUNT`, także gdy powstaje z niej ustalenie (zastępuje `ADMINISTRATOR_ROLE_ROW`). Dodatkowo inwentarz `ACTIVE_PLUGIN` z opcji `active_plugins`.
+- **Pkt 8.** Redagowany jest cały tekst, dopiero potem wycinany fragment (≤ 200 znaków). Raport HTML nie pokazuje atrybutów obserwacji, więc cytat jest tylko w `report.json`.

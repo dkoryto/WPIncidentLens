@@ -11,8 +11,8 @@ MAX_SQL_BYTES = 20 * 1024 * 1024
 MAX_ROWS = 100000
 
 
-def scan_database(path: Path, known_admins: set[str],
-                  session: ingest.Session) -> tuple[list[Detection], SourceCoverage, list[models.Observation]]:
+def scan_database(path: Path, known_admins: set[str], session: ingest.Session,
+                  baseline_admins: set[str] | None = None) -> tuple[list[Detection], SourceCoverage, list[models.Observation]]:
     """Trzeci wynik to fakty bez ustalenia (np. inwentarz). Zrzut, którego nie udało się bezpiecznie odczytać, nie ma skrótu w rejestrze sesji — pokrycie wychodzi wtedy ``FAILED``."""
     cover, findings, facts = SourceCoverage(), [], []
     item = session.read_file(path, "database", keep_limit=MAX_SQL_BYTES)
@@ -45,7 +45,7 @@ def scan_database(path: Path, known_admins: set[str],
                    "analiza DB nie objęła danych WordPressa")
     if dropped:
         cover.degrade(f"Pominięto {len(dropped)} niedomkniętych instrukcji INSERT (zrzut ucięty lub uszkodzony)")
-    findings.extend(rules.finish(cover, known_admins))
+    findings.extend(rules.finish(cover, known_admins, baseline_admins))
     facts.extend(rules.observations)
     unanalysed: Counter = Counter()
     unsupported = sum(1 for start in sqldump._write_statement_starts(sql, unanalysed) if sqldump._INSERT_HEAD.match(sql, start) is None)

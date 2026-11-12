@@ -14,7 +14,7 @@ def test_poc_end_to_end(tmp_path):
     assert code==3  # plik PHP w uploads nie ma zaufanej referencji: zakres niepełny (ADR 0005, pkt 6)
     data=json.loads((out/'report.json').read_text())
     rules={x['rule_id'] for x in data['findings']}
-    assert {'EXECUTABLE_IN_UPLOADS','SUSPICIOUS_PHP_EVAL_DECODE','UNRECOGNIZED_ADMIN',
+    assert {'EXECUTABLE_IN_UPLOADS','SUSPICIOUS_PHP_EVAL_DECODE','NEW_SINCE_BASELINE',  # lista adminów pochodzi z baseline
             'SUSPICIOUS_DB_MARKUP','HTTP_EXECUTABLE_IN_UPLOADS','CORRELATED_UPLOAD_REQUEST'} <= rules
     assert data['assessment']=='SUSPICIOUS'
     assert len(data['evidence'])>=5
