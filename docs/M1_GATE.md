@@ -21,6 +21,13 @@ Powiązane dokumenty: `docs/TEST_MATRIX.md` (wyniki i lista testów), `docs/THRE
 >
 > Stan aktualny: `docs/TEST_MATRIX.md`, `docs/THREAT_MODEL.md`, `docs/REQUIREMENTS_TRACEABILITY.md`, `docs/PROGRESS.md`.
 
+> **Nota 2026-11-12 (po M6, `main` `2db956c`).** Po scaleniu M6 (PR #61–#66, #68, #69, ADR 0009) nieaktualne są następujące stwierdzenia tego raportu:
+>
+> - §4 („Kontener niezmierzony”) i §7 („kontener nie był mierzony”): izolację kontenera mierzy zadanie CI `container` (`.github/workflows/container.yml`, sonda `docker/probe.py`, runner `ubuntu-24.04`) — na `main` `2db956c` 21/21 sprawdzeń PASS (UID/GID 65532, rootfs i dowody tylko do odczytu, `/tmp` `noexec`, capability 0, `NoNewPrivs`, tylko `lo`, limity cgroup). Pomiar odbywa się wyłącznie w CI, nie lokalnie.
+> - §5 (ADR 0002 D9 „odłożona do M6”): ADR 0009 pkt 6 rozstrzygnął D9 — izolacja parserów w osobnym procesie **nie teraz**.
+> - §5 i §8 (Issue #14 i #15 „zamknięte”): oba zostały ponownie otwarte 2026-11-12; kod M5 i M6 jest scalony, zamknięcie należy do właściciela. Tabela etapów w §8: M6 wykonany w kodzie (PR #61–#66, #68, #69), w tym fuzzing ze strukturą, benchmarki i pomiar kontenera; Linux mierzony tylko w CI.
+> - §7 (warunek B10): pomiar kontenera się odbył, ale zakaz pracy na realnym materiale trwa — ADR 0009 pkt 7 przedłuża go do bramki GO/NO-GO (M7) z przeglądem człowieka; bramka M1 nadal nie jest zatwierdzona przez właściciela.
+
 ## 1. Co uruchomiono
 
 Świeże środowisko (`uv venv --python 3.12`, `pip install -e '.[dev]'`), macOS 27.0.1 (Darwin 27.0.0, arm64, APFS), Python 3.12.11, pytest 8.4.2, ruff 0.8.6.
