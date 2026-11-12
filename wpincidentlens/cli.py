@@ -188,7 +188,7 @@ def _timeline(detections: list[Detection], evidence: dict[str, models.Evidence])
 
 
 def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline: dict | None, known_admins: set[str],
-                  session: ingest.Session, core: integrity.CoreChecksums | None = None,
+                  session: ingest.Session, core: integrity.CoreChecksums | None = None, database_format: str = "sql",
                   ) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation]]:
     """Uruchamia skanery podanych źródeł; źródło niepodane dostaje powód zamiast skanu. Trzeci wynik: fakty bez ustalenia."""
     cover = {source: SourceCoverage(provided=False) for source in models.SOURCES}
@@ -196,7 +196,7 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
     detections, cover["files"], facts = scan.detections, scan.cover, list(scan.observations)
     if database:
         found, cover["database"], database_facts = database_scan.scan_database(
-            database, known_admins, session, baseline_admins=set((baseline or {}).get("known_admins", [])))
+            database, known_admins, session, baseline_admins=set((baseline or {}).get("known_admins", [])), fmt=database_format)
         detections.extend(found)
         facts.extend(database_facts)
     else:
@@ -240,17 +240,19 @@ def _findings(detections: list[Detection]) -> list[models.Finding]:
 
 def compose_report(root: Path, database: Path | None, logs: Path | None,
                    baseline: dict | None, known_admins: set[str], case_id: str, *,
-                   session: ingest.Session | None = None, core: integrity.CoreChecksums | None = None) -> dict:
+                   session: ingest.Session | None = None, core: integrity.CoreChecksums | None = None,
+                   database_format: str = "sql") -> dict:
     """Zwraca raport ``poc-1`` jako słownik gotowy do zapisu.
 
     ``baseline`` musi pochodzić z ``load_baseline``, a ``core`` z ``load_core_checksums`` tej samej sesji.
+    ``database_format`` (``sql`` albo ``jsonl``) wybiera parser zrzutu bazy; formatu nie zgaduje się po treści.
     """
     session = session or _session()
     if baseline is not None and integrity.baseline_record(session, core) is None:
         raise ValueError("baseline musi być wczytany przez load_baseline w tej samej sesji odczytu")
     if core is not None and core.record not in session.ledger:
         raise ValueError("manifest sum musi być wczytany przez load_core_checksums w tej samej sesji odczytu")
-    detections, cover, facts = _scan_sources(root, database, logs, baseline, known_admins, session, core)
+    detections, cover, facts = _scan_sources(root, database, logs, baseline, known_admins, session, core, database_format)
     session_gaps = session.finish()  # od tej chwili rejestr sesji ma ostateczne statusy (także CHANGED z ponownej weryfikacji)
     for source, text in session.integrity_notes:
         for name in [source] if source else [name for name in models.SOURCES if cover[name].provided]:
@@ -286,6 +288,9 @@ def main(argv: list[str] | None = None) -> int:
                "Kod nie jest oceną kompromitacji: ocenę podaje pole assessment w report.json.")
     parser.add_argument("--files", type=Path, required=True)
     parser.add_argument("--database", type=Path)
+    parser.add_argument("--database-format", choices=database_scan.FORMATS, default="sql",
+                        help="Format pliku --database: zrzut SQL (INSERT … VALUES) albo JSONL, jeden obiekt "
+                             '{"table": …, "row": {…}} na wiersz; nie jest zgadywany po treści (%(default)s)')
     parser.add_argument("--logs", type=Path)
     parser.add_argument("--baseline", type=Path, help="Zaufany JSON: {files: {ścieżka: sha256}, known_admins: [...]} ")
     parser.add_argument("--core-checksums", type=Path,
@@ -313,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         context = case.build(
-            files=args.files, database=args.database, logs=args.logs, baseline=args.baseline, output=args.output,
+            files=args.files, database=args.database, database_format=args.database_format, logs=args.logs, baseline=args.baseline, output=args.output,
             case_id=args.case_id, operator_id=args.operator_id, known_admins=args.known_admin,
             allow_hardlinks=args.allow_hardlinks, reverify=not args.no_reverify, core_checksums=args.core_checksums,
             limits={"max_files": args.max_files, "max_entries": args.max_entries, "max_file_bytes": args.max_file_bytes,
@@ -335,7 +340,8 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as invalid:
             parser.error(f"--core-checksums: {invalid}")
     admins = set(context.known_admins) | set((baseline or {}).get("known_admins", []))
-    output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session, core=core)
+    output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session, core=core,
+                            database_format=context.database_format)
     code = exit_code(output)
     try:
         report.write(context.output, output, context.describe(), code)
