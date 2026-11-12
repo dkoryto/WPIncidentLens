@@ -11,7 +11,7 @@ from pathlib import Path
 from . import case, files, ingest, integrity, models, report
 from . import database as database_scan
 from .analysis import Detection, SourceCoverage
-from .correlate import findings_of as _findings, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
+from .correlate import DEFAULT_WINDOW_SECONDS, correlate, detection_findings, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
 from .httplog import LOG_PATTERN, MAX_LOG_BYTES, scan_logs  # noqa: F401  (testy wołają je przez cli)
 from .sqldump import iter_insert_rows  # noqa: F401  (ADR 0001: testy wołają go przez cli)
 from .analysis import evidence_of as _evidence
@@ -104,10 +104,21 @@ def _coverage(source: str, cover: SourceCoverage, ledger: list[ingest.Evidence])
     return models.Coverage(source, status, entries, tuple(reasons))
 
 
+def _log_scan(result) -> tuple[list[Detection], SourceCoverage, list[models.Observation]]:
+    """Wynik ``scan_logs``: krotka ``(detections, cover)`` albo ``LogScan(detections, cover, requests)`` z ADR 0007 pkt 7."""
+    if isinstance(result, tuple) and len(result) == 2:
+        return result[0], result[1], []
+    return result.detections, result.cover, list(result.requests)
+
+
 def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline: dict | None, known_admins: set[str],
                   session: ingest.Session, core: integrity.CoreChecksums | None = None, database_format: str = "sql",
-                  ) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation]]:
-    """Uruchamia skanery podanych źródeł; źródło niepodane dostaje powód zamiast skanu. Trzeci wynik: fakty bez ustalenia."""
+                  ) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation], list[models.Observation]]:
+    """Uruchamia skanery podanych źródeł; źródło niepodane dostaje powód zamiast skanu.
+
+    Trzeci wynik: fakty bez ustalenia; czwarty: obserwacje ``HTTP_REQUEST`` z logów, materiał korelacji.
+    """
+    requests: list[models.Observation] = []
     cover = {source: SourceCoverage(provided=False) for source in models.SOURCES}
     scan = files.scan_files(root, baseline, session, core)
     detections, cover["files"], facts = scan.detections, scan.cover, list(scan.observations)
@@ -119,7 +130,7 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
     else:
         cover["database"].note("Brak zrzutu bazy danych")
     if logs:
-        found, cover["logs"] = scan_logs(logs, session)
+        found, cover["logs"], requests = _log_scan(scan_logs(logs, session))
         detections.extend(found)
     else:
         cover["logs"].note("Brak logów HTTP")
@@ -135,38 +146,42 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
         if core is not None:
             cover["baseline"].note("Manifest sum rdzenia (MD5) obejmuje tylko pliki dystrybucji WordPressa; zgodność z nim "
                                    "nie mówi nic o wtyczkach, motywach, uploads ani konfiguracji")
-    return detections, cover, facts
+    return detections, cover, facts, requests
 
 
 def compose_report(root: Path, database: Path | None, logs: Path | None,
                    baseline: dict | None, known_admins: set[str], case_id: str, *,
                    session: ingest.Session | None = None, core: integrity.CoreChecksums | None = None,
-                   database_format: str = "sql") -> dict:
+                   database_format: str = "sql", correlation_window: int = DEFAULT_WINDOW_SECONDS) -> dict:
     """Zwraca raport ``poc-1`` jako słownik gotowy do zapisu.
 
     ``baseline`` musi pochodzić z ``load_baseline``, a ``core`` z ``load_core_checksums`` tej samej sesji.
     ``database_format`` (``sql`` albo ``jsonl``) wybiera parser zrzutu bazy; formatu nie zgaduje się po treści.
+    ``correlation_window`` to okno relacji ``NEAR_IN_TIME`` w sekundach (ADR 0007 pkt 8).
     """
     session = session or _session()
     if baseline is not None and integrity.baseline_record(session, core) is None:
         raise ValueError("baseline musi być wczytany przez load_baseline w tej samej sesji odczytu")
     if core is not None and core.record not in session.ledger:
         raise ValueError("manifest sum musi być wczytany przez load_core_checksums w tej samej sesji odczytu")
-    detections, cover, facts = _scan_sources(root, database, logs, baseline, known_admins, session, core, database_format)
+    detections, cover, facts, requests = _scan_sources(root, database, logs, baseline, known_admins, session, core, database_format)
     session_gaps = session.finish()  # od tej chwili rejestr sesji ma ostateczne statusy (także CHANGED z ponownej weryfikacji)
     for source, text in session.integrity_notes:
         for name in [source] if source else [name for name in models.SOURCES if cover[name].provided]:
             cover[name].degrade(text)
     evidence = {item.id: item for item in map(_evidence, session.ledger)}
-    timeline, undated = _timeline(detections, evidence)
+    correlation = correlate(detections, requests, evidence, correlation_window)
+    for note in correlation.notes:
+        cover["logs"].degrade(note)
+    timeline, undated = _timeline(detections, evidence, correlation.requests)
     cover["files"].note(*undated)
     coverage = {source: _coverage(source, cover[source], session.ledger) for source in models.SOURCES}
-    findings = {item.id: item for item in _findings(detections)}
+    findings = {item.id: item for item in [*detection_findings(detections), *correlation.findings]}
     gaps = {reason for entry in coverage.values() for reason in entry.reasons} | set(session_gaps)
     return models.Report(
         case_id=case_id, tool="WPIncidentLens PoC", tool_version=VERSION, analyzed_at_utc=models.utc_iso(datetime.now(timezone.utc)),
         assessment=models.assess(findings.values(), coverage), disclaimer=DISCLAIMER,
-        evidence=tuple(evidence.values()), observations=tuple({item.id: item for item in [*(found.observation for found in detections), *facts]}.values()),
+        evidence=tuple(evidence.values()), observations=tuple({item.id: item for item in [*(found.observation for found in detections), *facts, *correlation.requests]}.values()),
         findings=tuple(findings.values()), coverage=coverage, coverage_gaps=tuple(gaps), timeline=tuple(timeline)).to_dict()
 
 
@@ -178,6 +193,12 @@ def exit_code(report: dict) -> int:
 
 
 write_html = report.write_html  # reeksport: Reporter jest w wpincidentlens/report.py (ADR 0001, krok migracji 1)
+
+
+def _positive_seconds(value: str) -> int:
+    if not value.isascii() or not value.isdigit() or int(value) <= 0:
+        raise argparse.ArgumentTypeError("wymagana dodatnia liczba całkowita sekund")
+    return int(value)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -200,6 +221,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case-id", default="WPINCIDENTLENS-DEMO",
                         help="Identyfikator sprawy: 1–64 znaki A-Z a-z 0-9 . _ -, pierwszy znak inny niż kropka i łącznik (%(default)s)")
     parser.add_argument("--operator-id", help="Pseudonim operatora zapisywany w case.json (te same znaki co --case-id); domyślnie brak")
+    parser.add_argument("--correlation-window", type=_positive_seconds, default=DEFAULT_WINDOW_SECONDS, metavar="SECONDS",
+                        help="Okno relacji NEAR_IN_TIME między żądaniem HTTP a mtime pliku z ustaleniem, w sekundach; "
+                             "bliskość w czasie nie dowodzi przyczynowości (%(default)s)")
     parser.add_argument("--output", type=Path, required=True)
     defaults = ingest.Limits()
     parser.add_argument("--allow-hardlinks", action="store_true",
@@ -241,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--core-checksums: {invalid}")
     admins = set(context.known_admins) | set((baseline or {}).get("known_admins", []))
     output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session, core=core,
-                            database_format=context.database_format)
+                            database_format=context.database_format, correlation_window=args.correlation_window)
     code = exit_code(output)
     try:
         report.write(context.output, output, context.describe(), code)
