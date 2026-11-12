@@ -13,8 +13,8 @@ dependencies = []  # silnik analizy używa wyłącznie biblioteki standardowej
 
 [project.optional-dependencies]
 # jsonschema: wyłącznie do walidacji raportu w testach (ADR 0002 D2); silnik go nie importuje.
-test = ["pytest>=8.3,<9", "pytest-cov>=5,<7", "jsonschema>=4.21,<5"]
-dev = ["pytest>=8.3,<9", "pytest-cov>=5,<7", "jsonschema>=4.21,<5", "ruff>=0.8,<0.9"]
+test = ["pytest>=9.0.3,<10", "pytest-cov>=5,<7", "jsonschema>=4.21,<5", "hypothesis>=6.100,<7"]
+dev = ["pytest>=9.0.3,<10", "pytest-cov>=5,<7", "jsonschema>=4.21,<5", "ruff>=0.8,<0.9", "hypothesis>=6.100,<7"]
 
 [project.scripts]
 wpincidentlens = "wpincidentlens.cli:main"

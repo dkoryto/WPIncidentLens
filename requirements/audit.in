@@ -1,0 +1,3 @@
+# Narzędzia łańcucha dostaw uruchamiane w CI (poza środowiskiem testów).
+pip-audit==2.10.1
+cyclonedx-bom==8.0.1

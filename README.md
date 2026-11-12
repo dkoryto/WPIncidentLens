@@ -10,11 +10,21 @@ Wymagany Python 3.12. Aktualne wyniki testów: [docs/TEST_MATRIX.md](docs/TEST_M
 
 ```bash
 python3.12 -m venv .venv && . .venv/bin/activate
-python -m pip install -e ".[dev]"
+python -m pip install --require-hashes -r requirements/dev.lock
+python -m pip install --no-deps -e .
 python -m ruff check .
 python -m pytest -q
 python -m wpincidentlens --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output results --case-id DEMO-001
 ```
+
+Silnik nie ma zależności runtime (tylko biblioteka standardowa). Narzędzia testowe i deweloperskie instaluje się z `requirements/dev.lock` — wersje przypięte, każda paczka z hashem SHA-256, więc pip odrzuci pakiet o innej zawartości. Po zmianie extras w `pyproject.toml` lock generuje się ponownie (polecenie jest w nagłówku pliku; test `tests/test_supply_chain.py` wykrywa rozjazd):
+
+```bash
+uv pip compile pyproject.toml --extra dev --generate-hashes --python-version 3.12 --universal -o requirements/dev.lock
+uv pip compile requirements/audit.in --generate-hashes --python-version 3.12 --universal -o requirements/audit.lock
+```
+
+CI instaluje z locka (`--require-hashes`), uruchamia `pip-audit` na obu lockach (znana podatność = czerwone CI) i zapisuje SBOM CycloneDX środowiska testowego jako artefakt `sbom-test-env`. Narzędzia audytu (`pip-audit`, `cyclonedx-bom`) mają własny lock `requirements/audit.lock` i osobny venv. Lokalny audyt: `python -m venv /tmp/sca && /tmp/sca/bin/pip install --require-hashes -r requirements/audit.lock && /tmp/sca/bin/pip-audit -r requirements/dev.lock --require-hashes --disable-pip --strict`.
 
 `--database-format {sql,jsonl}` (domyślnie `sql`) mówi, czym jest plik `--database`: zrzutem SQL (`INSERT INTO … VALUES`) albo eksportem JSONL — jeden obiekt `{"table": "wp_users", "row": {"ID": 1, "user_login": "…"}}` na wiersz, wartości tylko łańcuch, liczba lub `null`. Formatu nie zgaduje się po treści; wiersze niezgodne z kontraktem obniżają pokrycie bazy (szczegóły: [docs/RULES.md](docs/RULES.md)).
 
