@@ -21,8 +21,28 @@ MATCH = re.compile("<script")
     ("kontakt: jan.synthetic+tag@example.org", f"kontakt: {MARK}@example.org"),
     ("sum d41d8cd98f00b204e9800998ecf8427e end", f"sum {MARK} end"),
     ("blob QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0NTY3 end", f"blob {MARK} end"),
+    (f"api_key='{CANARY}", f"api_key={MARK}"),
+    (f'Session="{CANARY}', f"Session={MARK}"),
+    (f"/x.php?token: {CANARY}", f"/x.php?{MARK} {MARK}"),
+    ("Authorization: Bearer syntheticbearertoken", f"Authorization: {MARK}"),
+    ("authorization: basic c3ludGhldGljOnN5bg== next", f"authorization: {MARK}"),  # „=” na końcu: następne słowo też
+    (f"key= token: {CANARY}", f"key= {MARK}"),
+    (f"key=token: {CANARY}", f"key={MARK}"),
+    ("secret=tokenAb1Cd2=", f"secret={MARK}"),
+    ("password=Passw0rd:x", f"password={MARK}"),
+    ("password=Passw0rd: x", f"password={MARK}"),
+    ("auth=keyAbc123= y", f"auth={MARK}"),
+    (f"keyhttp://api_key='{CANARY}", f"keyhttp:{MARK}"),
+    (f"keyhttp://Authorization: Bearer {CANARY}", f"keyhttp:{MARK}"),
+    ('key=token: "a b c"', f"key={MARK}"),
+    ("secret=y: 'a b'", f"secret={MARK}"),
 ], ids=["query", "query-without-names", "userinfo", "quoted-secret", "header", "json-secret", "uppercase-name", "email", "hex-run",
-        "base64-run"])
+        "base64-run", "unterminated-single-quote", "unterminated-double-quote", "secret-name-right-after-query-mark",
+        "bearer-token", "basic-credentials", "empty-value-before-next-secret-name", "glued-next-secret-name",
+        "value-starting-with-a-secret-name", "value-starting-with-a-secret-name-and-colon",
+        "value-ending-with-colon-then-word", "value-ending-with-equals-then-word",
+        "value-ending-with-equals-then-quote", "value-ending-with-colon-then-auth-scheme",
+        "value-ending-with-colon-then-double-quoted", "value-ending-with-colon-then-single-quoted"])
 def test_secret_like_parts_are_replaced(text, expected):
     assert redact.redact(text) == expected
 

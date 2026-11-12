@@ -20,3 +20,4 @@ dist/
 .coverage
 .claude/worktrees/
 graphify-out/
+.hypothesis/

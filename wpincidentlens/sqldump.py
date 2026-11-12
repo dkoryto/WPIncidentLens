@@ -55,13 +55,25 @@ _LEAD = re.compile(rb"(?:\s++|--(?=[\x00-\x20\x7f]|\Z)[^\n]*+|\#[^\n]*+|/\*.*?\*
 _WORD = re.compile(rb"[A-Za-z_]++")
 # Komentarz wykonywalny (/*!NNNNN … */, /*M!NNNNNN … */) serwer wykonuje jak kod: jego treść klasyfikuje się jak
 # instrukcję, a zwykłe komentarze zastępuje spacja. Łańcuchy i nazwy w odwrotnych apostrofach zostają bez zmian.
+# Rozwijany jest zawsze tekst oryginalny i tylko raz. W instrukcji zakończonej ``;`` każdy komentarz jest domknięty
+# (tak podzielił ją ``_TOKEN``); komentarz, który został po rozwinięciu (``/*``, ``--``, ``#`` z wnętrza komentarza
+# wykonywalnego), czyni instrukcję nieobsługiwaną: nie znika z resztą tekstu ani nie jest oceniany jak kod. Tylko w urwanej instrukcji na końcu zrzutu (``tail``)
+# niedomknięty komentarz sięga końca tekstu, jak w ``_TOKEN``: inaczej każde z wielu ``/*`` szukałoby ``*/`` do końca
+# tekstu od nowa — czas kwadratowy względem długości instrukcji.
 _EXECUTABLE = re.compile(rb"/\*M?!")
-_UNWRAP = re.compile(rb"""
+_UNWRAP_PATTERN = rb"""
       (?P<keep> '(?:[^'\\]|\\.)*+' | "(?:[^"\\]|\\.)*+" | `[^`]*+` )
     | /\*M?!\d{0,6}(?P<code>.*?)\*/
     | /\*.*?\*/ | --(?=[\x00-\x20\x7f]|\Z)[^\n]*+ | \#[^\n]*+
-""", re.X | re.S)
-_SCRUB = re.compile(rb"'(?:[^'\\]|\\.)*+'|\"(?:[^\"\\]|\\.)*+\"|`[^`]*+`")  # łańcuchy i nazwy poza sprawdzaniem słów
+"""
+_UNWRAP = re.compile(_UNWRAP_PATTERN, re.X | re.S)
+# W urwanej instrukcji także łańcuch i nazwa mogą sięgać końca tekstu: każdy niedomknięty ``'`` szukałby końca od nowa.
+_UNWRAP_TAIL = re.compile(_UNWRAP_PATTERN.replace(rb"\*/", rb"(?:\*/|\Z)").replace(rb"*+' |", rb"*+(?:'|\\?\Z) |")
+                          .replace(rb'*+" |', rb'*+(?:"|\\?\Z) |').replace(rb"*+` )", rb"*+(?:`|\Z) )"), re.X | re.S)
+# Kod po rozwinięciu: łańcuchy (domknięte — grupa zamknięcia — albo sięgające końca tekstu) i początki komentarzy.
+_COMMENT_LEFT = re.compile(rb"""'(?:[^'\\]|\\.)*+(?:(')|\\?\Z)|"(?:[^"\\]|\\.)*+(?:(")|\\?\Z)|`[^`]*+(?:(`)|\Z)"""
+                           rb"""|(/\*|--(?=[\x00-\x20\x7f]|\Z)|\#)""", re.S)  # re.S: ``\\.`` obejmuje też ``\\`` + LF
+_SCRUB = re.compile(rb"'(?:[^'\\]|\\.)*+'|\"(?:[^\"\\]|\\.)*+\"|`[^`]*+`", re.S)  # łańcuchy i nazwy poza sprawdzaniem słów
 # SET jest obojętny tylko jako lista prostych przypisań (``SET STATEMENT … FOR …`` wykonuje dowolną instrukcję).
 _SET_VALUE = (rb"(?:'(?:[^'\\]|\\.|'')*+'(?:\s*+'(?:[^'\\]|\\.|'')*+')*+|\"(?:[^\"\\]|\\.|\"\")*+\""
               rb"|[-+]?[0-9.]++[A-Za-z0-9.]*+|@@?(?:[A-Za-z_]++\.)?[A-Za-z0-9_$]++|[A-Za-z_][A-Za-z0-9_$]*+)")
@@ -116,9 +128,15 @@ _INERT_FORM = re.compile(rb"(?:USE\s++[`A-Za-z0-9_$]++|LOCK\s++TABLES?\s++[^()]+
 _INERT_OBJECTS = frozenset({"TABLE", "DATABASE", "SCHEMA"})  # po CREATE / DROP / ALTER
 
 
-def _unwrap(text: bytes) -> bytes:
+def _unwrap(text: bytes, tail: bool = False) -> bytes:
     """Treść komentarzy wykonywalnych zamiast nich, zwykłe komentarze jako spacja; łańcuchy i nazwy bez zmian."""
-    return _UNWRAP.sub(lambda m: m["keep"] or b" " + (m["code"] or b"") + b" ", text)
+    return (_UNWRAP_TAIL if tail else _UNWRAP).sub(lambda m: m["keep"] or b" " + (m["code"] or b"") + b" ", text)
+
+
+def _has_comment_left(code: bytes) -> bool:
+    """Czy po rozwinięciu został początek komentarza (``/*``, ``--``, ``#``) albo niedomknięty łańcuch lub nazwa
+    z wnętrza komentarza wykonywalnego. Niedomknięty łańcuch sięga końca tekstu: jedno przejście, czas liniowy."""
+    return any(found[4] is not None or not (found[1] or found[2] or found[3]) for found in _COMMENT_LEFT.finditer(code))
 
 
 def _unescape(match: re.Match) -> bytes:
@@ -246,7 +264,10 @@ class DumpParser:
         flags, self._flags = self._flags, 0
         self.unsupported += flags
         # Treść komentarzy wykonywalnych serwer wykonuje: klasyfikowana jest instrukcja po ich rozwinięciu.
-        code = _unwrap(text) if _EXECUTABLE.search(text) else text
+        code = _unwrap(text, tail=not terminated) if _EXECUTABLE.search(text) else text
+        if terminated and code is not text and _has_comment_left(code):
+            self.unsupported += 1
+            return
         lead = _LEAD.match(code).end()
         if lead == len(code):
             return
@@ -266,10 +287,10 @@ class DumpParser:
         elif word in ("CREATE", "DROP", "ALTER"):
             kind = _WORD.match(code, _LEAD.match(code, word_match.end()).end())
             kind_word = kind[0].decode("ascii").upper() if kind else ""
-            if not self._definition(word, kind_word, code, lead):
+            if not self._definition(word, kind_word, self._plain(text, code), lead):
                 self._count(f"{word} {kind_word}" if kind_word else word)
         elif word == "SET":
-            plain = _unwrap(code)  # bez komentarzy, które mogą stać na końcu przypisania
+            plain = self._plain(text, code)  # bez komentarzy, które mogą stać na końcu przypisania
             if not self._set(plain, _LEAD.match(plain).end()):
                 self._count("SET")
                 if _MODE_WORDS.search(plain) and self.mode_change_at is None:
@@ -277,9 +298,14 @@ class DumpParser:
         elif word not in _INERT_STATEMENTS:
             self._count(word or "(nie słowo kluczowe)")
         else:
-            plain = _unwrap(code)
+            plain = self._plain(text, code)
             if _INERT_FORM.fullmatch(plain, _LEAD.match(plain).end(), len(plain.rstrip())) is None:
                 self._count(word)
+
+    @staticmethod
+    def _plain(text: bytes, code: bytes) -> bytes:
+        """Instrukcja bez komentarzy: ``code`` już rozwinięty z ``text`` albo ``text`` rozwinięty teraz (raz)."""
+        return code if code is not text else _unwrap(text)
 
     def _count(self, keyword: str) -> None:
         keyword = keyword[:40]
@@ -341,12 +367,11 @@ class DumpParser:
             return value.decode("latin-1")
         return None  # liczba lub zapis szesnastkowy: dla sql_mode to maska bitowa
 
-    def _definition(self, word: str, kind: str, code: bytes, lead: int) -> bool:
+    def _definition(self, word: str, kind: str, plain: bytes, lead: int) -> bool:
         """Czy CREATE/DROP/ALTER jest obojętne: definicja tabeli bez danych, usunięcie tabeli, ALTER … KEYS.
 
-        Sprawdzana jest postać bez komentarzy: apostrof w komentarzu nie może otworzyć łańcucha i ukryć słowa.
+        Sprawdzana jest postać bez komentarzy (``plain``): apostrof w komentarzu nie może otworzyć łańcucha i ukryć słowa.
         """
-        plain = _unwrap(code)
         lead = _LEAD.match(plain).end()
         end = len(plain.rstrip())
         if word == "DROP":
