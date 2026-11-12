@@ -317,7 +317,7 @@ def test_existing_upload_correlation_still_works_with_a_custom_window(site, evid
     run_ = analyze(site, logs=logs, flags=("--correlation-window", "60"))
 
     assert "CORRELATED_UPLOAD_REQUEST" in run_.rules
-    assert not {"CORRELATED_FILE_REQUEST", "REQUEST_NEAR_FILE_CHANGE"} & run_.rules  # parser na main nie daje HTTP_REQUEST
+    assert "CORRELATED_FILE_REQUEST" not in run_.rules  # plik w uploads ma już korelację reguły uploads
 
 
 @pytest.mark.parametrize("value", ["0", "-5", "abc", "1.5", ""])
@@ -354,3 +354,39 @@ def test_requests_returned_by_the_log_scan_reach_the_report(site, evidence, anal
     assert [event["timestamp_basis"] for event in report["timeline"] if event["event"] == "HTTP_REQUEST"] == [
         "HTTP access log; niepewność zegara ±5 s (deklaracja operatora, niezweryfikowana)"]
     assert any(item["kind"] == "HTTP_REQUEST" for item in report["observations"])
+
+
+# --- poprawki po scaleniu parsera (#48) -----------------------------------------------------------
+
+def upload_hit(path: str, uri: str) -> Detection:
+    fact = models.Observation(LOG.id, "HTTP_REQUEST_FOR_PHP_IN_UPLOADS", models.Location(path="access.log", line=1),
+                              {"path": path, "uri": uri, "method": "GET", "status": 200}, timestamp_raw="x",
+                              timestamp_utc=T0, time_source=models.TimeSource.LOG)
+    return Detection("HTTP_EXECUTABLE_IN_UPLOADS", "high", "medium", "http_log", "syntetyczne", fact)
+
+
+def test_upload_correlation_uses_the_unredacted_path_not_the_redacted_uri():
+    path = "wp-content/uploads/" + "ab" * 24 + ".php"
+    file_fact = models.Observation(LOG.id, "F", models.Location(path=path), {})
+    file_hit = Detection("EXECUTABLE_IN_UPLOADS", "high", "high", "file", "syntetyczne", file_fact)
+
+    result = correlate.correlate([file_hit, upload_hit(path, "/wp-content/uploads/[zredagowano].php")], [], {LOG.id: LOG}, 900)
+
+    assert [finding.rule_id for finding in result.findings] == ["CORRELATED_UPLOAD_REQUEST"]
+
+
+def test_log_line_that_is_both_a_rule_hit_and_a_correlated_request_is_on_the_timeline_once():
+    hit = upload_hit("wp-content/uploads/x.php", "/wp-content/uploads/x.php")
+    same_line = request("wp-content/uploads/x.php")
+
+    events, _ = correlate.timeline([hit], {LOG.id: LOG}, [same_line])
+
+    assert len([event for event in events if event.time_source is models.TimeSource.LOG]) == 1
+
+
+def test_upload_named_with_a_long_hex_run_is_still_correlated_end_to_end(site, evidence, analyze):
+    upload = "wp-content/uploads/2026/11/" + "0123456789abcdef" * 3 + ".php"
+    write(site / upload, "<?php // synthetic")
+    logs = write(evidence / "logs" / "access.log", access_line("/" + upload)).parent
+
+    assert "CORRELATED_UPLOAD_REQUEST" in analyze(site, logs=logs).rules

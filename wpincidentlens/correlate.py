@@ -53,7 +53,9 @@ def _upload_correlation(detections: list[Detection]) -> tuple[list[models.Findin
     for found in detections:
         if found.rule != "HTTP_EXECUTABLE_IN_UPLOADS":
             continue
-        path = str(found.observation.attributes["uri"]).split("?")[0].lstrip("/")
+        # ``path`` z parsera logów jest znormalizowany i nieredagowany; ``uri`` po redakcji może mieć zamaskowaną nazwę pliku.
+        attributes = found.observation.attributes
+        path = str(attributes.get("path") or str(attributes["uri"]).split("?")[0]).lstrip("/")
         if path in uploads:
             paths.add(path)
             findings.append(models.Finding(
@@ -189,8 +191,11 @@ def timeline(detections: list[Detection], evidence: dict[str, models.Evidence],
             events.append(models.TimelineEvent(
                 fact.timestamp_utc, models.TimeSource.LOG, "HTTP access log; synchronizacja zegara niezweryfikowana", found.rule,
                 models.describe_location(fact.location.to_dict()), "medium", fact.evidence_id, fact.id))
+    # Ten sam wiersz logu bywa i wykryciem reguły uploads, i żądaniem korelacji: na osi czasu ma być raz.
+    shown = {(found.observation.evidence_id, found.observation.location) for found in detections
+             if found.rule == "HTTP_EXECUTABLE_IN_UPLOADS" and found.observation.timestamp_utc is not None}
     for request in requests:
-        if request.timestamp_utc is not None:
+        if request.timestamp_utc is not None and (request.evidence_id, request.location) not in shown:
             events.append(models.TimelineEvent(
                 request.timestamp_utc, models.TimeSource.LOG, _request_basis(request), TIMELINE_EVENT,
                 models.describe_location(request.location.to_dict()), "medium", request.evidence_id, request.id))
