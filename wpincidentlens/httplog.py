@@ -9,6 +9,8 @@ niedokończony wiersz (najwyżej ``MAX_LINE_BYTES``). Limit czasu sesji jest spr
 """
 from __future__ import annotations
 
+import re
+
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -255,15 +257,21 @@ class LogFileParser:
             self.held.append(held)
 
 
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{0,31}://")
+
+
 def redacted_uri(target: str) -> str:
     """``uri`` do raportu: query i fragment usunięte w całości strukturalnie (od pierwszego ``?`` albo ``#``), a nie
     wzorcem ``redact``, który zatrzymuje się na cudzysłowie, ``<`` albo ukośniku wstecznym; reszta po redakcji.
 
-    W formie absolutnej (``http://użytkownik:hasło@host/…``) z części ``authority`` zostaje tylko host po ostatnim
-    ``@``; dane logowania zastępuje znacznik strukturalnie, bez wzorca ``redact``."""
-    if (found := logformats.SCHEME_AUTHORITY.match(target)) is not None:
-        _, at, host = found["authority"].rpartition("@")
-        target = f"{found['scheme']}://{redact.MARK + '@' if at else ''}{host}{target[found.end():]}"
+    W formie absolutnej (``http://użytkownik:hasło@host/…``) wszystko od ``://`` do ostatniego ``@`` przed ``?``/``#``
+    zastępuje znacznik — także gdy hasło zawiera ``/`` i granica ``authority`` według RFC wypada wcześniej. Może to
+    zamaskować ``@`` w ścieżce; w raporcie lepiej za dużo niż ujawnione hasło."""
+    if (found := _SCHEME.match(target)) is not None:
+        stop = min((at for at in (target.find("?"), target.find("#")) if at >= 0), default=len(target))
+        at = target.rfind("@", found.end(), stop)
+        if at >= 0:
+            target = f"{target[:found.end()]}{redact.MARK}{target[at:]}"
     cut = min((at for at in (target.find("?"), target.find("#")) if at >= 0), default=len(target))
     tail = f"{target[cut]}{redact.MARK}" if cut < len(target) else ""
     return redact.excerpt(target[:cut], limit=MAX_URI_CHARS - len(tail)) + tail
