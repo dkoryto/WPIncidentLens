@@ -109,3 +109,13 @@ def test_redact_is_idempotent_on_random_compositions():
         text = "".join(chance.choice(_PIECES) for _ in range(chance.randint(0, 40)))
         once = redact.redact(text)
         assert redact.redact(once) == once, text
+
+
+@pytest.mark.parametrize("text", ["/x?password: hunter2 tail", "/a/oauth=x?user=hunter2&p=1", "/a/secret=s3cr3t?q=hunter2&z=1",
+                                  "/login?pwd = hunter2", "?token:hunter2 x"])
+def test_secret_named_in_a_query_never_survives(text):
+    """Nazwa sekretu tuż po „?” nie może zostać zjedzona przez redakcję zapytania tak, by wartość została jawna."""
+    out = redact.redact(text)
+
+    assert "hunter2" not in out and "s3cr3t" not in out
+    assert out.count("?") <= 1 and redact.redact(out) == out
