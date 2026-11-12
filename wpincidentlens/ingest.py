@@ -279,14 +279,21 @@ class Session:
 
     def read(self, path: str | os.PathLike[str], source: str, *, expect: str = "any",
              wanted: Callable[[str], bool] | None = None, keep_limit: int | None = None,
-             md5: bool = False, sink: Callable[[bytes], None] | None = None) -> Iterator[Evidence]:
+             md5: bool = False, sink: Callable[[bytes], None] | None = None,
+             sink_factory: Callable[[str], Callable[[bytes], None]] | None = None) -> Iterator[Evidence]:
         """Czyta źródło (katalog rekurencyjnie albo pojedynczy plik) i zwraca po jednym ``Evidence`` na wpis.
 
         Treść jest zachowywana tylko dla plików nie większych niż ``keep_limit`` (domyślnie limit skanowania),
         dla których ``wanted(rel)`` jest prawdą. Źródła, którego nie da się otworzyć, dotyczy wpis ``rel == ROOT``.
         ``md5=True`` dolicza MD5 w tym samym odczycie, bez drugiego otwarcia pliku. ``sink`` (tylko dla źródła
         będącego plikiem) dostaje porcje przeczytanych bajtów; nie jest wołany, gdy pliku nie przeczytano.
+        ``sink_factory(rel)`` (źródło będące katalogiem albo plikiem) jest wołana dla każdego zwykłego pliku tuż przed
+        jego odczytem, już po sprawdzeniu limitów, i zwraca ``sink`` tego pliku. Plik pominięty (limit, dowiązanie)
+        nie wywołuje jej wcale; po błędzie w trakcie odczytu jego ``Evidence`` nie ma skrótu, a porcje oddane
+        wcześniej należy odrzucić. ``rel`` jest równe ``Evidence.rel`` wpisu, który zostanie zwrócony.
         """
+        if sink is not None and sink_factory is not None:
+            raise ValueError("podaj sink albo sink_factory, nie oba")
         keep_limit = self.limits.max_scan_bytes if keep_limit is None else keep_limit
         if self._expired():
             yield self._skip(source, ROOT, ReadStatus.SKIPPED_LIMIT, "MAX_SECONDS")
@@ -299,10 +306,10 @@ class Session:
         root = _Root(os.fspath(Path(path)), source, stat.S_ISDIR(info.st_mode), _identity(info))
         self._roots.append(root)
         if root.is_dir:
-            yield from self._walk(fd, root, wanted, keep_limit, md5)
+            yield from self._walk(fd, root, wanted, keep_limit, md5, sink_factory)
             return
         try:
-            yield self._read_regular(fd, info, root, (), Path(path).name, wanted, keep_limit, md5, sink)
+            yield self._read_regular(fd, info, root, (), Path(path).name, wanted, keep_limit, md5, sink, sink_factory)
         finally:
             os.close(fd)
 
@@ -326,7 +333,8 @@ class Session:
     def _expired(self) -> bool:
         return self._clock() > self._deadline
 
-    def _walk(self, root_fd: int, root: _Root, wanted, keep_limit: int, md5: bool = False) -> Iterator[Evidence]:
+    def _walk(self, root_fd: int, root: _Root, wanted, keep_limit: int, md5: bool = False,
+              sink_factory: Callable[[str], Callable[[bytes], None]] | None = None) -> Iterator[Evidence]:
         """Przejście w głąb bez rekurencji: na stosie leżą otwarte katalogi, więc deskryptorów jest najwyżej tyle, ile poziomów."""
         frames: list[tuple[int, Iterator[str], tuple[str, ...]]] = []
         try:
@@ -367,7 +375,7 @@ class Session:
                     continue
                 try:
                     if stat.S_ISREG(info.st_mode):
-                        record = self._read_regular(fd, info, root, here, rel, wanted, keep_limit, md5)
+                        record = self._read_regular(fd, info, root, here, rel, wanted, keep_limit, md5, None, sink_factory)
                     else:
                         record = self._skip(root.source, rel, ReadStatus.SKIPPED_SPECIAL, _kind(info.st_mode))
                 finally:
@@ -400,7 +408,8 @@ class Session:
         return None
 
     def _read_regular(self, fd: int, info: os.stat_result, root: _Root, parts: tuple[str, ...], rel: str,
-                      wanted, keep_limit: int, md5: bool = False, sink: Callable[[bytes], None] | None = None) -> Evidence:
+                      wanted, keep_limit: int, md5: bool = False, sink: Callable[[bytes], None] | None = None,
+                      sink_factory: Callable[[str], Callable[[bytes], None]] | None = None) -> Evidence:
         self._files += 1
         hardlinked = info.st_nlink > 1
         if self._files > self.limits.max_files:
@@ -413,6 +422,8 @@ class Session:
             return self._skip(root.source, rel, ReadStatus.SKIPPED_LIMIT, "MAX_TOTAL_BYTES")
         shown = _printable(rel)
         keep = info.st_size <= keep_limit and (wanted is None or wanted(shown))
+        if sink_factory is not None:
+            sink = sink_factory(shown)
         try:
             sha, got, content, extra = _hash_fd(fd, info.st_size, keep, md5, sink)
             after = os.fstat(fd)

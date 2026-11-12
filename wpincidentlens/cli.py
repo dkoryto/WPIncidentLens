@@ -12,7 +12,7 @@ from . import case, files, ingest, integrity, models, report
 from . import database as database_scan
 from .analysis import Detection, SourceCoverage
 from .correlate import DEFAULT_WINDOW_SECONDS, correlate, detection_findings, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
-from .httplog import LOG_PATTERN, MAX_LOG_BYTES, scan_logs  # noqa: F401  (testy wołają je przez cli)
+from .httplog import FORMATS as FORMATS_OF_LOGS, LogConfig, scan_logs
 from .sqldump import iter_insert_rows  # noqa: F401  (ADR 0001: testy wołają go przez cli)
 from .analysis import evidence_of as _evidence
 
@@ -113,12 +113,12 @@ def _log_scan(result) -> tuple[list[Detection], SourceCoverage, list[models.Obse
 
 def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline: dict | None, known_admins: set[str],
                   session: ingest.Session, core: integrity.CoreChecksums | None = None, database_format: str = "sql",
+                  log_config: LogConfig | None = None,
                   ) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation], list[models.Observation]]:
     """Uruchamia skanery podanych źródeł; źródło niepodane dostaje powód zamiast skanu.
 
     Trzeci wynik: fakty bez ustalenia; czwarty: obserwacje ``HTTP_REQUEST`` z logów, materiał korelacji.
     """
-    requests: list[models.Observation] = []
     cover = {source: SourceCoverage(provided=False) for source in models.SOURCES}
     scan = files.scan_files(root, baseline, session, core)
     detections, cover["files"], facts = scan.detections, scan.cover, list(scan.observations)
@@ -129,8 +129,9 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
         facts.extend(database_facts)
     else:
         cover["database"].note("Brak zrzutu bazy danych")
+    requests: list[models.Observation] = []
     if logs:
-        found, cover["logs"], requests = _log_scan(scan_logs(logs, session))
+        found, cover["logs"], requests = _log_scan(scan_logs(logs, session, log_config))
         detections.extend(found)
     else:
         cover["logs"].note("Brak logów HTTP")
@@ -152,19 +153,22 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
 def compose_report(root: Path, database: Path | None, logs: Path | None,
                    baseline: dict | None, known_admins: set[str], case_id: str, *,
                    session: ingest.Session | None = None, core: integrity.CoreChecksums | None = None,
-                   database_format: str = "sql", correlation_window: int = DEFAULT_WINDOW_SECONDS) -> dict:
+                   database_format: str = "sql", correlation_window: int = DEFAULT_WINDOW_SECONDS,
+                   log_config: LogConfig | None = None) -> dict:
     """Zwraca raport ``poc-1`` jako słownik gotowy do zapisu.
 
     ``baseline`` musi pochodzić z ``load_baseline``, a ``core`` z ``load_core_checksums`` tej samej sesji.
     ``database_format`` (``sql`` albo ``jsonl``) wybiera parser zrzutu bazy; formatu nie zgaduje się po treści.
     ``correlation_window`` to okno relacji ``NEAR_IN_TIME`` w sekundach (ADR 0007 pkt 8).
+    ``log_config`` to wybory operatora dotyczące logów (format, zaufane proxy, niepewność zegara); domyślnie combined.
     """
     session = session or _session()
     if baseline is not None and integrity.baseline_record(session, core) is None:
         raise ValueError("baseline musi być wczytany przez load_baseline w tej samej sesji odczytu")
     if core is not None and core.record not in session.ledger:
         raise ValueError("manifest sum musi być wczytany przez load_core_checksums w tej samej sesji odczytu")
-    detections, cover, facts, requests = _scan_sources(root, database, logs, baseline, known_admins, session, core, database_format)
+    detections, cover, facts, requests = _scan_sources(root, database, logs, baseline, known_admins, session, core,
+                                                        database_format, log_config)
     session_gaps = session.finish()  # od tej chwili rejestr sesji ma ostateczne statusy (także CHANGED z ponownej weryfikacji)
     for source, text in session.integrity_notes:
         for name in [source] if source else [name for name in models.SOURCES if cover[name].provided]:
@@ -213,6 +217,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="Format pliku --database: zrzut SQL (INSERT … VALUES) albo JSONL, jeden obiekt "
                              '{"table": …, "row": {…}} na wiersz; nie jest zgadywany po treści (%(default)s)')
     parser.add_argument("--logs", type=Path)
+    parser.add_argument("--log-format", choices=FORMATS_OF_LOGS, default="combined",
+                        help="Format wierszy --logs: combined i common (Apache/Nginx) albo json — jeden obiekt na wiersz "
+                             "(kontrakt w docs/RULES.md); nie jest zgadywany po treści (%(default)s)")
+    parser.add_argument("--trusted-proxy", action="append", default=[], metavar="CIDR",
+                        help="Sieć zaufanego proxy (powtarzalna). Adres z forwarded_for (tylko format json) jest brany "
+                             "pod uwagę wyłącznie dla połączeń z tych sieci; domyślnie brak")
+    parser.add_argument("--log-clock-skew", type=float, metavar="SECONDS",
+                        help="Deklarowana przez operatora niepewność zegara serwera logów w sekundach (nieujemna); "
+                             "bez flagi zegar jest niezweryfikowany")
     parser.add_argument("--baseline", type=Path, help="Zaufany JSON: {files: {ścieżka: sha256}, known_admins: [...]} ")
     parser.add_argument("--core-checksums", type=Path,
                         help="Lokalny plik JSON z sumami MD5 rdzenia w kształcie api.wordpress.org core/checksums/1.0: "
@@ -245,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
             files=args.files, database=args.database, database_format=args.database_format, logs=args.logs, baseline=args.baseline, output=args.output,
             case_id=args.case_id, operator_id=args.operator_id, known_admins=args.known_admin,
             allow_hardlinks=args.allow_hardlinks, reverify=not args.no_reverify, core_checksums=args.core_checksums,
+            log_format=args.log_format, trusted_proxies=args.trusted_proxy, log_clock_skew=args.log_clock_skew,
             limits={"max_files": args.max_files, "max_entries": args.max_entries, "max_file_bytes": args.max_file_bytes,
                     "max_total_bytes": args.max_total_bytes, "max_scan_bytes": MAX_SCAN_BYTES, "max_seconds": args.max_seconds,
                     "max_depth": args.max_depth, "max_path_bytes": args.max_path_bytes})
@@ -265,7 +279,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--core-checksums: {invalid}")
     admins = set(context.known_admins) | set((baseline or {}).get("known_admins", []))
     output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session, core=core,
-                            database_format=context.database_format, correlation_window=args.correlation_window)
+                            database_format=context.database_format, correlation_window=args.correlation_window,
+                            log_config=LogConfig(context.log_format, context.proxy_networks(), context.log_clock_skew))
     code = exit_code(output)
     try:
         report.write(context.output, output, context.describe(), code)

@@ -94,7 +94,8 @@ def test_case_manager_imports_nothing_that_identifies_the_host_or_opens_files():
     imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
     imported |= {node.module.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
 
-    assert imported <= {"__future__", "collections", "dataclasses", "datetime", "math", "pathlib", "re"}
+    # ipaddress: tylko składnia --trusted-proxy podanej przez operatora, bez zapytań do systemu
+    assert imported <= {"__future__", "collections", "dataclasses", "datetime", "ipaddress", "math", "pathlib", "re"}
 
 
 # --- teksty nie do zapisania w UTF-8 -------------------------------------------------------------
@@ -213,7 +214,8 @@ def test_case_json_contains_no_host_path(demo_case, analyze, tmp_path):
 def test_case_json_names_only_the_last_component_of_each_source(demo_case, analyze):
     assert analyze_demo(analyze, demo_case).case["sources"] == {
         "files": {"provided": True, "name": "site"}, "database": {"provided": True, "name": "database.sql", "format": "sql"},
-        "logs": {"provided": True, "name": "logs"}, "baseline": {"provided": True, "name": "baseline.json"}}
+        "logs": {"provided": True, "name": "logs", "format": "combined", "trusted_proxies": [], "clock_skew_seconds": None},
+        "baseline": {"provided": True, "name": "baseline.json"}}
 
 
 def test_case_json_marks_sources_that_were_not_provided(site, analyze):

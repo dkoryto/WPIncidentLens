@@ -1,6 +1,6 @@
 # Reguły plików (FileAnalyzer, IntegrityAdapter) i obserwacje WPDetector
 
-Dokument opisuje trzy rzeczy: reguły ścieżki i treści (`wpincidentlens/filerules.py`), reguły integralności względem zaufanej referencji (`wpincidentlens/integrity.py`) oraz obserwacje WPDetector (`wpincidentlens/wpdetect.py`), które **nie są ustaleniami**. Reguły bazy danych opisuje sekcja „Reguły bazy danych” na końcu; reguła logów (`wpincidentlens/cli.py`) nie jest tu opisana.
+Dokument opisuje trzy rzeczy: reguły ścieżki i treści (`wpincidentlens/filerules.py`), reguły integralności względem zaufanej referencji (`wpincidentlens/integrity.py`) oraz obserwacje WPDetector (`wpincidentlens/wpdetect.py`), które **nie są ustaleniami**. Reguły bazy danych opisuje sekcja „Reguły bazy danych”, logi HTTP — sekcja „Logi HTTP”, korelację — sekcja „Korelacja plik–żądanie”.
 
 Źródło prawdy dla reguł ścieżki i treści: tabela `RULES` w `wpincidentlens/filerules.py` (`RULESET_VERSION = "2026.11.1"`). Test `tests/test_filerules.py` pilnuje, żeby każda reguła z tabeli była tu opisana i miała przypadek pozytywny, negatywny oraz fałszywy alarm wzorowany na legalnym kodzie.
 
@@ -104,7 +104,7 @@ Atrybuty każdej obserwacji: `value`, `confidence`, `origin`, `basis` (uzasadnie
 - YARA-X jest poza zakresem (osobne Issue); kształt wyniku (identyfikator, wersja, offset, długość) jest przygotowany pod adapter.
 - Częstości fałszywych alarmów nie mierzono na rzeczywistym zbiorze wtyczek i motywów; przypadki „fałszywy alarm” w testach to krótkie próbki syntetyczne.
 - Reguły ścieżki i treści nie mają limitu liczby ustaleń (limit 200 dotyczy tylko reguł integralności): drzewo z wieloma trafieniami daje tyle ustaleń, ile jest par reguła–plik.
-- Reguła logów HTTP (`HTTP_EXECUTABLE_IN_UPLOADS` w `wpincidentlens/cli.py`) zna tylko rozszerzenia `.php`, `.phtml` i `.phar`; żądanie do `.pht`, `.php5` albo `photo.php.jpg` w uploads nie daje ustalenia z logu ani korelacji.
+- Reguła logów HTTP (`HTTP_EXECUTABLE_IN_UPLOADS`) korzysta z tych samych rozszerzeń kodu i podwójnych rozszerzeń w uploads co reguły plików; opis i ograniczenia: sekcja „Logi HTTP”.
 - Integralność: narzędzie nie sprawdza, czy manifest sum rdzenia odpowiada wersji i locale witryny (kandydat WPDetector nie jest z nim porównywany); manifestów wtyczek i motywów nie ma; liczba wpisów baseline nie ma limitu poza rozmiarem pliku (64 MiB), manifest ma limit 50 000 wpisów i 8 MiB.
 - WPDetector nie jest parserem PHP: heredoc, tekst poza `<?php … ?>`, `$GLOBALS['wp_version']` i `include` nie są modelowane; `wp-config.php` położony katalog wyżej niż witryna nie jest widziany; kandydaci z plików nie są porównywani z bazą (opcja `WPLANG`, prefiks w zrzucie SQL).
 
@@ -190,6 +190,80 @@ Redakcja jest zachowawcza (usuwa też `author: …` albo długi identyfikator z 
 - `SUSPICIOUS_DB_MARKUP` dopasowuje tekst, nie HTML: nie widzi znaczników zapisanych encjami (`&#60;script`), kodowaniem base64 ani sklejanych w JavaScripcie; obejmuje tylko tabelę opcji (nie `posts`, `postmeta`, `usermeta`).
 - Obecność obiektu serializowanego w wartości opcji nie jest ustaleniem ani obserwacją (WordPress sam zapisuje obiekty, np. w transientach aktualizacji).
 - Częstości fałszywych alarmów nie mierzono na rzeczywistych bazach.
+
+## Logi HTTP (`httplog`, `logformats`, T-401)
+
+Źródło prawdy: `wpincidentlens/logformats.py` (parsery wiersza, ścieżka, adres klienta) i `wpincidentlens/httplog.py` (odczyt, pokrycie, reguła); decyzja: [ADR 0007](adr/0007-logi-i-korelacja-m4.md), pkt 1–7; testy: `tests/test_logformats.py`, `tests/test_httplog.py`.
+
+### Formaty (`--log-format`, domyślnie `combined`)
+
+Format wybiera operator; parser nie zgaduje go po treści. Identyfikator z wersją trafia do atrybutu `log_format` obserwacji, a wybór — do `case.json` (`sources.logs.format`).
+
+| Format | Układ wiersza |
+|---|---|
+| `combined@1` | `%h %l %u %t "%r" %>s %b "%{Referer}i" "%{User-agent}i"` (Apache i Nginx `combined`) |
+| `common@1` | `%h %l %u %t "%r" %>s %b` |
+| `json@1` | jeden obiekt JSON na wiersz (kontrakt niżej) |
+
+- Pola rozdziela jedna spacja. `%t` to `[dd/Mon/rrrr:gg:mm:ss ±hhmm]` z angielską nazwą miesiąca (niezależnie od locale procesu). `%r` to `METODA cel HTTP/x.y` albo `METODA cel` (HTTP/0.9); metoda `[A-Z]{1,20}`, cel bez białych znaków. W polach w cudzysłowie `\"` jest częścią pola. Status: trzy cyfry 100–599; `%b`: liczba bajtów albo `-` (`bytes: null`).
+- `%h` to adres połączenia: IP (zapisywany w postaci kanonicznej, np. `2001:db8::1`) albo nazwa hosta (`HostnameLookups`).
+- Pola po polach formatu (po spacji) są ignorowane i nie trafiają do raportu — także `X-Forwarded-For` dopisany w konfiguracji serwera. Dlatego `common` przyjmuje też wiersz `combined`.
+- Czas nie do sprowadzenia do UTC (brak strefy, strefa niemożliwa, zły zapis) nie odrzuca wiersza: obserwacja ma `timestamp_raw`, `timestamp_utc: null`, a pokrycie notę „Nie można znormalizować czasu logu do UTC w N wierszach” z pierwszym zapisem.
+
+### Kontrakt `json@1`
+
+Jeden obiekt JSON na wiersz pliku, ścisłe UTF-8:
+
+| Pole | Wymagane | Typ |
+|---|---|---|
+| `time` | tak | łańcuch ISO 8601 `RRRR-MM-DDTgg:mm:ss[.ułamek][Z lub ±gg:mm]`; bez przesunięcia strefy → `timestamp_utc: null` (jak wyżej); precyzja z liczby cyfr ułamka (`second`, `millisecond`, `microsecond`) |
+| `remote_addr` | tak | łańcuch: adres połączenia (IP bez portu albo nazwa hosta) |
+| `method` | tak | łańcuch `[A-Z]{1,20}` |
+| `uri` | tak | łańcuch: cel żądania bez białych znaków |
+| `status` | tak | liczba całkowita 100–599 (nie `true`, nie `200.0`, nie `"200"`) |
+| `bytes` | nie | liczba całkowita ≥ 0 albo `null` |
+| `forwarded_for` | nie | łańcuch (`X-Forwarded-For`) albo `null`; używany tylko przez zaufane proxy (niżej) |
+
+Inne pola są dozwolone i ignorowane, o ile mają wartość prostą (łańcuch, liczba, wartość logiczna, `null`). Przykład konfiguracji Nginx: `log_format wpil escape=json '{"time":"$time_iso8601","remote_addr":"$remote_addr","method":"$request_method","uri":"$request_uri","status":$status,"bytes":$body_bytes_sent,"forwarded_for":"$http_x_forwarded_for"}';`.
+
+### Odczyt i powody odrzucenia
+
+- Każdy plik źródła `logs` jest czytany strumieniowo w tym samym odczycie, który liczy SHA-256 (`ingest.Session.read(..., sink_factory=...)`); rozmiar ogranicza tylko `--max-file-bytes`. Znak końca wiersza to `\n`, końcowe `\r` jest usuwane, wiersz pusty (spacje, tabulacje) nie jest liczony, ostatni wiersz bez znaku końca jest czytany.
+- Wiersz odrzucony jest liczony pod powodem z numerem pierwszego wystąpienia (`plik:wiersz`): dłuższy niż 64 KiB (pomijany do najbliższego `\n` bez buforowania), układ pól inny niż w formacie, wiersz żądania inny niż `METODA cel [HTTP/x.y]`, adres klienta niebędący IP ani nazwą hosta, status lub liczba bajtów poza zakresem; dla `json@1` także niepoprawny JSON (BOM, dwa obiekty), powtórzony klucz, brak wymaganego pola albo pole złego typu, wartość złożona (obiekt, tablica), `NaN`/`Infinity`, samotny surogat.
+- Wiersz spoza UTF-8 jest dekodowany ze znakami zastępczymi i **analizowany** (wskaźnik nie znika), ale liczony osobno: luka `PARTIAL` „N wierszy logów nie jest poprawnym UTF-8” z pierwszym miejscem.
+
+### Pokrycie `logs`
+
+- `FAILED`: źródło bez żadnego odczytanego pliku (pusty katalog, same dowiązania lub pliki pominięte limitem); żaden wiersz nie został sparsowany („Logi nie odpowiadają obsługiwanemu formatowi …”); pliki bez żadnego wiersza.
+- `PARTIAL`: odrzucone wiersze — luka „Nie sparsowano X/Y wierszy logów (Z%, format …)” z liczbą per powód, pierwszym miejscem i najwyżej 20 plikami `nazwa (odrzucone/wiersze)`; plik bez żadnego sparsowanego wiersza obok plików poprawnych; stratne dekodowanie; ponad 50 000 żądań do plików kodu (`MAX_REQUESTS`; nadmiar nie jest sprawdzany regułą ani korelacją).
+- Noty (bez obniżenia statusu): czas bez UTC, żądania ze ścieżką nieprzypisywalną do pliku, odrzucony `forwarded_for` za zaufanym proxy.
+
+### Ścieżka żądania i atrybuty obserwacji
+
+- Ścieżka (`path`): cel bez schematu i hosta (forma absolutna), bez query i fragmentu; `%XX` dekodowane **raz** (UTF-8 ze znakami zastępczymi; `%252e` zostaje `%2e`); `//` scalane; segmenty `.` i `..` rozwiązywane tak, jak robi to serwer przed odwzorowaniem na plik (`/uploads/x/%2e%2e/a.php` → `uploads/a.php`). Ścieżka wychodząca `..` ponad katalog główny, ze znakiem sterującym po dekodowaniu (np. `%00`, `%0a`), dłuższa niż 4096 znaków albo cel inny niż ścieżka (np. `*`) nie jest przypisywana do pliku (nota z liczbą). Pisownia ścieżki zostaje oryginalna.
+- `uri`: surowy cel po redakcji (`redact`, niżej: m.in. wszystko po `?` → `?[usunięto]`), najwyżej 300 znaków.
+- Obserwacje żądań (`HTTP_REQUEST`, materiał korelacji) powstają tylko dla ścieżek z rozszerzeniem kodu (`filerules.CODE_SUFFIXES`) i z podwójnym rozszerzeniem w uploads. Atrybuty: `path`, `uri`, `method`, `status`, `bytes`, `client_ip`, `client_ip_basis`, `log_format`, `timestamp_precision`, `clock_uncertainty_seconds` (z `--log-clock-skew`, zaokrąglone w górę do pełnych sekund; bez flagi `null`). Do raportu trafiają tylko te, na które wskazuje ustalenie.
+
+### Adres klienta i zaufane proxy (`--trusted-proxy CIDR`, S-14)
+
+- `client_ip` to adres połączenia (`client_ip_basis: connection`). Formaty `combined@1` i `common@1` nie niosą `X-Forwarded-For`.
+- Dla `json@1` pole `forwarded_for` jest brane pod uwagę tylko wtedy, gdy adres połączenia należy do sieci z `--trusted-proxy` (powtarzalna, najwyżej 64; adres IPv4 zapisany w IPv6 jest porównywany jako IPv4; nazwa hosta nigdy nie jest zaufana). Klientem jest wtedy ostatni od prawej adres spoza zaufanych sieci, a gdy cały łańcuch jest zaufany — pierwszy od lewej (`forwarded_for_via_trusted_proxy`). Wpisy na lewo od klienta (dopisane przez klienta) są pomijane. Niepoprawna sieć w fladze to błąd wywołania (kod 2).
+
+### Reguła
+
+| Reguła | Waga | Pewność | Rodzaj obserwacji | Co wykrywa | Fałszywe alarmy |
+|---|---|---|---|---|---|
+| `HTTP_EXECUTABLE_IN_UPLOADS` | high | medium; low dla podwójnego rozszerzenia | `HTTP_REQUEST_FOR_PHP_IN_UPLOADS` (atrybuty jak `HTTP_REQUEST`) | Żądanie dowolną metodą do pliku w `wp-content/uploads/` z rozszerzeniem kodu (`.php`, `.phtml`, `.phar`, `.inc`, `.pht`, `.php3`–`.php8`, bez względu na wielkość liter) albo z podwójnym rozszerzeniem (`shell.php.jpg`) | Skanery i boty proszące o nieistniejące pliki (status 404 też daje ustalenie: żądanie nie dowodzi istnienia ani wykonania pliku); wtyczki trzymające skrypty w uploads; podwójne rozszerzenie wykonuje się tylko przy konfiguracji serwera przekazującej je do PHP |
+
+- Brak ustalenia (test negatywny dla każdego przypadku): kod poza uploads, obraz w uploads, podwójne rozszerzenie bez części kodu (`photo.jpg.bak`), ścieżka uploads tylko w query (`/index.php?file=…/shell.php`), `..` ponad katalog główny, `%00`, katalog o podobnej nazwie (`uploadsX`).
+- Status HTTP 200 nie jest dowodem wykonania kodu; reguła nie ocenia statusu.
+
+### Ograniczenia logów
+
+- Znane fałszywe luki: formaty z innym układem (np. `vhost_combined`, dodatkowe pole przed `%h`, separator tabulacji), `%u` ze spacją, wiersz żądania ze spacją w celu i logi z `HostnameLookups` z nazwami spoza `[A-Za-z0-9.-]` są odrzucane wiersz po wierszu. Format IIS/W3C, logi PHP-FPM i logi błędów nie są obsługiwane.
+- Znane fałszywe negatywy: witryna w podkatalogu URL (`/blog/wp-content/…`) nie jest rozpoznawana; rozszerzenia skonfigurowane jako PHP spoza `CODE_SUFFIXES` (np. `.html` przez `AddHandler`) nie są brane pod uwagę.
+- Czas: zegar serwera nie jest weryfikowany; `--log-clock-skew` to deklaracja operatora. Limit czasu analizy (`--max-seconds`) jest sprawdzany między plikami, nie w trakcie parsowania jednego dużego logu.
+- Fuzz parsera to deterministyczne mutacje syntetycznego pliku (stałe ziarno), bez generatora gramatyki. Częstości fałszywych alarmów nie mierzono na rzeczywistych logach.
 
 ## Korelacja plik–żądanie (`correlate`, T-401)
 

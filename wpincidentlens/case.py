@@ -6,6 +6,7 @@ ani zmiennych środowiskowych: operatora opisuje tylko pseudonim podany wprost w
 """
 from __future__ import annotations
 
+import ipaddress
 import math
 import re
 from collections.abc import Iterable, Mapping
@@ -13,12 +14,14 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import ingest, models
+from . import ingest, logformats, models
 
 SCHEMA_VERSION = "case-poc-1"
 # (nazwa źródła, oczekiwany rodzaj wpisu); kolejność jak w raporcie
 SOURCES = (("files", "dir"), ("database", "file"), ("logs", "any"), ("baseline", "file"))
 DATABASE_FORMATS = ("sql", "jsonl")  # format pliku --database (``database.FORMATS``)
+LOG_FORMATS = tuple(logformats.FORMATS)  # format wierszy --logs (``httplog.FORMATS``)
+MAX_TRUSTED_PROXIES = 64
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 _VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}")
 MAX_REFERENCE_LABEL = 120
@@ -47,12 +50,21 @@ class CaseContext:
     created_at_utc: str
     core_checksums: Path | None = None  # lokalny manifest sum rdzenia; w raporcie należy do źródła ``baseline``
     database_format: str = "sql"  # wybór operatora (--database-format); nie zgaduje się go po treści
+    log_format: str = "combined"  # wybór operatora (--log-format); nie zgaduje się go po treści
+    trusted_proxies: tuple[str, ...] = ()  # sieci w postaci kanonicznej (--trusted-proxy)
+    log_clock_skew: float | None = None  # deklarowana niepewność zegara serwera w sekundach (--log-clock-skew)
+
+    def proxy_networks(self) -> tuple[logformats.Network, ...]:
+        return tuple(ipaddress.ip_network(value) for value in self.trusted_proxies)
 
     def describe(self) -> dict:
         """Część ``case.json`` znana przed analizą. Ze ścieżek źródeł zostaje tylko nazwa ostatniego składnika."""
         sources = {name: {"provided": getattr(self, name) is not None, "name": _label(getattr(self, name))} for name, _ in SOURCES}
         if self.database is not None:
             sources["database"]["format"] = self.database_format
+        if self.logs is not None:
+            sources["logs"].update(format=self.log_format, trusted_proxies=list(self.trusted_proxies),
+                                   clock_skew_seconds=self.log_clock_skew)
         if self.core_checksums is not None:  # pole opcjonalne: case.json bez manifestu wygląda jak dotychczas
             sources["core_checksums"] = {"provided": True, "name": _label(self.core_checksums)}
         return {
@@ -95,6 +107,27 @@ def _limits(values: Mapping[str, float]) -> ingest.Limits:
     return limits
 
 
+def _proxies(values: Iterable[str]) -> tuple[str, ...]:
+    """Sieci zaufanych proxy (CIDR albo pojedynczy adres) w postaci kanonicznej, bez powtórzeń."""
+    networks: list[str] = []
+    for value in values:
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            raise CaseError("--trusted-proxy: oczekiwano adresu IP albo sieci CIDR (np. 10.0.0.0/8, 2001:db8::/32)") from None
+        if str(network) not in networks:
+            networks.append(str(network))
+    if len(networks) > MAX_TRUSTED_PROXIES:
+        raise CaseError(f"--trusted-proxy: najwyżej {MAX_TRUSTED_PROXIES} sieci")
+    return tuple(networks)
+
+
+def _skew(value: float | None) -> float | None:
+    if value is not None and not (math.isfinite(value) and value >= 0):
+        raise CaseError("--log-clock-skew: oczekiwano skończonej, nieujemnej liczby sekund")
+    return value
+
+
 def _output(output: Path, sources: list[Path]) -> Path:
     try:
         resolved = ingest.resolve_output(output, sources)
@@ -113,7 +146,8 @@ def _output(output: Path, sources: list[Path]) -> Path:
 def build(*, files: Path, output: Path, case_id: str, database: Path | None = None, logs: Path | None = None,
           baseline: Path | None = None, operator_id: str | None = None, known_admins: Iterable[str] = (),
           limits: Mapping[str, float] | None = None, allow_hardlinks: bool = False, reverify: bool = True,
-          core_checksums: Path | None = None, database_format: str = "sql") -> CaseContext:
+          core_checksums: Path | None = None, database_format: str = "sql", log_format: str = "combined",
+          trusted_proxies: Iterable[str] = (), log_clock_skew: float | None = None) -> CaseContext:
     """Waliduje wywołanie w kolejności: wartości tekstowe i limity, ścieżki źródeł, katalog wyników.
 
     Zgłasza ``CaseError`` z nazwą flagi. Źródło bez uprawnień do odczytu nie jest błędem wywołania:
@@ -124,6 +158,9 @@ def build(*, files: Path, output: Path, case_id: str, database: Path | None = No
         _identifier("--operator-id", operator_id)
     if database_format not in DATABASE_FORMATS:
         raise CaseError(f"--database-format: dozwolone wartości to {', '.join(DATABASE_FORMATS)}")
+    if log_format not in LOG_FORMATS:
+        raise CaseError(f"--log-format: dozwolone wartości to {', '.join(LOG_FORMATS)}")
+    proxies, skew = _proxies(trusted_proxies), _skew(log_clock_skew)
     admins = frozenset(known_admins)
     if not all(map(_encodable, admins)):
         raise CaseError(f"--known-admin: {_NOT_UTF8}")
@@ -144,7 +181,8 @@ def build(*, files: Path, output: Path, case_id: str, database: Path | None = No
         case_id=case_id, operator_id=operator_id, files=files, database=database, logs=logs, baseline=baseline,
         output=_output(output, [path for _, path, _ in given]), limits=checked, allow_hardlinks=allow_hardlinks,
         reverify=reverify, known_admins=admins, created_at_utc=models.utc_iso(datetime.now(timezone.utc)),
-        core_checksums=core_checksums, database_format=database_format)
+        core_checksums=core_checksums, database_format=database_format, log_format=log_format, trusted_proxies=proxies,
+        log_clock_skew=skew)
 
 
 def is_relative_path(path: object) -> bool:

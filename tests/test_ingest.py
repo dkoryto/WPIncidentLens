@@ -943,3 +943,49 @@ def test_names_listed_in_parent_directories_count_against_the_entry_budget(tmp_p
 
     assert requested == [20, 16, 12]
     assert session._pending == 0
+
+
+# --- sink_factory: strumień per plik dla źródła-katalogu (ADR 0007 pkt 2) ---------------------------
+
+def collecting_factory(received: dict[str, bytearray]):
+    def factory(rel):
+        received[rel] = bytearray()
+        return received[rel].extend
+    return factory
+
+
+def test_sink_factory_streams_each_read_file_to_its_own_sink_under_its_rel(tmp_path):
+    root = write(tmp_path / "logs" / "a.log", "first\n").parent
+    write(root / "sub" / "b.log", "second\n")
+    received: dict[str, bytearray] = {}
+
+    records = read(root, None, "logs", keep_limit=0, sink_factory=collecting_factory(received))
+
+    assert {rel: bytes(data) for rel, data in received.items()} == {"a.log": b"first\n", "sub/b.log": b"second\n"}
+    assert sorted(rels(records)) == sorted(received) and all(record.content is None for record in records)
+
+
+def test_sink_factory_is_not_called_for_skipped_entries(tmp_path):
+    root = write(tmp_path / "logs" / "a.log", "first\n").parent
+    (root / "link.log").symlink_to(root / "a.log")
+    write(root / "big.log", "x" * 100)
+    received: dict[str, bytearray] = {}
+
+    records = read(root, Session(Limits(max_file_bytes=50)), "logs", sink_factory=collecting_factory(received))
+
+    assert {rel: bytes(data) for rel, data in received.items()} == {"a.log": b"first\n"}
+    assert rels(records) == ["a.log"]
+
+
+def test_sink_factory_works_for_a_file_root(tmp_path):
+    path = write(tmp_path / "access.log", "line\n")
+    received: dict[str, bytearray] = {}
+
+    record = read(path, None, "logs", sink_factory=collecting_factory(received))[0]
+
+    assert received == {"access.log": bytearray(b"line\n")} and record.sha256 == sha256(path)
+
+
+def test_sink_and_sink_factory_together_are_refused(tmp_path):
+    with pytest.raises(ValueError):
+        read(write(tmp_path / "a.log"), None, "logs", sink=lambda chunk: None, sink_factory=lambda rel: None)
