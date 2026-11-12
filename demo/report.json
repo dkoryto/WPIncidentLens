@@ -3,7 +3,7 @@
   "tool": "WPIncidentLens PoC",
   "tool_version": "0.1.0-poc",
   "case_id": "DEMO-001",
-  "analyzed_at_utc": "2026-11-12T11:08:44.459708+00:00",
+  "analyzed_at_utc": "2026-11-12T13:45:23.919204+00:00",
   "analyzed_at_time_source": "tool_clock",
   "assessment": "SUSPICIOUS",
   "scope_complete": false,
@@ -211,7 +211,7 @@
       "read_reason": null,
       "sha256": "6cd5dcd6c3c68e4e8ab71f112b198528edfb4ac8f6c89d4d81ee26d8a1b799db",
       "size_bytes": 46,
-      "mtime_ns": 1794481152710940815,
+      "mtime_ns": 1794490995820392642,
       "hardlinked": false
     },
     {
@@ -222,7 +222,7 @@
       "read_reason": null,
       "sha256": "4537f75d228afaf9739f8969cccb4420e4cadfbe29b6e0d675b07adc039943fd",
       "size_bytes": 681,
-      "mtime_ns": 1794481152711013065,
+      "mtime_ns": 1794490995820583226,
       "hardlinked": false
     },
     {
@@ -233,7 +233,7 @@
       "read_reason": null,
       "sha256": "fd2178497bf11c65e4e9927059fc8f44a5fafdbf1c03591bbb08c260869642e9",
       "size_bytes": 85,
-      "mtime_ns": 1794481152711163441,
+      "mtime_ns": 1794490995817623127,
       "hardlinked": false
     },
     {
@@ -244,7 +244,7 @@
       "read_reason": null,
       "sha256": "f06a5eca5c633f61c89c35174036d188b3e67b26e827fc7ef2139cf5eae2b311",
       "size_bytes": 65,
-      "mtime_ns": 1794481152711235233,
+      "mtime_ns": 1794490995817905545,
       "hardlinked": false
     },
     {
@@ -255,7 +255,7 @@
       "read_reason": null,
       "sha256": "7f79efadcca2de0bd71f39a07aea6fbbf34fe1e4c683e884667fdf864f85ef8c",
       "size_bytes": 116,
-      "mtime_ns": 1794481152711324733,
+      "mtime_ns": 1794490995818376339,
       "hardlinked": false
     },
     {
@@ -266,7 +266,7 @@
       "read_reason": null,
       "sha256": "1b47959574b08906a6a4fb1916ef014256deeb84fa7b910219cd2900d696ecfc",
       "size_bytes": 225,
-      "mtime_ns": 1794481152711088565,
+      "mtime_ns": 1794490995817301001,
       "hardlinked": false
     }
   ],
@@ -353,7 +353,7 @@
       "observation_id": "obs_eec65075ff9a755ef969095689430635"
     },
     {
-      "time_utc": "2026-11-12T10:59:12.711325+00:00",
+      "time_utc": "2026-11-12T13:43:15.818377+00:00",
       "time_source": "mtime",
       "timestamp_basis": "Filesystem mtime: zmienialny; nie oznacza czasu ataku",
       "event": "SUSPICIOUS_FILE_MTIME",

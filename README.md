@@ -97,9 +97,10 @@ Każdy widok JSON ma `schema_version` (np. `findings-poc-1`) i `case_id`.
 | `created_at_utc`, `analysis_finished_at_utc` | czas walidacji wywołania i czas zakończenia analizy (równy `analyzed_at_utc` raportu); UTC, zegar narzędzia |
 | `sources` | dla `files`, `database`, `logs`, `baseline`: `provided` oraz `name` — wyłącznie ostatni składnik podanej ścieżki (`null`, gdy źródła nie podano albo ścieżka nie ma nazwy, np. `.`); `database` podanej bazy ma też `format` (`sql` albo `jsonl`); `core_checksums` w tym samym kształcie tylko wtedy, gdy podano `--core-checksums` |
 | `limits` | wszystkie limity odczytu użyte w przebiegu |
-| `flags` | `allow_hardlinks`, `reverify` |
+| `flags` | `allow_hardlinks`, `reverify`, `pseudonymize` (to ostatnie opcjonalne w schemacie) |
 | `report` | nazwa pliku raportu i SHA-256 jego zapisanych bajtów |
 | `assessment`, `exit_code` | etykieta triage z raportu i kod wyjścia procesu |
+| `ruleset` | `id`, `version` i SHA-256 kanonicznego JSON rejestru reguł (`wpincidentlens/rules.py`); pole opcjonalne w schemacie |
 | `outputs` | SHA-256 każdego innego zapisanego pliku wyniku, po nazwie; pole opcjonalne w schemacie (starsze `case.json` go nie mają) |
 
 ## Kontener Docker
@@ -119,12 +120,12 @@ cd docker && docker compose run --build --rm wpincidentlens
 - Sumy rdzenia są porównywane tylko z manifestem podanym lokalnie przez operatora; narzędzie nie sprawdza, czy manifest odpowiada wersji i locale witryny, i nie ma manifestów wtyczek ani motywów. Kod wtyczek i motywów da się zweryfikować wyłącznie własnym baseline; bez niego zostaje `NOT_CHECKED` i kod wyjścia 3.
 - Wersja, locale i prefiks tabel z WPDetector to kandydaci odczytani z plików, które napastnik mógł zmienić; nie są porównywani z bazą ani z wersją manifestu.
 - Parsowanie SQL jest celowo ograniczone do wybranych składni `INSERT INTO`; nie interpretuje złożonych dumpów, `BLOB`, triggerów, procedur, multisite ani całej składni MySQL. Brak informacji jest jawnie zgłaszany.
-- Brak parsera PHP serialization, więc nie rozpoznaje ukrytych zmian w serializowanych opcjach.
-- Nie analizuje logów poza formatem Apache/Nginx combined. Czas z logu jest zapisywany dosłownie i, gdy ma strefę, także w UTC; zegar serwera nie jest weryfikowany, a **wektor ataku nie jest ustalany**.
+- Dane serializowane PHP są dekodowane tylko jako dane (`wpincidentlens/phpserialize.py`) i tylko tam, gdzie potrzebuje ich reguła (role, cron, aktywne wtyczki); obiekty zostają nieprzezroczystym znacznikiem, a zmian w innych serializowanych opcjach narzędzie nie rozpoznaje.
+- Analizuje tylko logi dostępu w formatach `combined`, `common` i `json` (bez logów błędów, `vhost_combined` i IIS). Czas z logu jest zapisywany dosłownie i, gdy ma strefę, także w UTC; zegar serwera nie jest weryfikowany, a **wektor ataku nie jest ustalany**.
 - Symlinki, pliki specjalne i (domyślnie) pliki z wieloma dowiązaniami twardymi są pomijane z luką; pliki powyżej 4 MiB są haszowane, ale ich zawartość nie jest skanowana. Brak uczenia maszynowego i nie ma wykonywania PHP.
 - Testowe detekcje są heurystykami i mogą mieć false positive / false negative.
 - Nie wdraża pełnej chain of custody, sygnowania dowodów ani modeli uprawnień. Nie uruchamiaj na poufnych realnych danych bez przeglądu bezpieczeństwa.
-- Wartości wstawiane do raportu HTML są escapowane, ale raport nie deklaruje Content-Security-Policy. Adresy IP i URL z logów (także query string) trafiają do raportu bez redakcji i mogą być danymi osobowymi; przechowuj bezpiecznie.
+- Raport HTML escapuje każdą wartość w jednym miejscu i deklaruje Content-Security-Policy bez skryptów (`<meta>`, więc bez dyrektyw działających tylko w nagłówku HTTP). Query string i dane logowania z URL są usuwane, a teksty swobodne redagowane, ale wzorce sekretów nie są zupełne, a nazwy plików i ścieżki względne nie są redagowane. Bez `--pseudonymize` adresy IP klientów i loginy (także w postaci e-mail) są w raporcie jawnie i są danymi osobowymi; z flagą część danych nadal zostaje jawna (lista wyżej). Przechowuj raport bezpiecznie i przejrzyj go przed przekazaniem.
 
 ## Schemat JSON
 
