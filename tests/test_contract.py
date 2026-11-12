@@ -279,7 +279,7 @@ def test_every_finding_of_the_demo_case_rests_on_recorded_observations_and_evide
     evidence = {item["id"] for item in report["evidence"]}
 
     assert report["findings"] and all(finding["observations"] for finding in report["findings"])
-    assert {reference for finding in report["findings"] for reference in finding["observations"]} == set(observations)
+    assert {reference for finding in report["findings"] for reference in finding["observations"]} <= set(observations)  # kandydaci WPDetector nie mają ustalenia
     assert {item["evidence_id"] for item in observations.values()} <= evidence
 
 
@@ -500,7 +500,7 @@ def test_published_schema_is_a_valid_draft_2020_12_schema(schema):
 def test_report_generated_for_the_fixtures_validates_against_the_published_schema(demo_case, analyze):
     report = analyze_demo(analyze, demo_case).report
 
-    assert (len(report["findings"]), len(report["observations"]), len(report["evidence"])) == (6, 5, 6)
+    assert (len(report["findings"]), len(report["observations"]), len(report["evidence"])) == (6, 6, 6)
     assert schema_errors(report) == []
 
 
