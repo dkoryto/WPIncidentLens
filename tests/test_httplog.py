@@ -630,3 +630,14 @@ def test_userinfo_is_removed_from_the_uri_structurally(target):
 
 def test_absolute_form_without_userinfo_keeps_the_host():
     assert httplog.redacted_uri("http://site.invalid/wp-content/uploads/x.php?a=1") == "http://site.invalid/wp-content/uploads/x.php?[usunięto]"
+
+
+@pytest.mark.parametrize("target", [
+    "http://user:pa/ss@host/wp-content/uploads/x.php",
+    "http://user:pa/ss/more@host/x.php?t=1",
+    "https://us/er:SEKRETNE@host/x.php#frag",
+], ids=["slash-in-password", "slashes-and-query", "slash-in-user"])
+def test_credentials_with_a_slash_never_reach_the_uri(target):
+    uri = httplog.redacted_uri(target)
+
+    assert "pa/ss" not in uri and "SEKRETNE" not in uri and "us/er" not in uri and uri.count("[usunięto]") >= 1
