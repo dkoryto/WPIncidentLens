@@ -11,7 +11,7 @@ from pathlib import Path
 from . import case, files, ingest, integrity, models, report
 from . import database as database_scan
 from .analysis import Detection, SourceCoverage
-from .correlate import DEFAULT_WINDOW_SECONDS, correlate, detection_findings, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
+from .correlate import DEFAULT_WINDOW_SECONDS, correlate, detection_findings, focus as _focus, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
 from .httplog import FORMATS as FORMATS_OF_LOGS, LogConfig, scan_logs
 from .sqldump import iter_insert_rows  # noqa: F401  (ADR 0001: testy wołają go przez cli)
 from .analysis import evidence_of as _evidence
@@ -113,11 +113,12 @@ def _log_scan(result) -> tuple[list[Detection], SourceCoverage, list[models.Obse
 
 def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline: dict | None, known_admins: set[str],
                   session: ingest.Session, core: integrity.CoreChecksums | None = None, database_format: str = "sql",
-                  log_config: LogConfig | None = None,
+                  log_config: LogConfig | None = None, correlation_window: int = DEFAULT_WINDOW_SECONDS,
                   ) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation], list[models.Observation]]:
     """Uruchamia skanery podanych źródeł; źródło niepodane dostaje powód zamiast skanu.
 
-    Trzeci wynik: fakty bez ustalenia; czwarty: obserwacje ``HTTP_REQUEST`` z logów, materiał korelacji.
+    Trzeci wynik: fakty bez ustalenia; czwarty: obserwacje ``HTTP_REQUEST`` z logów, materiał korelacji. Logi są
+    czytane po plikach i bazie: ustalenia plikowe wyznaczają, które żądania korelacja może wykorzystać (``Focus``).
     """
     cover = {source: SourceCoverage(provided=False) for source in models.SOURCES}
     scan = files.scan_files(root, baseline, session, core)
@@ -131,7 +132,9 @@ def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline
         cover["database"].note("Brak zrzutu bazy danych")
     requests: list[models.Observation] = []
     if logs:
-        found, cover["logs"], requests = _log_scan(scan_logs(logs, session, log_config))
+        evidence = {item.id: item for item in map(_evidence, session.ledger)}
+        focus = _focus(detections, evidence, correlation_window, (log_config or LogConfig()).uncertainty)
+        found, cover["logs"], requests = _log_scan(scan_logs(logs, session, log_config, focus))
         detections.extend(found)
     else:
         cover["logs"].note("Brak logów HTTP")
@@ -168,7 +171,7 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
     if core is not None and core.record not in session.ledger:
         raise ValueError("manifest sum musi być wczytany przez load_core_checksums w tej samej sesji odczytu")
     detections, cover, facts, requests = _scan_sources(root, database, logs, baseline, known_admins, session, core,
-                                                        database_format, log_config)
+                                                        database_format, log_config, correlation_window)
     session_gaps = session.finish()  # od tej chwili rejestr sesji ma ostateczne statusy (także CHANGED z ponownej weryfikacji)
     for source, text in session.integrity_notes:
         for name in [source] if source else [name for name in models.SOURCES if cover[name].provided]:

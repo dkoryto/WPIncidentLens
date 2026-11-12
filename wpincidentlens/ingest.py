@@ -295,7 +295,7 @@ class Session:
         if sink is not None and sink_factory is not None:
             raise ValueError("podaj sink albo sink_factory, nie oba")
         keep_limit = self.limits.max_scan_bytes if keep_limit is None else keep_limit
-        if self._expired():
+        if self.expired():
             yield self._skip(source, ROOT, ReadStatus.SKIPPED_LIMIT, "MAX_SECONDS")
             return
         try:
@@ -328,10 +328,12 @@ class Session:
             return [*gaps, "Ponowna weryfikacja dowodów wyłączona (--no-reverify): zmiana źródeł po odczycie nie zostałaby wykryta"]
         return gaps + self._reverify()
 
-    # --- odczyt ---------------------------------------------------------------------------------
-
-    def _expired(self) -> bool:
+    def expired(self) -> bool:
+        """Czy minął limit czasu sesji (``Limits.max_seconds``). Sesja sprawdza go między wpisami; parser strumieniowy
+        (``sink``) może go sprawdzać w trakcie pliku i przerwać analizę treści — odczyt i skrót pliku idą wtedy do końca."""
         return self._clock() > self._deadline
+
+    # --- odczyt ---------------------------------------------------------------------------------
 
     def _walk(self, root_fd: int, root: _Root, wanted, keep_limit: int, md5: bool = False,
               sink_factory: Callable[[str], Callable[[bytes], None]] | None = None) -> Iterator[Evidence]:
@@ -348,7 +350,7 @@ class Session:
                     os.close(dir_fd)
                     continue
                 self._pending -= 1
-                if self._expired():
+                if self.expired():
                     yield self._skip(root.source, ROOT, ReadStatus.SKIPPED_LIMIT, "MAX_SECONDS")
                     return
                 here = (*parts, name)
@@ -498,7 +500,7 @@ class Session:
             dir_parts, dir_fd = (), root_fd  # katalog ostatnio sprawdzanego pliku: sąsiednie wpisy dzielą jedno otwarcie
             try:
                 for seen in root.seen:
-                    if self._expired():
+                    if self.expired():
                         note(None, f"Ponowna weryfikacja przerwana limitem czasu {self.limits.max_seconds:g} s: "
                                    f"sprawdzono {done}/{total} dowodów")
                         return gaps

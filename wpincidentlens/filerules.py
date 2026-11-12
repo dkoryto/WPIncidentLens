@@ -46,12 +46,24 @@ class Rule:
     find: Callable[[bytes], Spans] | None = None  # reguła treści: (offset, długość) kolejnych trafień
 
 
+def is_code_name(name: str) -> bool:
+    """Nazwa (jeden składnik ścieżki) z rozszerzeniem kodu; rozszerzenie wyznaczane jak ``PurePosixPath.suffix``,
+    ale bez budowania obiektu ścieżki: parser logów sprawdza tak każdy segment żądania."""
+    dot = name.rfind(".")
+    return 0 < dot < len(name) - 1 and name[dot:].lower() in CODE_SUFFIXES
+
+
+def has_code_part_before_suffix(name: str) -> bool:
+    """Nazwa z rozszerzeniem kodu przed ostatnim rozszerzeniem (``shell.php.jpg``)."""
+    return any(f".{part}" in CODE_SUFFIXES for part in name.lower().split(".")[1:-1])
+
+
 def _code_part_before_suffix(rel: str) -> bool:
-    return any(f".{part}" in CODE_SUFFIXES for part in PurePosixPath(rel).name.lower().split(".")[1:-1])
+    return has_code_part_before_suffix(PurePosixPath(rel).name)
 
 
 def is_code(rel: str) -> bool:
-    return PurePosixPath(rel).suffix.lower() in CODE_SUFFIXES
+    return is_code_name(PurePosixPath(rel).name)
 
 
 def is_code_in_uploads(rel: str) -> bool:

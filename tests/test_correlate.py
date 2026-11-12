@@ -390,3 +390,58 @@ def test_upload_named_with_a_long_hex_run_is_still_correlated_end_to_end(site, e
     logs = write(evidence / "logs" / "access.log", access_line("/" + upload)).parent
 
     assert "CORRELATED_UPLOAD_REQUEST" in analyze(site, logs=logs).rules
+
+
+# --- poprawki po przeglądzie bezpieczeństwa M4 ----------------------------------------------------
+
+def test_focus_covers_flagged_code_paths_and_the_mtime_window_widened_by_the_clock_skew():
+    plugin, image = flagged(PLUGIN_PHP), flagged("wp-content/uploads/2026/11/a.jpg", mtime_ns=T0_NS + 10_000 * 10**9)
+    evidence = {record.id: record for _, record in (plugin, image)}
+
+    focus = correlate.focus([plugin[0], image[0]], evidence, 900, uncertainty=30)
+
+    assert focus.paths == {PLUGIN_PHP}
+    assert focus.wants(PLUGIN_PHP, None)
+    assert focus.wants("wp-login.php", shifted(930)) and focus.wants("wp-login.php", shifted(-930))
+    assert not focus.wants("wp-login.php", shifted(931)) and not focus.wants("wp-login.php", None)
+    assert focus.wants("wp-login.php", shifted(10_000))  # okno drugiego pliku (mtime + 10 000 s)
+
+
+def test_focus_merges_overlapping_windows_and_ignores_reference_entries():
+    files = [flagged(PLUGIN_PHP), flagged("wp-content/themes/t/f.php", mtime_ns=T0_NS + 600 * 10**9),
+             flagged("wp-content/plugins/ref.php", origin="baseline")]
+    evidence = {record.id: record for _, record in files}
+
+    focus = correlate.focus([found for found, _ in files], evidence, 900)
+
+    assert focus.windows == ((T0_NS - 900 * 10**9, T0_NS + 1500 * 10**9),)
+    assert "wp-content/plugins/ref.php" not in focus.paths
+
+
+def test_focus_keeps_every_request_correlate_would_use():
+    """Właściwość: każde żądanie wskazane przez ``correlate`` jest w ``Focus`` (nic potrzebnego nie jest odrzucane)."""
+    rng = random.Random(4012)
+    for _ in range(200):
+        files = [flagged(f"wp-content/plugins/p{n}.php", mtime_ns=T0_NS + rng.randint(-5000, 5000) * 10**9) for n in range(3)]
+        requests = [request(f"wp-content/plugins/p{rng.randint(0, 5)}.php", at=shifted(rng.randint(-6000, 6000)), line=n,
+                            uncertainty=7) for n in range(12)]
+        evidence = {record.id: record for _, record in files} | {LOG.id: LOG}
+        focus = correlate.focus([found for found, _ in files], evidence, 600, uncertainty=7)
+
+        used = correlate.correlate([found for found, _ in files], requests, evidence, 600).requests
+
+        assert all(focus.wants(item.attributes["path"], item.timestamp_utc) for item in used)
+
+
+def test_same_path_matches_a_file_name_with_control_characters_after_neutralisation():
+    """Atrybut ``path`` żądania jest po ``redact.neutralise``; ścieżka pliku jest porównywana w tej samej postaci."""
+    name = "wp-content/plugins/demo/‮gpj.php"
+    shown = "wp-content/plugins/demo/�gpj.php"
+
+    result = run(flagged(name), requests=[request(shown)])
+
+    assert by_rule(result, "CORRELATED_FILE_REQUEST")
+    assert [finding.rule_id for finding in correlate.correlate(
+        [Detection("EXECUTABLE_IN_UPLOADS", "high", "high", "file", "x", models.Observation(LOG.id, "F", models.Location(
+            path="wp-content/uploads/‮x.php"), {})), upload_hit("wp-content/uploads/�x.php", "/x")],
+        [], {LOG.id: LOG}, 900).findings] == ["CORRELATED_UPLOAD_REQUEST"]

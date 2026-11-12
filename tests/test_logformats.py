@@ -25,12 +25,12 @@ def test_format_table_is_versioned():
 def test_combined_line_gives_every_field():
     assert parse("combined", COMBINED) == HttpRecord(
         "192.0.2.10", "09/Nov/2026:02:14:01 +0100", "2026-11-09T01:14:01+00:00", "second", "GET",
-        "/wp-content/uploads/a.php?x=1", 200, 75)
+        "/wp-content/uploads/a.php?x=1", 200, 75, escaped=True)
 
 
 def test_common_line_gives_every_field_and_dash_bytes_is_none():
     assert parse("common", COMMON) == HttpRecord(
-        "192.0.2.10", "09/Nov/2026:02:14:01 +0100", "2026-11-09T01:14:01+00:00", "second", "POST", "/wp-login.php", 302, None)
+        "192.0.2.10", "09/Nov/2026:02:14:01 +0100", "2026-11-09T01:14:01+00:00", "second", "POST", "/wp-login.php", 302, None, escaped=True)
 
 
 def test_json_line_gives_every_field():
@@ -79,7 +79,7 @@ def test_hostname_as_client_is_kept_and_ipv6_is_canonical():
     ("common", COMMON.replace("[", "", 1), "layout"),
     ("common", COMMON.replace('"POST /wp-login.php HTTP/1.0"', '"-"'), "request_line"),
     ("common", COMMON.replace("POST /wp-login.php", "POST /a b"), "request_line"),
-    ("common", COMMON.replace("POST", "post"), "request_line"),
+    ("common", COMMON.replace("POST", "PO(ST"), "request_line"),
     ("common", COMMON.replace("HTTP/1.0", "SMTP/1.0"), "request_line"),
     ("common", COMMON.replace("/wp-login.php", "/a\x0bb"), "request_line"),
     ("common", COMMON.replace("192.0.2.10", "bad_host!", 1), "bad_client"),
@@ -106,18 +106,19 @@ def test_hostname_as_client_is_kept_and_ipv6_is_canonical():
     ("json", json_line(headers={"a": "b"}), "bad_value"),
     ("json", json_line(tags=["a"]), "bad_value"),
     ("json", json_line(remote_addr="\ud800"), "bad_value"),
-    ("json", json_line(method="get"), "request_line"),
+    ("json", json_line(method="GE/T"), "request_line"),
+    ("json", json_line(method="G" * 33), "request_line"),
     ("json", json_line(uri="/a b"), "request_line"),
     ("json", json_line(uri=""), "request_line"),
     ("json", json_line(remote_addr="10.0.0.1:443"), "bad_client"),
     ("json", json_line(status=99), "bad_number"),
     ("json", json_line(bytes=-1), "bad_number"),
 ], ids=["empty", "garbage", "tab-separator", "unquoted-request", "no-time-brackets", "dash-request", "space-in-target",
-        "lowercase-method", "not-http-protocol", "control-in-target", "bad-hostname", "long-hostname", "status-below-100",
+        "method-with-separator", "not-http-protocol", "control-in-target", "bad-hostname", "long-hostname", "status-below-100",
         "status-above-599", "four-digit-status", "huge-bytes", "json-unterminated", "json-bom", "json-two-objects",
         "json-duplicate-key", "json-no-time", "json-status-text", "json-status-bool", "json-status-float", "json-bytes-float",
         "json-bytes-bool", "json-forwarded-number", "json-array", "json-string", "json-nan", "json-infinity",
-        "json-nested-object", "json-list-value", "json-lone-surrogate", "json-lowercase-method", "json-space-in-uri",
+        "json-nested-object", "json-list-value", "json-lone-surrogate", "json-method-with-separator", "json-method-too-long", "json-space-in-uri",
         "json-empty-uri", "json-address-with-port", "json-status-99", "json-negative-bytes"])
 def test_line_outside_the_format_is_rejected_with_its_reason(fmt, line, reason):
     assert reason in logformats.REASONS
@@ -178,7 +179,8 @@ def test_raw_time_is_bounded():
     ("/wp-content//uploads///a.php", "wp-content/uploads/a.php"),
     ("/wp-content/uploads/x/%2e%2e/shell.php", "wp-content/uploads/shell.php"),
     ("/wp-content/uploads/x/%2E%2E/./shell.php", "wp-content/uploads/shell.php"),
-    ("/wp-content/uploads/%2fshell.php", "wp-content/uploads/shell.php"),
+    ("/wp-content/uploads/%2fshell.php", None),
+    ("/wp-content/uploads/a%2Fshell.php", None),
     ("/wp-content/uploads/%252e%252e/a.php", "wp-content/uploads/%2e%2e/a.php"),
     ("/wp-content/uploads/za%C5%BC%C3%B3%C5%82%C4%87.php", "wp-content/uploads/zażółć.php"),
     ("/wp-content/uploads/%ff.php", "wp-content/uploads/�.php"),
@@ -189,16 +191,61 @@ def test_raw_time_is_bounded():
     ("/../../etc/passwd", None),
     ("/a/%2e%2e/%2e%2e/etc/passwd", None),
     ("/a%00.php", None),
-    ("/a%0a.php", None),
+    ("/a%0a.php", "a\n.php"),
+    ("/wp-content/uploads/a%C2%A0b.php", "wp-content/uploads/a\xa0b.php"),
+    ("/wp-content/uploads/shell%09.php", "wp-content/uploads/shell\t.php"),
+    ("/wp-content/uploads/%E2%80%AEgpj.php", "wp-content/uploads/\u202egpj.php"),
     ("*", None),
     ("wp-content/uploads/a.php", None),
     ("/" + "a" * 5000, None),
 ], ids=["plain", "query-and-fragment", "fragment-first", "double-slashes", "encoded-dot-dot", "upper-encoded-dot-dot",
-        "encoded-slash", "decoded-once-only", "utf8", "invalid-utf8", "case-kept", "absolute-form", "absolute-form-no-path",
-        "root", "dot-dot-above-root", "encoded-dot-dot-above-root", "encoded-nul", "encoded-newline", "asterisk",
+        "encoded-slash", "encoded-slash-upper", "decoded-once-only", "utf8", "invalid-utf8", "case-kept", "absolute-form", "absolute-form-no-path",
+        "root", "dot-dot-above-root", "encoded-dot-dot-above-root", "encoded-nul", "encoded-newline", "nbsp", "tab", "right-to-left-override", "asterisk",
         "not-origin-form", "too-long"])
 def test_request_path_is_normalised_once(target, path):
     assert request_path(target) == path
+
+
+# --- poprawki po przeglądzie bezpieczeństwa M4 ----------------------------------------------------
+
+@pytest.mark.parametrize("method", ["GET_X", "M-SEARCH", "get", "PROPFIND", "X!#$%&'*+.^_`|~1"],
+                         ids=["underscore", "hyphen", "lowercase", "webdav", "every-token-character"])
+def test_any_rfc7230_token_is_a_method_because_the_server_passes_it_to_php(method):
+    line = f'192.0.2.10 - - [09/Nov/2026:02:14:01 +0100] "{method} /wp-content/uploads/x.php HTTP/1.1" 200 1'
+
+    assert parse("common", line).method == method
+    assert parse("json", json_line(method=method)).method == method
+
+
+@pytest.mark.parametrize("target, path", [
+    ("/wp-content/uploads/sh\\xc3\\xa9ll.php", "wp-content/uploads/sh\u00e9ll.php"),
+    ('/wp-content/uploads/a\\"b.php', 'wp-content/uploads/a"b.php'),
+    ("/wp-content/uploads/a\\\\b.php", "wp-content/uploads/a\\b.php"),
+    ("/wp-content/uploads/a\\x41%42.php", "wp-content/uploads/aAB.php"),
+    ("/wp-content/uploads/a\\x25%32%35.php", "wp-content/uploads/a%25.php"),
+    ("/wp-content/uploads/a\\q.php", "wp-content/uploads/a\\q.php"),
+], ids=["utf8-bytes", "quote", "backslash", "escape-then-percent", "escaped-percent-is-not-decoded-twice", "unknown-escape-kept"])
+def test_log_escapes_are_reversed_before_percent_decoding(target, path):
+    """Apache i Nginx zapisują w ``%r`` bajty spoza ASCII drukowalnego jako ``\\xNN``; plik na dysku ma prawdziwą nazwę."""
+    line = f'192.0.2.10 - - [09/Nov/2026:02:14:01 +0100] "GET {target} HTTP/1.1" 200 1'
+    record = parse("common", line)
+
+    assert record.escaped and logformats.resolve_target(record.target, record.escaped).path == path
+
+
+def test_log_escapes_are_not_reversed_in_json_where_the_decoder_already_did_it():
+    record = parse("json", json_line(uri="/wp-content/uploads/sh\\xc3\\xa9ll.php"))
+
+    assert not record.escaped and request_path(record.target, record.escaped) == "wp-content/uploads/sh\\xc3\\xa9ll.php"
+
+
+@pytest.mark.parametrize("target, escaped", [("/wp-content/uploads/%ff.php", False), ("/wp-content/uploads/\\xff.php", True)],
+                         ids=["percent", "log-escape"])
+def test_bytes_outside_utf8_in_the_path_are_marked_lossy(target, escaped):
+    resolved = logformats.resolve_target(target, escaped)
+
+    assert resolved == ("wp-content/uploads/\ufffd.php", True, "/wp-content/uploads/\ufffd.php")
+    assert not logformats.resolve_target("/wp-content/uploads/a.php", escaped).lossy
 
 
 # --- adres klienta (pkt 5, S-14) ----------------------------------------------------------------
