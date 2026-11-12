@@ -388,6 +388,27 @@ def scan_logs(root: Path, session: ingest.Session | None = None) -> tuple[list[D
     return findings, cover
 
 
+class _DuplicateKey(ValueError):
+    pass
+
+
+def _unique_keys(pairs: list[tuple[str, object]]) -> dict:
+    data = dict(pairs)
+    if len(data) != len(pairs):  # json bierze po cichu ostatnią wartość: dwa wpisy tej samej ścieżki ukryłyby jeden skrót
+        raise _DuplicateKey
+    return data
+
+
+def _reference_json(content: bytes) -> object:
+    """JSON zaufanej referencji (baseline, manifest sum); powtórzony klucz obiektu jest błędem, nie cichym nadpisaniem."""
+    try:
+        return json.loads(content.decode("utf-8"), object_pairs_hook=_unique_keys)
+    except _DuplicateKey:
+        raise ValueError("powtórzony klucz w obiekcie JSON") from None
+    except (ValueError, RecursionError):
+        raise ValueError("niepoprawny JSON (wymagany UTF-8)") from None
+
+
 def load_baseline(path: Path, session: ingest.Session) -> dict:
     """Czyta zaufany baseline tym samym bezpiecznym odczytem co dowody; wpis dowodu i jego luki zostają w rejestrze sesji.
 
@@ -397,10 +418,7 @@ def load_baseline(path: Path, session: ingest.Session) -> dict:
     item = session.read_file(path, "baseline", keep_limit=MAX_BASELINE_BYTES)
     if item.content is None:
         raise ValueError(item.gaps[0] if item.sha256 is None else f"plik większy niż {MAX_BASELINE_BYTES} B")
-    try:
-        data = json.loads(item.content.decode("utf-8"))
-    except (ValueError, RecursionError):
-        raise ValueError("niepoprawny JSON (wymagany UTF-8)") from None
+    data = _reference_json(item.content)
     if not isinstance(data, dict):
         raise ValueError("baseline musi być obiektem JSON")
     files, admins = data.get("files", {}), data.get("known_admins", [])
@@ -419,11 +437,7 @@ def load_core_checksums(path: Path, session: ingest.Session) -> integrity.CoreCh
     item = session.read_file(path, "baseline", keep_limit=MAX_CORE_CHECKSUMS_BYTES)
     if item.content is None:
         raise ValueError(item.gaps[0] if item.sha256 is None else f"plik większy niż {MAX_CORE_CHECKSUMS_BYTES} B")
-    try:
-        data = json.loads(item.content.decode("utf-8"))
-    except (ValueError, RecursionError):
-        raise ValueError("niepoprawny JSON (wymagany UTF-8)") from None
-    return integrity.parse_core_checksums(data, replace(item, content=None))
+    return integrity.parse_core_checksums(_reference_json(item.content), replace(item, content=None))
 
 
 def _coverage(source: str, cover: SourceCoverage, ledger: list[ingest.Evidence]) -> models.Coverage:

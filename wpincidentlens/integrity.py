@@ -1,26 +1,30 @@
 """Porównanie plików z zaufaną referencją: baseline (SHA-256) i lokalny manifest sum rdzenia WordPress.org (MD5).
 
-Brak referencji to luka w zakresie (``NOT_CHECKED``), nie wynik „bez zmian”. Moduł nie dotyka systemu plików:
+Brak referencji to luka w zakresie (``NOT_CHECKED``), nie wynik „bez zmian”: plik kodu, którego nie zweryfikowano
+względem żadnej referencji, obniża pokrycie źródła ``files`` (ADR 0005, pkt 6). Moduł nie dotyka systemu plików:
 dostaje wpisy już przeczytane przez SecureIngest. MD5 służy wyłącznie do porównania z publicznym manifestem
 i występuje tylko w atrybutach obserwacji; skrótem dowodu pozostaje SHA-256 (ADR 0005).
 """
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 
 from . import case, filerules, ingest, models
 from .analysis import Detection, SourceCoverage, observe, seen_in
-from .fileclass import AUTOLOADED, FileClass, classify
+from .fileclass import AUTOLOADED, CONFIG_NAMES, FileClass, classify
 
 MAX_CORE_CHECKSUMS = 50_000  # pełny manifest WordPressa ma kilka tysięcy wpisów
-MAX_MANIFEST_PATH = 1024
+MAX_FINDINGS_PER_RULE = 200  # ponad limit powstaje luka pokrycia z łączną liczbą wykryć, nie kolejne ustalenia
 _MD5 = re.compile(r"[0-9a-f]{32}")
-# Klasy, dla których brak referencji jest zapisywany w pokryciu osobno (ADR 0005, pkt 3).
+_VERSION_KEY = re.compile(r"\d+(\.\d+){1,2}([-+][0-9A-Za-z.]+)?")
+# Klasy, dla których brak referencji jest zapisywany w pokryciu także wtedy, gdy nie dotyczy pliku kodu (ADR 0005, pkt 3).
 CHECKED_CLASSES = (FileClass.CORE, FileClass.PLUGIN, FileClass.THEME, FileClass.MU_PLUGIN, FileClass.DROPIN)
+CORE_DIRS = ("wp-admin", "wp-includes")
+MU_PLUGINS_DIR = "wp-content/mu-plugins"
 _NOT_PROOF = "Nowy plik nie dowodzi włamania: baseline może być po prostu starszy niż legalna zmiana."
 
 
@@ -33,15 +37,11 @@ class CoreChecksums:
     label: str | None = None
 
 
-def _relative_posix(path: object) -> bool:
-    return (isinstance(path, str) and 0 < len(path) <= MAX_MANIFEST_PATH and path.isprintable() and "\\" not in path
-            and all(part not in ("", ".", "..") for part in path.split("/")))
-
-
 def parse_core_checksums(data: object, record: ingest.Evidence) -> CoreChecksums:
     """Sprawdza kształt ``{"checksums": {ścieżka: md5}}`` (api.wordpress.org ``core/checksums/1.0``); ``ValueError`` przy odstępstwie.
 
-    Przyjmuje też wariant ``{"checksums": {"<wersja>": {ścieżka: md5}}}``. Komunikaty nie powtarzają odrzuconych wartości.
+    Przyjmuje też wariant ``{"checksums": {"<wersja>": {ścieżka: md5}}}``, w którym jedyny klucz wygląda jak numer wersji.
+    Komunikaty nie powtarzają odrzuconych wartości.
     """
     if not isinstance(data, dict) or not isinstance(data.get("checksums"), dict):
         raise ValueError('manifest musi być obiektem JSON {"checksums": {ścieżka: md5}}')
@@ -49,15 +49,17 @@ def parse_core_checksums(data: object, record: ingest.Evidence) -> CoreChecksums
     checksums = data["checksums"]
     if len(checksums) == 1 and isinstance(next(iter(checksums.values())), dict):
         (nested_version, checksums), = checksums.items()
+        if _VERSION_KEY.fullmatch(nested_version) is None:
+            raise ValueError("jedyny klucz checksums z obiektem musi być numerem wersji, np. 6.5.2")
         case.reference_labels({"wordpress_version": nested_version})
         if version not in (None, nested_version):
             raise ValueError("wordpress_version różni się od wersji w kluczu checksums")
         version = nested_version
     if not 0 < len(checksums) <= MAX_CORE_CHECKSUMS:
         raise ValueError(f"manifest musi zawierać od 1 do {MAX_CORE_CHECKSUMS} sum")
-    if not all(map(_relative_posix, checksums)):
+    if not all(map(case.is_relative_path, checksums)):
         raise ValueError("klucze checksums muszą być ścieżkami względnymi z ukośnikami „/”, bez „..”, "
-                         f"znaków sterujących i dłuższych niż {MAX_MANIFEST_PATH} znaków")
+                         f"znaków sterujących i dłuższych niż {case.MAX_REFERENCE_PATH} znaków")
     if not all(isinstance(value, str) and _MD5.fullmatch(value) for value in checksums.values()):
         raise ValueError("wartości checksums muszą być skrótami MD5: 32 małe cyfry szesnastkowe")
     return CoreChecksums(record, checksums, version, label)
@@ -77,8 +79,32 @@ def _reference_facts(version: str | None, label: str | None) -> dict[str, str]:
     return {name: value for name, value in (("reference_version", version), ("reference", label)) if value is not None}
 
 
-def _is_code(rel: str) -> bool:
-    return PurePosixPath(rel).suffix.lower() in filerules.CODE_SUFFIXES
+def _directories(paths: Iterable[str]) -> set[str]:
+    """Wszystkie katalogi nadrzędne podanych ścieżek, policzone raz (bez przeszukiwania referencji przy każdym wpisie)."""
+    found: set[str] = set()
+    for path in paths:
+        while "/" in path:
+            path = path.rpartition("/")[0]
+            if path in found:
+                break
+            found.add(path)
+    return found
+
+
+def _is_core_code(rel: str) -> bool:
+    """Plik kodu lub konfiguracji PHP/serwera w katalogu głównym witryny, ``wp-admin`` albo ``wp-includes``.
+
+    Bez plików konfiguracji z katalogu głównego (``wp-config.php``, ``.htaccess``, ``.user.ini``, ``php.ini``):
+    są oczekiwane, a manifest dystrybucji nigdy ich nie zawiera.
+    """
+    parts = rel.split("/")
+    if len(parts) == 1:
+        return rel not in CONFIG_NAMES and filerules.wants_content(rel)
+    return parts[0] in CORE_DIRS and filerules.wants_content(rel)
+
+
+def _read_state(item: ingest.Evidence) -> str:
+    return f"{item.status}/{item.reason}" if item.reason else str(item.status)
 
 
 class ReferenceComparison:
@@ -87,73 +113,116 @@ class ReferenceComparison:
     def __init__(self, baseline: dict | None, core: CoreChecksums | None = None) -> None:
         self.baseline = baseline
         self.ref: dict[str, str] = (baseline or {}).get("files", {})
+        self.ref_dirs = _directories(self.ref)
         self.baseline_facts = _reference_facts((baseline or {}).get("wordpress_version"), (baseline or {}).get("reference"))
         self.core = core
+        self.checksums: Mapping[str, str] = core.checksums if core else {}
+        self.core_dirs = _directories(self.checksums)
         self.core_facts = {} if core is None else {
             **_reference_facts(core.version, core.label), "reference_file": f"{core.record.source}/{core.record.rel}"}
         self.observed: set[str] = set()      # przeczytane
         self.unread: set[str] = set()        # widziane, lecz nieprzeczytane
         self.unreferenced: set[str] = set()  # przeczytane, bez wpisu w żadnej referencji i bez własnego ustalenia
-        self.read_in_class: Counter = Counter()
-        self.unchecked_in_class: Counter = Counter()
+        self.seen_in_class: Counter = Counter()            # wpisy przeczytane i nieprzeczytane
+        self.unchecked_in_class: Counter = Counter()       # …z nich niezweryfikowane względem żadnej referencji
+        self.unchecked_code_in_class: Counter = Counter()  # …z nich pliki kodu (``filerules.wants_content``)
+        self.detected: Counter = Counter()   # wykrycia według reguły, także te ponad limit ustaleń
         self.complete = True                 # czy przejście objęło całe drzewo
 
+    def _emit(self, found: list[Detection], rule: str, severity: str, confidence: str, explanation: str, fact) -> None:
+        """Dodaje wykrycie, dopóki reguła nie wyczerpała limitu; ``fact`` buduje obserwację dopiero wtedy, gdy jest potrzebna."""
+        self.detected[rule] += 1
+        if self.detected[rule] <= MAX_FINDINGS_PER_RULE:
+            found.append(Detection(rule, severity, confidence, "file", explanation, fact()))
+
+    def _unchecked(self, kind: FileClass, rel: str) -> None:
+        self.unchecked_in_class[kind] += 1
+        self.unchecked_code_in_class[kind] += filerules.wants_content(rel)
+
     def check(self, item: ingest.Evidence) -> list[Detection]:
-        """Rejestruje wpis; dla przeczytanego pliku zwraca wykrycia różnic względem referencji."""
-        kind = classify(item.rel)
+        """Rejestruje wpis i zwraca wykrycia różnic względem referencji; wpis nieprzeczytany ocenia po samej ścieżce."""
+        rel, found = item.rel, []
+        if rel == ingest.ROOT:  # wpis o samym źródle: przejście drzewa jest niepełne
+            self.unread.add(rel)
+            self.complete = False
+            return found
+        kind = classify(rel)
+        self.seen_in_class[kind] += 1
         if item.sha256 is None:
-            self.unread.add(item.rel)
-            self.complete = self.complete and item.rel != ingest.ROOT and item.reason not in ("MAX_FILES", "MAX_ENTRIES")
-            # Katalog, którego pliki baseline wymienia, nie jest nowy — tylko nieprzejrzany.
-            if self._new_autoloaded(item.rel, kind) and not any(listed.startswith(item.rel + "/") for listed in self.ref):
-                return [Detection("NEW_FILE_SINCE_BASELINE", "medium", "low", "file",
-                                  "Wpis w miejscu ładowanym automatycznie nie występuje w baseline; treść nieodczytana, "
-                                  f"wymaga ręcznej analizy. {_NOT_PROOF}",
-                                  seen_in(item, "ENTRY_NOT_IN_BASELINE", file_class=str(kind), **self.baseline_facts))]
-            return []
-        self.observed.add(item.rel)
-        self.read_in_class[kind] += 1
-        found, reported = [], False
-        expected = self.ref.get(item.rel)
-        if expected is not None and expected != item.sha256:
-            found.append(Detection("BASELINE_FILE_CHANGED", "medium", "high", "file",
-                                   "Plik zmieniony względem zaufanej migawki (zmiana nie przesądza o ataku).",
-                                   seen_in(item, "FILE_DIFFERS_FROM_BASELINE", baseline_sha256=expected, **self.baseline_facts)))
-        elif self._new_autoloaded(item.rel, kind):
+            self.unread.add(rel)
+            self.complete = self.complete and item.reason not in ("MAX_FILES", "MAX_ENTRIES")
+            self._unchecked(kind, rel)
+            self._check_unread(item, kind, found)
+            return found
+        self.observed.add(rel)
+        reported = False
+        expected = self.ref.get(rel)
+        if expected is not None:
+            if expected != item.sha256:
+                self._emit(found, "BASELINE_FILE_CHANGED", "medium", "high",
+                           "Plik zmieniony względem zaufanej migawki (zmiana nie przesądza o ataku).",
+                           lambda: seen_in(item, "FILE_DIFFERS_FROM_BASELINE", baseline_sha256=expected, **self.baseline_facts))
+        elif self.ref and kind in AUTOLOADED:
             reported = True
-            found.append(Detection("NEW_FILE_SINCE_BASELINE", "medium", "medium", "file",
-                                   f"Plik w miejscu ładowanym automatycznie nie występuje w baseline. {_NOT_PROOF}",
-                                   seen_in(item, "FILE_NOT_IN_BASELINE", file_class=str(kind), **self.baseline_facts)))
-        in_manifest = self.core is not None and item.rel in self.core.checksums
+            self._emit(found, "NEW_FILE_SINCE_BASELINE", "medium", "medium",
+                       f"Plik w miejscu ładowanym automatycznie nie występuje w baseline. {_NOT_PROOF}",
+                       lambda: seen_in(item, "FILE_NOT_IN_BASELINE", file_class=str(kind), **self.baseline_facts))
+        reference_md5 = self.checksums.get(rel)
         if self.core is not None and item.md5 is not None:
-            if in_manifest:
-                found.extend(self._against_manifest(item, self.core.checksums[item.rel]))
-            elif kind is FileClass.CORE and _is_code(item.rel):
-                # Kod w wp-admin, wp-includes i w katalogu głównym jest osiągalny wprost z sieci, a legalne dodatki tam
-                # nie trafiają. Pewność niska: manifest innej wersji lub locale daje ten sam obraz.
-                reported = True
-                found.append(Detection("CORE_FILE_NOT_IN_MANIFEST", "medium", "low", "file",
-                                       "Plik PHP w miejscu rdzenia nie występuje w manifeście sum; może pochodzić z innej wersji "
-                                       "lub locale WordPressa albo być plikiem dodanym — wymaga ręcznej weryfikacji.",
-                                       seen_in(item, "FILE_NOT_IN_CORE_MANIFEST", **self.core_facts)))
-        if expected is None and not in_manifest:
-            self.unchecked_in_class[kind] += 1
+            if reference_md5 is None:
+                if _is_core_code(rel):
+                    reported = True
+                    self._not_in_manifest(item, found)
+            elif reference_md5 != item.md5:
+                stated = f"dla wersji {self.core.version}" if self.core.version else "z podanego manifestu (bez oznaczenia wersji)"
+                self._emit(found, "CORE_CHECKSUM_MISMATCH", "medium", "high",
+                           f"Plik różni się od publicznej referencji WordPress.org {stated}. Manifest innej wersji lub innego "
+                           "locale także daje rozbieżności; sama różnica nie przesądza o ataku.",
+                           lambda: seen_in(item, "FILE_DIFFERS_FROM_CORE_MANIFEST", observed_sha256=item.sha256,
+                                           observed_md5=item.md5, reference_md5=reference_md5, **self.core_facts))
+        if expected is None and reference_md5 is None:
+            self._unchecked(kind, rel)
             if not reported:
-                self.unreferenced.add(item.rel)
+                self.unreferenced.add(rel)
         return found
 
-    def _new_autoloaded(self, rel: str, kind: FileClass) -> bool:
-        return bool(self.ref) and rel not in self.ref and kind in AUTOLOADED
+    def _check_unread(self, item: ingest.Evidence, kind: FileClass, found: list[Detection]) -> None:
+        """Wpis, którego nie przeczytano (dowiązanie, drugi hardlink, brak uprawnień, limit): ocena wyłącznie po ścieżce."""
+        rel, state = item.rel, _read_state(item)
+        in_baseline, in_manifest = rel in self.ref, rel in self.checksums
+        # Katalog, którego pliki wymienia referencja, a który przestał być czytelnym katalogiem. Limit operatora
+        # (głębokość, liczba wpisów) nie jest zmianą w materiale i zostaje samą luką pokrycia.
+        by_limit = item.status is ingest.ReadStatus.SKIPPED_LIMIT
+        baseline_dir, manifest_dir = rel in self.ref_dirs and not by_limit, rel in self.core_dirs and not by_limit
+        if in_baseline or in_manifest or baseline_dir or manifest_dir:
+            listed = "+".join(name for name, present in (("baseline", in_baseline or baseline_dir),
+                                                         ("core_manifest", in_manifest or manifest_dir)) if present)
+            facts = {**(self.baseline_facts if in_baseline or baseline_dir else {}),
+                     **({"reference_file": self.core_facts["reference_file"]} if in_manifest or manifest_dir else {})}
+            self._emit(found, "REFERENCE_FILE_UNREADABLE", "medium", "low",
+                       "Wpis wymieniony w zaufanej referencji nie został odczytany, więc nie dało się go zweryfikować "
+                       f"(status odczytu: {state}; np. dowiązanie symboliczne, dodatkowe dowiązanie twarde, brak uprawnień). "
+                       "Sam brak odczytu nie dowodzi zmiany pliku.",
+                       lambda: seen_in(item, "REFERENCE_ENTRY_NOT_READ", listed_in=listed,
+                                       listed_as="file" if in_baseline or in_manifest else "directory", **facts))
+        elif self.ref and rel not in self.ref_dirs and (kind in AUTOLOADED or rel == MU_PLUGINS_DIR):
+            self._emit(found, "NEW_FILE_SINCE_BASELINE", "medium", "low",
+                       "Wpis w miejscu ładowanym automatycznie nie występuje w baseline; treść nieodczytana "
+                       f"(status odczytu: {state}), wymaga ręcznej analizy. {_NOT_PROOF}",
+                       lambda: seen_in(item, "ENTRY_NOT_IN_BASELINE", file_class=str(kind), **self.baseline_facts))
+        elif self.core is not None and _is_core_code(rel):
+            self._not_in_manifest(item, found, unread=state)
 
-    def _against_manifest(self, item: ingest.Evidence, reference_md5: str) -> list[Detection]:
-        if item.md5 == reference_md5:
-            return []
-        stated = f"dla wersji {self.core.version}" if self.core.version else "z podanego manifestu (bez oznaczenia wersji)"
-        return [Detection("CORE_CHECKSUM_MISMATCH", "medium", "high", "file",
-                          f"Plik różni się od publicznej referencji WordPress.org {stated}. Manifest innej wersji lub innego locale "
-                          "także daje rozbieżności; sama różnica nie przesądza o ataku.",
-                          seen_in(item, "FILE_DIFFERS_FROM_CORE_MANIFEST", observed_sha256=item.sha256, observed_md5=item.md5,
-                                  reference_md5=reference_md5, **self.core_facts))]
+    def _not_in_manifest(self, item: ingest.Evidence, found: list[Detection], unread: str | None = None) -> None:
+        # Katalog główny, wp-admin i wp-includes są osiągalne wprost z sieci, a dystrybucja WordPressa nie przewiduje tam
+        # dodatkowych plików kodu ani konfiguracji. Pewność niska: manifest innej wersji lub locale daje ten sam obraz,
+        # a w katalogu głównym bywają legalne pliki spoza dystrybucji (np. skrypty hostingu).
+        note = f" Treść nieodczytana (status odczytu: {unread})." if unread else ""
+        self._emit(found, "CORE_FILE_NOT_IN_MANIFEST", "medium", "low",
+                   "Plik kodu lub konfiguracji w katalogu głównym, wp-admin albo wp-includes nie występuje w manifeście sum "
+                   "rdzenia; może pochodzić z innej wersji lub locale WordPressa, z legalnego dodatku albo być plikiem "
+                   f"podrzuconym — wymaga ręcznej weryfikacji.{note}",
+                   lambda: seen_in(item, "FILE_NOT_IN_CORE_MANIFEST", **self.core_facts))
 
     def _absent(self, listed: Mapping[str, str]) -> list[str]:
         """Ścieżki z referencji, których w materiale na pewno nie ma: bez wpisów, które istnieją, lecz są nieprzeczytane."""
@@ -164,40 +233,61 @@ class ReferenceComparison:
                 absent.append(rel)
         return absent
 
+    def _note_unchecked(self, cover: SourceCoverage) -> None:
+        """``NOT_CHECKED`` per klasa. Niezweryfikowany plik kodu obniża pokrycie, bo brak ustaleń nic o nim nie mówi."""
+        for kind in FileClass:
+            unchecked, code = self.unchecked_in_class[kind], self.unchecked_code_in_class[kind]
+            if not (code or (unchecked and kind in CHECKED_CLASSES)):
+                continue
+            total = self.seen_in_class[kind]
+            count = f"{unchecked}" if unchecked == total else f"{unchecked} z {total}"
+            text = (f"NOT_CHECKED: integralność plików klasy {kind} (plików: {count}, w tym kodu: {code}) niezweryfikowana "
+                    "— brak zaufanej referencji")
+            if code:
+                cover.degrade(text)
+            else:
+                cover.note(text)
+
     def finish(self, session: ingest.Session, cover: SourceCoverage) -> list[Detection]:
-        """Po przejściu drzewa: noty o plikach bez referencji i wykrycia plików, których w materiale brakuje."""
-        found = []
+        """Po przejściu drzewa: luki o plikach bez referencji i wykrycia plików, których w materiale brakuje."""
+        found: list[Detection] = []
         if (self.ref or self.core) and self.unreferenced:
             # Plik bez wpisu w referencji nie jest porównywany: bez tej noty nowy plik znikałby z raportu bez śladu.
             unreferenced = sorted(self.unreferenced)
-            examples = ", ".join(unreferenced[:3]) + (", …" if len(unreferenced) > 3 else "")
+            # Nazwa pochodzi z materiału: cudzysłowy JSON nie pozwalają jej przecinkom ani znakom sterującym zmienić zdania.
+            examples = ", ".join(json.dumps(rel, ensure_ascii=False) for rel in unreferenced[:3]) + (", …" if len(unreferenced) > 3 else "")
             cover.note(f"NO_TRUSTED_REFERENCE: {len(unreferenced)} odczytanych plików nie ma wpisu w podanej referencji, "
                        f"więc ich zmiany lub pojawienia się nie da się ocenić ({examples})")
-        for kind in CHECKED_CLASSES:
-            if unchecked := self.unchecked_in_class[kind]:
-                total = self.read_in_class[kind]
-                count = f"{unchecked}" if unchecked == total else f"{unchecked} z {total}"
-                cover.note(f"NOT_CHECKED: integralność plików klasy {kind} (plików: {count}) niezweryfikowana — brak zaufanej referencji")
-        if not self.complete:  # po przerwanym przejściu nie wiadomo, czego w materiale brakuje
-            return found
+        self._note_unchecked(cover)
+        if self.complete:  # po przerwanym przejściu nie wiadomo, czego w materiale brakuje
+            self._missing(session, cover, found)
+        for rule, total in sorted(self.detected.items()):
+            if total > MAX_FINDINGS_PER_RULE:
+                cover.degrade(f"Limit {MAX_FINDINGS_PER_RULE} ustaleń reguły {rule} wyczerpany: wykryć było {total}, "
+                              "pozostałe nie są wymienione w raporcie")
+        return found
+
+    def _missing(self, session: ingest.Session, cover: SourceCoverage, found: list[Detection]) -> None:
         if self.ref:
             reference = baseline_record(session, self.core)  # dowodem braku pliku jest baseline, który ten plik wymienia
             for rel in self._absent(self.ref):
-                found.append(Detection("BASELINE_FILE_MISSING", "low", "high", "file",
-                                       "Plik obecny w migawce bazowej nie występuje w materiale wejściowym.",
-                                       observe(reference, "BASELINE_ENTRY_NOT_IN_FILES", models.Location(path=rel), **self.baseline_facts)))
-        if self.core is not None:
-            bundled = 0
-            for rel in self._absent(self.core.checksums):
-                if rel.startswith("wp-content/"):  # dołączone motywy i wtyczki są rutynowo usuwane
-                    bundled += 1
-                    continue
-                found.append(Detection("CORE_FILE_MISSING", "low", "high", "file",
-                                       "Plik wymieniony w manifeście sum rdzenia nie występuje w materiale wejściowym; "
-                                       "manifest innej wersji także daje takie braki.",
-                                       observe(self.core.record, "CORE_MANIFEST_ENTRY_NOT_IN_FILES", models.Location(path=rel),
-                                               reference_md5=self.core.checksums[rel], **_reference_facts(self.core.version, self.core.label))))
-            if bundled:
-                cover.note(f"Manifest sum rdzenia wymienia {bundled} plików w wp-content, których nie ma w materiale "
-                           "(dołączone motywy i wtyczki bywają usuwane); nie powstają z nich ustalenia")
-        return found
+                self._emit(found, "BASELINE_FILE_MISSING", "low", "high",
+                           "Plik obecny w migawce bazowej nie występuje w materiale wejściowym.",
+                           lambda rel=rel: observe(reference, "BASELINE_ENTRY_NOT_IN_FILES", models.Location(path=rel),
+                                                   **self.baseline_facts))
+        if self.core is None:
+            return
+        bundled = 0
+        for rel in self._absent(self.checksums):
+            if rel.startswith("wp-content/"):  # dołączone motywy i wtyczki są rutynowo usuwane
+                bundled += 1
+                continue
+            self._emit(found, "CORE_FILE_MISSING", "low", "high",
+                       "Plik wymieniony w manifeście sum rdzenia nie występuje w materiale wejściowym; "
+                       "manifest innej wersji także daje takie braki.",
+                       lambda rel=rel: observe(self.core.record, "CORE_MANIFEST_ENTRY_NOT_IN_FILES", models.Location(path=rel),
+                                               reference_md5=self.checksums[rel],
+                                               **_reference_facts(self.core.version, self.core.label)))
+        if bundled:
+            cover.note(f"Manifest sum rdzenia wymienia {bundled} plików w wp-content, których nie ma w materiale "
+                       "(dołączone motywy i wtyczki bywają usuwane); nie powstają z nich ustalenia")
