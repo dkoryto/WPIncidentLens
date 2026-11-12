@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 
 import pytest
 from conftest import (ADMIN_CAPS, CANARY, EVAL_MARKER, UPLOAD_PHP, access_line, admin_sql, case_schema_errors, option_sql,
-                      write)
+                      time_limit, write)
 
 from wpincidentlens import cli, ingest, models, privacy
 from wpincidentlens.redact import MARK
@@ -106,7 +107,7 @@ def test_hex_and_mixed_case_runs_in_a_relative_path_do_not_break_evidence_linkag
 
 def test_every_string_attribute_of_a_full_run_is_classified(demo_case, analyze):
     """Nowy atrybut tekstowy bez decyzji (strukturalny, tożsamość, tekst swobodny) ma zatrzymać ten test, nie zniknąć po cichu."""
-    free_text = {"excerpt", "uri", "hook", "plugin", "reference", "basis"}
+    free_text = {"excerpt", "uri", "reference", "basis"}
     run = analyze(demo_case / "site", database=demo_case / "database.sql", logs=demo_case / "logs", baseline=demo_case / "baseline.json")
 
     unclassified = {(item["kind"], name) for item in run.report["observations"] for name, value in item["attributes"].items()
@@ -122,9 +123,8 @@ def _canary_option_excerpt(site, evidence):
     return {"database": write(evidence / "db.sql", admin_sql("siteadmin") + option_sql("widget_text", value)), "known_admins": ("siteadmin",)}
 
 
-def _canary_cron_hook(site, evidence):
-    cron = f'a:1:{{i:1700000000;a:1:{{s:{len(CANARY)}:"{CANARY}";a:0:{{}}}}}}'
-    return {"database": write(evidence / "db.sql", admin_sql("siteadmin") + option_sql("cron", cron)), "known_admins": ("siteadmin",)}
+def _canary_log_time(site, evidence):
+    return {"logs": write(evidence / "logs" / "access.log", access_line(f"/{UPLOAD_PHP}", when=f"token={CANARY} {IPV4}")).parent}
 
 
 def _canary_log_userinfo(site, evidence):
@@ -142,14 +142,36 @@ def _canary_gap_text(site, evidence):
     return {"database": write(evidence / "db.sql", admin_sql("siteadmin") + orphan), "known_admins": ("siteadmin",)}
 
 
-@pytest.mark.parametrize("build", [_canary_option_excerpt, _canary_cron_hook, _canary_log_userinfo, _canary_log_query, _canary_gap_text],
-                         ids=["option-excerpt", "cron-hook", "log-userinfo", "log-query", "gap-text"])
+@pytest.mark.parametrize("build", [_canary_option_excerpt, _canary_log_userinfo, _canary_log_query, _canary_gap_text, _canary_log_time],
+                         ids=["option-excerpt", "log-userinfo", "log-query", "gap-text", "log-time-field"])
 def test_canary_from_any_source_never_reaches_report_html_or_case(site, evidence, analyze, build):
     write(site / UPLOAD_PHP, EVAL_MARKER)
 
     run = analyze(site, **build(site, evidence))
 
     assert CANARY not in outputs(run)
+
+
+def test_time_field_with_secret_and_address_reaches_no_output_file_with_the_flag(site, evidence, analyze):
+    write(site / UPLOAD_PHP, EVAL_MARKER)
+
+    run = analyze(site, **_canary_log_time(site, evidence), flags=("--pseudonymize",))
+
+    files = "".join(path.read_text(encoding="utf-8") for path in run.out.iterdir())
+    assert CANARY not in files and IPV4 not in files
+
+
+def test_indicator_names_from_the_database_are_not_redacted(site, evidence, analyze):
+    """Nazwa wtyczki i zadania cron to wskaźnik wybrany przez atakującego: redakcja pozwoliłaby go ukryć."""
+    plugin, hook = "a1b2c3d4e5f6a7b8/loader.php", "wp_maint_0123456789abcdefABCDEF01"
+    plugins = f'a:1:{{i:0;s:{len(plugin)}:"{plugin}";}}'
+    cron = f'a:1:{{i:1700000000;a:1:{{s:{len(hook)}:"{hook}";a:0:{{}}}}}}'
+    sql = admin_sql("siteadmin") + option_sql("active_plugins", plugins) + option_sql("cron", cron)
+
+    run = analyze(site, database=write(evidence / "db.sql", sql), known_admins=("siteadmin",))
+
+    assert [item["attributes"]["plugin"] for item in observations(run, "ACTIVE_PLUGIN")] == [plugin]
+    assert [item["attributes"]["hook"] for item in observations(run, "CRON_HOOK")] == [hook]
 
 
 # --- pseudonimizacja --------------------------------------------------------------------------------
@@ -247,15 +269,70 @@ def test_logins_are_pseudonymised_by_exact_value():
     assert re.fullmatch(r"user-[0-9a-f]{16}", pseudonymizer.pseudonym("username", "admin"))
 
 
-def test_addresses_logins_and_user_ids_in_reasons_and_gaps_are_pseudonymised():
-    report = _report([{"username": "ghostadmin", "client_ip": IPV4}], reason="Konto ghostadmin logowało się z 2001:db8::7.",
-                     gaps=("Nie odczytano uprawnień 2 kont (user_id: 7, 12): ghostadmin", f"Adres {IPV4}, nie ghostadmin_x"))
+def test_addresses_and_user_ids_in_reasons_and_gaps_are_pseudonymised():
+    report = _report([{"username": "ghostadmin", "client_ip": IPV4}], reason="Żądania z 2001:db8::7.",
+                     gaps=("Nie odczytano uprawnień 2 kont (user_id: 7, 12)", f"Adres {IPV4}"))
 
     text = json.dumps(privacy.sanitize(report, privacy.Pseudonymizer()).to_dict(), ensure_ascii=False)
 
-    assert "ghostadmin logowało" not in text and "2001:db8::7" not in text and IPV4 not in text
+    assert "2001:db8::7" not in text and IPV4 not in text
     assert re.search(r"user_id: uid-[0-9a-f]{16}, uid-[0-9a-f]{16}\)", text)
-    assert "ghostadmin_x" in text  # login tylko jako osobne słowo
+
+
+def test_login_that_is_a_word_does_not_change_tool_texts():
+    """Login „nie” zamieniony w wyjaśnieniu odwróciłby jego sens; w tekście z materiału (uri) jest zastępowany."""
+    reason = "Ten sam podejrzany plik występuje w obrazie witryny i w logu HTTP; to korelacja, nie dowód wykonania kodu."
+    gap = "Administrator nie figuruje na liście; nie dowodzi to włamania."
+    report = _report([{"username": "nie", "user_id": "2", "uri": "/author/nie/ nie.php [usunięto]"}, {"username": "usunięto"}],
+                     reason=reason, gaps=(gap,))
+
+    sanitized = privacy.sanitize(report, privacy.Pseudonymizer())
+
+    assert sanitized.findings[0].reason == reason and gap in sanitized.coverage_gaps
+    uri = next(item.attributes["uri"] for item in sanitized.observations if "uri" in item.attributes)
+    assert re.fullmatch(r"/author/user-[0-9a-f]{16}/ nie\.php \[usunięto\]", uri)
+
+
+@pytest.mark.parametrize("text", [
+    "client:2001:db8::7", "ip_192.0.2.10", "x192.0.2.10", "192.0.2.10x", "2001:db8::7:51234", "c0000:2001:db8::7", "192.0.2.010",
+    "192.0.2.10.", "192.0.2.10:443", "[2001:db8::7]:443", "IP=192.0.2.10&", "::ffff:192.0.2.10",
+])
+def test_address_literals_in_evidence_text_are_pseudonymised(text):
+    report = privacy.sanitize(_report([{"note": text}]), privacy.Pseudonymizer())
+
+    note = report.observations[0].attributes["note"]
+    assert "192.0.2" not in note and "2001:db8" not in note and "ip-" in note
+
+
+@pytest.mark.parametrize("text", ["Closure::bind", "e::b", "02:14:01", "self::$x", "a1b2c3d4e5f6a7b8/loader.php"])
+def test_text_that_only_resembles_an_address_is_kept(text):
+    assert privacy.sanitize(_report([{"plugin_like": text}]), privacy.Pseudonymizer()).observations[0].attributes["plugin_like"] != ""
+    assert not privacy.has_address(text)
+
+
+def test_ip_literal_in_a_structural_path_is_pseudonymised_but_not_redacted():
+    path = f"wp-content/uploads/{IPV4}/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.php"
+    report = _report([{"path": path, "client_ip": IPV4}])
+    observation = replace(report.observations[0], kind="HTTP_REQUEST")
+    report = replace(report, observations=(observation,), findings=(replace(report.findings[0], observations=(observation.id,)),))
+
+    kept = privacy.sanitize(report).observations[0].attributes["path"]
+    hidden = privacy.sanitize(report, privacy.Pseudonymizer()).observations[0].attributes
+    assert kept == path
+    assert hidden["path"] == f"wp-content/uploads/{hidden['client_ip']}/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.php"
+
+
+def test_many_distinct_hostnames_are_pseudonymised_in_linear_time():
+    hosts = [f"h{number:05d}-{'a' * 60}.example.test" for number in range(3000)]
+    report = _report([{"client_ip": host, "uri": f"/from/{host}/{hosts[0]}"} for host in hosts])
+
+    with time_limit(10):
+        sanitized = privacy.sanitize(report, privacy.Pseudonymizer())
+
+    text = json.dumps(sanitized.to_dict())
+    assert "example.test" not in text
+    assert all(item.attributes["uri"] == f"/from/{item.attributes['client_ip']}/{sanitized.observations[0].attributes['uri'].split('/')[-1]}"
+               for item in sanitized.observations)
 
 
 # --- ostrzeżenie CLI i case.json ----------------------------------------------------------------------

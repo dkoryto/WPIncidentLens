@@ -56,6 +56,9 @@ _PROTOCOL = re.compile(r"HTTP/[0-9](?:\.[0-9])?")
 _HOSTNAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}+)")
 _CLF_TIME = re.compile(r"([0-9]{2})/([A-Z][a-z]{2})/([0-9]{4}):([0-9]{2}):([0-9]{2}):([0-9]{2}) ([+-])([0-9]{2})([0-9]{2})")
 _ISO_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})?")
+_TIME_SHAPE = re.compile(r"[0-9]{2}/[A-Za-z]{3}/[0-9]{4}:[0-9]{2}:[0-9]{2}:[0-9]{2}(?: [+-][0-9]{4})?"
+                         r"|[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:?[0-9]{2})?")
+UNREADABLE_TIME = "(zapis czasu w nieobsługiwanej postaci)"  # surowy zapis spoza wzorca nie trafia do raportu
 _MONTHS = {name: number for number, name in enumerate(
     ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), start=1)}
 SCHEME_AUTHORITY = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]{0,31})://(?P<authority>[^/?#]*+)")
@@ -107,7 +110,7 @@ def _text_record(fmt: str, line: str) -> HttpRecord:
         raise _Rejected("layout")
     method, target = _request_line(found["request"])
     stamp = found["time"][:MAX_TIME_CHARS]
-    return HttpRecord(_client(found["client"]), stamp, _clf_time_utc(stamp), "second", method, target,
+    return HttpRecord(_client(found["client"]), _shown_time(stamp), _clf_time_utc(stamp), "second", method, target,
                       _status(int(found["status"]) if len(found["status"]) == 3 else 0), _size(found["bytes"]), escaped=True)
 
 
@@ -144,6 +147,16 @@ def _size(text: str) -> int | None:
     if len(text) > _MAX_BYTES_DIGITS:
         raise _Rejected("bad_number")
     return int(text)
+
+
+def is_time_shaped(stamp: str) -> bool:
+    """Czy zapis ma postać czasu CLF albo ISO 8601 (bez sprawdzania strefy i zakresów)."""
+    return _TIME_SHAPE.fullmatch(stamp) is not None
+
+
+def _shown_time(stamp: str) -> str:
+    """Surowy zapis czasu do raportu: pole czasu bywa dowolnym tekstem z wiersza (np. z sekretem albo adresem IP)."""
+    return stamp if is_time_shaped(stamp) else UNREADABLE_TIME
 
 
 def _clf_time_utc(stamp: str) -> str | None:
@@ -209,7 +222,7 @@ def _json_record(line: str) -> HttpRecord:
         raise _Rejected("request_line")
     stamp = document["time"][:MAX_TIME_CHARS]
     moment, precision = _iso_time_utc(stamp)
-    return HttpRecord(_client(document["remote_addr"]), stamp, moment, precision, method, target, _status(document["status"]),
+    return HttpRecord(_client(document["remote_addr"]), _shown_time(stamp), moment, precision, method, target, _status(document["status"]),
                       size, forwarded or None)
 
 
