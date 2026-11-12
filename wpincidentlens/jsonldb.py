@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 MAX_LINE_BYTES = 16 * 1024 * 1024
 MAX_TABLES = 5000  # różnych nazw tabel zapamiętanych do raportu
+MAX_COLUMNS = 1000  # kolumn w jednym wierszu; tabela WordPressa ma ich kilkanaście
 _NAME = re.compile(r"[A-Za-z0-9_$]{1,64}")
 _BLANK = b" \t\r"  # białe znaki JSON (\n dzieli wiersze); inne, np. \v, czynią wiersz niepoprawnym
 
@@ -31,7 +32,7 @@ REASONS = {
     "not_utf8": "niepoprawne UTF-8",
     "not_json": "niepoprawny JSON",
     "duplicate_key": "powtórzony klucz",
-    "shape": 'inna budowa niż {"table": …, "row": {…}}',
+    "shape": f'inna budowa niż {{"table": …, "row": {{…}}}} (1–{MAX_COLUMNS} kolumn)',
     "bad_name": "niepoprawna nazwa tabeli lub kolumny",
     "bad_value": "wartość inna niż łańcuch, liczba lub null",
 }
@@ -159,7 +160,8 @@ class JsonlParser:
         except (ValueError, RecursionError):
             raise _Rejected("not_json") from None
         if not (isinstance(document, dict) and document.keys() == {"table", "row"}
-                and type(document["table"]) is str and isinstance(document["row"], dict) and document["row"]):
+                and type(document["table"]) is str and isinstance(document["row"], dict)
+                and 0 < len(document["row"]) <= MAX_COLUMNS):
             raise _Rejected("shape")
         table, row = document["table"], document["row"]
         if not all(_NAME.fullmatch(name) for name in (table, *row)):
