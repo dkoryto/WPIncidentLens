@@ -1,0 +1,5 @@
+# Kontekst budowania: wyłącznie pakiet silnika (Dockerfile kopiuje tylko wpincidentlens/).
+*
+!wpincidentlens/
+**/__pycache__
+**/*.pyc

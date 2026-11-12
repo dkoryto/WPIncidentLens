@@ -1,6 +1,8 @@
+# Ograniczenia odpowiadają docker/run-flags.txt, z którymi CI mierzy kontener
+# (.github/workflows/container.yml); zgodność sprawdza tests/test_container_probe.py.
+# CI uruchamia też `command` poniżej z tymi samymi wolumenami i porównuje wynik z hostem.
 services:
   wpincidentlens:
-    # Build after pinning the base-image digest in Dockerfile.
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -11,12 +13,13 @@ services:
     cap_drop: ["ALL"]
     pids_limit: 128
     mem_limit: 1g
+    memswap_limit: 1g
     cpus: 1.0
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     volumes:
       - ../fixtures/site:/evidence/files:ro
-      - ../fixtures/database.sql:/evidence/db.sql:ro
+      - ../fixtures/database.sql:/evidence/database.sql:ro
       - ../fixtures/logs:/evidence/logs:ro
       - ../results:/results:rw
-    command: ["--files", "/evidence/files", "--database", "/evidence/db.sql", "--logs", "/evidence/logs", "--known-admin", "knownadmin", "--output", "/results", "--case-id", "DEMO-001"]
+    command: ["--files", "/evidence/files", "--database", "/evidence/database.sql", "--logs", "/evidence/logs", "--known-admin", "knownadmin", "--output", "/results", "--case-id", "DEMO-001"]

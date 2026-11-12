@@ -115,14 +115,23 @@ Każdy widok JSON ma `schema_version` (np. `findings-poc-1`) i `case_id`.
 
 ## Kontener Docker
 
-`docker/Dockerfile` używa `python:3.12-slim` bez pinu **wyłącznie na potrzeby PoC**. Przed wdrożeniem produkcyjnym wymagaj zweryfikowanego obrazu pinowanego po digest oraz SBOM. Aby uruchomić pokaz:
+`docker/Dockerfile` przypina obraz bazowy `python:3.12-slim` digestem indeksu multi-arch (odczyt z 2026-11-12) i kopiuje do obrazu wyłącznie pakiet `wpincidentlens/` (`.dockerignore`); proces działa jako UID/GID 65532. Katalog wyników musi być zapisywalny dla tego UID, ale nie dla wszystkich. Pokaz, wariant A — katalog należy do UID 65532 (pliki wyników będą jego, `0600`; odczyt przez `sudo` albo po zmianie właściciela):
 
 ```bash
-mkdir -p results && chmod 777 results  # TYLKO jednorazowy lokalny PoC; nigdy na rzeczywistych dowodach!
+sudo install -d -m 0700 -o 65532 -g 65532 results
 cd docker && docker compose run --build --rm wpincidentlens
 ```
 
-`docker/compose.yaml` deklaruje tryb bez sieci, ro rootfs, dowody zamontowane ro, kontener bez capability i non-root; tej izolacji nie zmierzono (zakres M6). Wymaga poprawnych uprawnień do odczytu dowodów i zapisu wyniku przez UID 65532. Pliki wyników mają uprawnienia `0600` i właściciela UID 65532, więc inny użytkownik hosta odczyta je dopiero po zmianie właściciela lub uprawnień.
+Wariant B — kontener działa z UID użytkownika hosta, katalog zostaje jego (`0700`):
+
+```bash
+install -d -m 0700 results
+cd docker && docker compose run --build --rm --user "$(id -u):$(id -g)" wpincidentlens
+```
+
+Nie nadawaj katalogowi wyników praw `777`: każdy użytkownik hosta mógłby podmienić lub odczytać wyniki.
+
+`docker/compose.yaml` ustawia: brak sieci, rootfs tylko do odczytu, dowody zamontowane `:ro`, UID 65532, `--cap-drop ALL`, `no-new-privileges`, limity PID (128), pamięci (1 GiB, bez swap) i CPU (1), `/tmp` jako tmpfs `noexec,nosuid`. Te same ograniczenia, jako argumenty `docker run`, są w `docker/run-flags.txt`; zgodność obu plików i oczekiwań sondy sprawdza `tests/test_container_probe.py`. Zadanie CI `container` (`.github/workflows/container.yml`) buduje obraz i **mierzy** izolację sondą `docker/probe.py` uruchomioną w kontenerze z tymi flagami (UID/GID, odmowa zapisu do `/`, `/app` i dowodów, `noexec` na `/tmp`, capability i `NoNewPrivs` z `/proc/self/status`, tylko interfejs `lo` i nieudane połączenie, limity cgroup v2). Następnie uruchamia `command` z compose w kontenerze i to samo polecenie na hoście i wymaga tej samej oceny, ustaleń i kodu wyjścia. Wynik sondy, porównanie i SBOM obrazu (CycloneDX) są artefaktem `container-measurement`. Pomiar dotyczy runnera `ubuntu-24.04` (cgroup v2); na innym hoście uruchom sondę samodzielnie (polecenie w workflow).
 
 ## Ograniczenia PoC
 

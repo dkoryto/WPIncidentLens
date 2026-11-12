@@ -1,0 +1,109 @@
+name: container
+
+# ADR 0009 pkt 1 (T-601): kontener mierzony, nie deklarowany. Flagi `docker run`
+# pochodzą z docker/run-flags.txt (te same ograniczenia co docker/compose.yaml,
+# zgodność sprawdza tests/test_container_probe.py), demo z `command` i wolumenów compose.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      IMAGE: wpincidentlens:ci
+    defaults:
+      run:
+        shell: bash  # jawnie: -eo pipefail, więc `| tee` nie ukrywa błędu porównania
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Build image
+        run: |
+          docker build --file docker/Dockerfile --tag "$IMAGE" .
+          docker image inspect "$IMAGE" --format 'user={{.Config.User}} entrypoint={{json .Config.Entrypoint}}'
+          test "$(docker image inspect "$IMAGE" --format '{{.Config.User}}')" = "65532:65532"
+          # Obraz ma zawierać tylko pakiet silnika w /app.
+          test "$(docker run --rm --network=none --entrypoint ls "$IMAGE" -A /app)" = "wpincidentlens"
+
+      - name: Probe isolation inside the container
+        run: |
+          python docker/containercheck.py flags > "$RUNNER_TEMP/flags"
+          mapfile -t FLAGS < "$RUNNER_TEMP/flags"
+          test "${#FLAGS[@]}" -gt 0
+          printf 'flag: %s\n' "${FLAGS[@]}"
+          mkdir -p measurement
+          rc=0
+          docker run --rm "${FLAGS[@]}" \
+            --volume="$PWD/fixtures/site:/evidence/files:ro" \
+            --volume="$PWD/docker/probe.py:/probe/probe.py:ro" \
+            --entrypoint python "$IMAGE" /probe/probe.py --evidence /evidence/files \
+            > measurement/probe.json || rc=$?
+          cat measurement/probe.json
+          echo "probe exit code: $rc"
+          test "$rc" -eq 0
+          python -c 'import json,sys; r=json.load(open("measurement/probe.json")); sys.exit(0 if r["ok"] and not r["failed"] else 1)'
+
+      - name: Demo in container vs host
+        run: |
+          python docker/containercheck.py flags > "$RUNNER_TEMP/flags"
+          python docker/containercheck.py demo volumes results-container > "$RUNNER_TEMP/volumes"
+          python docker/containercheck.py demo command > "$RUNNER_TEMP/command"
+          python docker/containercheck.py demo host results-host > "$RUNNER_TEMP/host-command"
+          mapfile -t FLAGS < "$RUNNER_TEMP/flags"
+          mapfile -t VOLUMES < "$RUNNER_TEMP/volumes"
+          mapfile -t CMD < "$RUNNER_TEMP/command"
+          mapfile -t HOST_CMD < "$RUNNER_TEMP/host-command"
+          test "${#FLAGS[@]}" -gt 0 -a "${#VOLUMES[@]}" -gt 0 -a "${#CMD[@]}" -gt 0 -a "${#HOST_CMD[@]}" -gt 0
+          printf 'container: %s\n' "${VOLUMES[@]}" "${CMD[@]}"
+          printf 'host: %s\n' "${HOST_CMD[@]}"
+          mkdir -p measurement results-container results-host
+          chmod 0700 results-container results-host
+          # Wyniki zapisuje UID 65532 (pliki 0600); katalog 0700 należy do niego, nie jest zapisywalny dla wszystkich.
+          sudo chown 65532:65532 results-container
+          crc=0
+          docker run --rm "${FLAGS[@]}" "${VOLUMES[@]}" "$IMAGE" "${CMD[@]}" || crc=$?
+          sudo chown -R "$(id -u):$(id -g)" results-container
+          hrc=0
+          python -m wpincidentlens "${HOST_CMD[@]}" || hrc=$?
+          echo "container exit code: $crc, host exit code: $hrc"
+          python docker/containercheck.py compare results-container "$crc" results-host "$hrc" | tee measurement/demo-compare.json
+
+      - name: SBOM of the image (CycloneDX)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.IMAGE }}
+          format: cyclonedx-json
+          syft-version: v1.57.1
+          output-file: measurement/sbom-image.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Check SBOM
+        run: |
+          python -c 'import json,sys; s=json.load(open("measurement/sbom-image.cdx.json")); assert s["bomFormat"]=="CycloneDX", s.get("bomFormat"); print(s["specVersion"], len(s.get("components", [])), "components")'
+
+      - name: Upload measurement
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: container-measurement
+          path: measurement/
+          if-no-files-found: error
+          retention-days: 30

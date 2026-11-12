@@ -1,0 +1,14 @@
+# Flagi `docker run` dla pomiaru kontenera w CI (.github/workflows/container.yml).
+# Jedno źródło: docker/compose.yaml deklaruje te same ograniczenia, a
+# tests/test_container_probe.py sprawdza zgodność obu plików i stałych sondy.
+# Jeden argument na wiersz, w postaci --flaga=wartość; wiersze z # są pomijane.
+--network=none
+--read-only
+--user=65532:65532
+--cap-drop=ALL
+--security-opt=no-new-privileges:true
+--pids-limit=128
+--memory=1g
+--memory-swap=1g
+--cpus=1
+--tmpfs=/tmp:rw,noexec,nosuid,size=64m
