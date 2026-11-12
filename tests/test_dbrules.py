@@ -113,6 +113,7 @@ def test_capabilities_key_with_another_prefix_is_a_gap_not_a_role(scan):
     ({"administrator": True}, True),
     ({"administrator": 1}, True),
     ({"administrator": "1"}, True),
+    ({"administrator": False}, True),
     ({"editor": True, "administrator": True}, True),
     ({"editor": True}, False),
     ({}, False),
@@ -120,7 +121,7 @@ def test_capabilities_key_with_another_prefix_is_a_gap_not_a_role(scan):
     ({"Administrator": True}, False),
     ({"not_administrator": True}, False),
     ({0: "administrator"}, False),
-], ids=["bool", "int", "string", "second-role", "other-role", "no-roles", "name-as-value", "other-case", "longer-key", "list-of-names"])
+], ids=["bool", "int", "string", "false-value", "second-role", "other-role", "no-roles", "name-as-value", "other-case", "longer-key", "list-of-names"])
 def test_administrator_is_a_key_of_the_parsed_capabilities_array(scan, caps, is_admin):
     run = scan(admin_sql("someuser", caps=php(caps)), known_admins=("siteadmin",))
 
@@ -140,13 +141,27 @@ def test_unreadable_capabilities_are_a_gap_naming_the_user_never_a_substring_mat
     assert run.coverage("database")["status"] == "PARTIAL"
 
 
-def test_administrator_key_with_false_value_is_not_an_admin_but_is_not_hidden(scan):
-    run = scan(admin_sql("editor", caps=php({"editor": True, "administrator": False})), known_admins=("siteadmin",))
+@pytest.mark.parametrize("value", [False, 0, "", "0", None, {}], ids=["false", "zero", "empty", "string-zero", "null", "empty-array"])
+def test_role_key_with_a_falsy_value_is_still_an_admin_and_says_so(scan, value):
+    """WordPress wyznacza role po kluczach tablicy uprawnień: wartość fałszywa nie ukrywa administratora."""
+    run = scan(admin_sql("hidden", caps=php({"editor": True, "administrator": value})), known_admins=("siteadmin",))
+
+    flagged = run.finding("UNRECOGNIZED_ADMIN")
+    assert flagged["metadata"]["role_value"] == "false"
+    assert "Klucz roli ma wartość fałszywą" in flagged["explanation"]
+    assert run.has_gap("1 kont administratorów (user_id: 1) ma klucz roli z wartością fałszywą")
+    assert run.coverage("database")["status"] == "ANALYZED"
+
+
+def test_trusted_admin_with_a_falsy_role_value_is_inventory_with_the_attribute(scan):
+    run = scan(admin_sql("siteadmin", caps=php({"administrator": False})), known_admins=("siteadmin",))
 
     assert run.findings == []
-    assert facts(run, "ADMINISTRATOR_ACCOUNT") == []
-    assert run.has_gap("1 kont (user_id: 1) ma klucz roli administrator z wartością fałszywą")
-    assert run.report["assessment"] == "INCONCLUSIVE"
+    assert [item["role_value"] for item in facts(run, "ADMINISTRATOR_ACCOUNT")] == ["false"]
+
+
+def test_ordinary_administrator_has_no_role_value_attribute(scan):
+    assert "role_value" not in facts(scan(admin_sql("siteadmin")), "ADMINISTRATOR_ACCOUNT")[0]
 
 
 def test_hostile_user_id_is_bounded_and_neutralised_in_the_gap(scan):
@@ -369,6 +384,20 @@ def test_cron_inventory_is_capped_with_a_gap_and_hook_names_are_bounded(scan):
     assert len(hooks) == dbrules.MAX_INVENTORY
     assert {"hook": "h\ufffd" + "x" * 118, "next_run": 1_700_000_000} in hooks
     assert run.has_gap(f"ma {dbrules.MAX_INVENTORY + 1} zadań")
+
+
+@pytest.mark.parametrize("name, kind, value", [
+    ("cron", "CRON_HOOK", lambda n: _cron(*((1_800_000_000 + n * 1000 + k, f"job_{n}_{k}") for k in range(150)))),
+    ("active_plugins", "ACTIVE_PLUGIN", lambda n: php({k: f"plugin_{n}_{k}/main.php" for k in range(150)})),
+], ids=["cron", "active-plugins"])
+def test_repeated_inventory_option_rows_do_not_grow_the_inventory(scan, name, kind, value):
+    """Limit inwentarza dotyczy całego przebiegu: liczy się pierwszy wiersz opcji, powtórzenia są luką."""
+    run = scan("".join(option_sql(name, value(n)) for n in range(40)))
+
+    assert len(facts(run, kind)) == 150 <= dbrules.MAX_INVENTORY
+    assert all("_0_" in str(item) for item in facts(run, kind))
+    assert run.has_gap(f"Opcja {name} występuje w zrzucie 40 razy")
+    assert run.coverage("database")["status"] == "PARTIAL"
 
 
 def test_active_plugins_are_inventory(scan):

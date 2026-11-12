@@ -15,7 +15,7 @@ from .analysis import Detection, SourceCoverage, observe
 CORE_TABLE_CELLS = {"usermeta": 4, "users": 2, "options": 3}
 MAX_OPTION_CHARS = 1024 * 1024      # dłuższa wartość opcji nie jest sprawdzana wzorcami: luka
 MAX_CAPABILITIES_CHARS = 64 * 1024
-MAX_INVENTORY = 200                 # limit wpisów każdego rodzaju inwentarza i ustaleń o administratorach
+MAX_INVENTORY = 200                 # limit wpisów każdego rodzaju inwentarza w całym przebiegu i ustaleń o administratorach
 MAX_PREFIXES = 50
 MAX_TABLE_NAMES = 5000
 MAX_LISTED = 5                      # ile identyfikatorów lub prefiksów wymienia jedna luka
@@ -31,6 +31,8 @@ MARKUP = re.compile(
     r"|data\s{0,8}:\s{0,8}text/html", re.I)
 _REGISTERED = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", re.ASCII)
 _MULTISITE_TABLE = r"(?:\d{1,10}_(?:options|posts|postmeta)|blogs|sitemeta)"
+_FALSE_ROLE_NOTE = (" Klucz roli ma wartość fałszywą; WordPress wyznacza role po kluczach tablicy uprawnień, więc konto ma uprawnienia administratora.")
+_INVENTORY_OPTIONS = ("cron", "active_plugins")
 _USERS_COLUMNS = 10  # układ wp_users bez listy kolumn; user_registered jest siódmą kolumną
 
 
@@ -51,12 +53,13 @@ class _Site:
     users: dict[str, tuple[str, str | None]] = field(default_factory=dict)  # ID → (login, data rejestracji)
     admins: dict[str, models.Location] = field(default_factory=dict)        # user_id → pierwszy wiersz z rolą
     levels: dict[str, int] = field(default_factory=dict)
-    false_role: list[str] = field(default_factory=list)   # user_id z kluczem roli o wartości fałszywej
+    false_role: set[str] = field(default_factory=set)     # administratorzy, których klucz roli ma wartość fałszywą
     unreadable: list[str] = field(default_factory=list)   # user_id, którego tablicy uprawnień nie odczytano
     confirmed: bool = False  # usermeta zawiera klucz ``<prefiks>capabilities``
     foreign_caps: int = 0
     malformed: int = 0
     oversize: int = 0
+    repeated: dict[str, int] = field(default_factory=dict)  # opcja inwentarza → liczba jej wierszy
     findings: list[Detection] = field(default_factory=list)
     facts: list[models.Observation] = field(default_factory=list)
     gaps: list[str] = field(default_factory=list)
@@ -120,7 +123,7 @@ class RowAnalysis:
 
     @staticmethod
     def _role(site: _Site, user_id: str, value: str, place: models.Location) -> None:
-        """Rola wynika wyłącznie z odczytanej tablicy uprawnień; wartości nieodczytanej nie przeszukuje się podłańcuchem."""
+        """Rola wynika wyłącznie z kluczy odczytanej tablicy uprawnień; wartości nieodczytanej nie przeszukuje się podłańcuchem."""
         if not value:
             return
         try:
@@ -130,10 +133,10 @@ class RowAnalysis:
         if not isinstance(caps, dict):
             site.unreadable.append(user_id)
         elif "administrator" in caps:
-            if phpserialize.truthy(caps["administrator"]):
-                site.admins.setdefault(user_id, place)
-            else:
-                site.false_role.append(user_id)
+            # WordPress wyznacza role po KLUCZACH tablicy (WP_User::get_role_caps), więc wartość fałszywa nie odbiera roli.
+            site.admins.setdefault(user_id, place)
+            if not phpserialize.truthy(caps["administrator"]):
+                site.false_role.add(user_id)
 
     def _option(self, site: _Site, name: str, value: str, table: str, count: int) -> None:
         if len(value) > MAX_OPTION_CHARS:
@@ -145,10 +148,12 @@ class RowAnalysis:
                 "SUSPICIOUS_DB_MARKUP", "medium", "low", "database",
                 "Wartość opcji zawiera aktywny znacznik HTML, przekierowanie lub schemat JS; wymaga weryfikacji.",
                 observe(self.item, "OPTION_VALUE_WITH_ACTIVE_MARKUP", place, excerpt=redact.excerpt(value, MARKUP), value_chars=len(value))))
-        if name == "cron":
-            self._cron(site, value, place)
-        elif name == "active_plugins":
-            self._plugins(site, value, place)
+        if name in _INVENTORY_OPTIONS:
+            # Nazwa opcji jest w WordPressie unikalna. Do inwentarza trafia pierwszy wiersz, kolejne są luką:
+            # dzięki temu limit inwentarza dotyczy całego przebiegu, a nie pojedynczego wiersza.
+            site.repeated[name] = site.repeated.get(name, 0) + 1
+            if site.repeated[name] == 1:
+                (self._cron if name == "cron" else self._plugins)(site, value, place)
 
     def _cron(self, site: _Site, value: str, place: models.Location) -> None:
         """Opcja ``cron``: czas → nazwa zadania → …; do inwentarza trafia nazwa i najbliższy czas uruchomienia."""
@@ -229,6 +234,9 @@ class RowAnalysis:
         self.observations.extend(site.facts)
         for text in site.gaps:
             cover.degrade(text)
+        for name, rows in sorted(site.repeated.items()):
+            if rows > 1:
+                cover.degrade(f"Opcja {name} występuje w zrzucie {rows} razy; do inwentarza odczytano tylko pierwszy wiersz")
         if site.malformed:
             cover.degrade(f"Pominięto {site.malformed} wierszy tabel użytkowników lub opcji o nieoczekiwanej liczbie pól "
                           "(np. wyrażenie SQL zamiast literału)")
@@ -240,10 +248,9 @@ class RowAnalysis:
         if site.unreadable:
             cover.degrade(f"Nie odczytano tablicy uprawnień {len(site.unreadable)} kont (user_id: {_listed(site.unreadable)}): "
                           "wartość nie jest poprawną tablicą serializowaną PHP, ról tych kont nie ustalono")
-        if revoked := [user_id for user_id in site.false_role if user_id not in site.admins]:
-            cover.degrade(f"{len(revoked)} kont (user_id: {_listed(revoked)}) ma klucz roli administrator z wartością fałszywą: "
-                          "nie są liczone jako administratorzy, ale WordPress wyznacza role po kluczach tablicy uprawnień, "
-                          "więc takie konto może mieć uprawnienia administratora — wymaga ręcznej weryfikacji")
+        if site.false_role:
+            cover.note(f"{len(site.false_role)} kont administratorów (user_id: {_listed(sorted(site.false_role))}) ma klucz roli "
+                       "z wartością fałszywą; WordPress wyznacza role po kluczach tablicy uprawnień, więc są liczone jako administratorzy")
         if len(site.admins) > MAX_INVENTORY:
             cover.degrade(f"Zrzut ma {len(site.admins)} kont z rolą administratora; raport obejmuje pierwsze {MAX_INVENTORY}")
         for user_id in sorted(site.admins)[:MAX_INVENTORY]:
@@ -258,16 +265,20 @@ class RowAnalysis:
                 facts["registered"] = registered
             if user_id in site.levels:
                 facts["user_level"] = site.levels[user_id]  # pole pomocnicze sprzed ról; nie jest źródłem roli
+            odd = ""
+            if user_id in site.false_role:
+                facts["role_value"] = "false"
+                odd = _FALSE_ROLE_NOTE
             account = observe(item, "ADMINISTRATOR_ACCOUNT", site.admins[user_id], **facts)
             if not known_admins or login in known_admins:
                 self.observations.append(account)
             elif baseline_admins:
                 findings.append(Detection("NEW_SINCE_BASELINE", "high", "medium", "database",
                     "Administrator nie figuruje na liście known_admins migawki bazowej (baseline) ani na liście operatora: "
-                    "konto jest nowe względem migawki. Nie dowodzi to włamania — migawka może być nieaktualna.", account))
+                    "konto jest nowe względem migawki. Nie dowodzi to włamania — migawka może być nieaktualna." + odd, account))
             else:
                 findings.append(Detection("UNRECOGNIZED_ADMIN", "high", "medium", "database",
-                    "Administrator nie figuruje na dostarczonej, zaufanej liście; nie dowodzi to włamania.", account))
+                    "Administrator nie figuruje na dostarczonej, zaufanej liście; nie dowodzi to włamania." + odd, account))
         if site.admins and not known_admins:
             cover.note("Wykryto role administratorów, ale brak wiarygodnej listy porównawczej; sam fakt istnienia admina nie jest alertem")
         return findings

@@ -121,9 +121,9 @@ Atrybuty każdej obserwacji: `value`, `confidence`, `origin`, `basis` (uzasadnie
 
 ### Role
 
-- Administratorem jest konto, którego wartość `<prefiks>capabilities` daje się odczytać jako tablica PHP z kluczem `administrator` o wartości prawdziwej (reguły prawdziwości PHP). Nazwa roli jako **wartość**, inna wielkość liter albo dłuższy klucz nie są rolą.
+- Administratorem jest konto, którego wartość `<prefiks>capabilities` daje się odczytać jako tablica PHP z **kluczem** `administrator` — niezależnie od wartości. Nazwa roli jako wartość, inna wielkość liter albo dłuższy klucz (`not_administrator`) nie są rolą.
 - Wartości, której nie da się odczytać (ucięta, zła długość, obiekt zamiast tablicy, śmieci po wartości, ponad 64 KiB), nie przeszukuje się podłańcuchem: powstaje luka z liczbą kont i najwyżej pięcioma `user_id`.
-- Klucz `administrator` z wartością fałszywą (`b:0`): konto **nie** jest liczone jako administrator, ale powstaje luka. WordPress wyznacza role po kluczach tablicy uprawnień (`WP_User::get_role_caps()`), więc takie konto może mieć uprawnienia administratora — wymaga ręcznej weryfikacji.
+- Klucz `administrator` z wartością fałszywą (`b:0`, `i:0`, pusty łańcuch, `N`): konto **jest** administratorem. WordPress wyznacza role po kluczach tablicy uprawnień (`WP_User::get_role_caps()`), a wartość fałszywa nie odbiera uprawnień roli; inaczej dałoby się w ten sposób ukryć administratora. Obserwacja dostaje atrybut `role_value: "false"`, wyjaśnienie ustalenia — dodatkowe zdanie, a pokrycie — notę z `user_id` (nie obniża statusu). Fałszywy alarm: wiersz pozostawiony przez wtyczkę, która „wyłącza” rolę wartością `false`.
 - `<prefiks>user_level` nie jest źródłem roli; trafia tylko jako atrybut pomocniczy do inwentarza konta, które jest administratorem.
 
 ### Ustalenia
@@ -145,11 +145,11 @@ Nie wpływa na `assessment`. Samo istnienie administratora albo zadania cron nie
 
 | Rodzaj obserwacji | Atrybuty | Skąd |
 |---|---|---|
-| `ADMINISTRATOR_ACCOUNT` | `username` (do 200 znaków), `user_id`, `registered` (tylko w postaci `RRRR-MM-DD GG:MM:SS`), `user_level` | wiersz `<prefiks>capabilities` i wiersz konta w `<prefiks>users`. Bez adresu e-mail, skrótu hasła i innych danych konta. Login bywa adresem e-mail — trafia wtedy do raportu jako login |
-| `CRON_HOOK` | `hook` (do 120 znaków), `next_run` (najbliższy czas uruchomienia, liczba) | opcja `cron`; jedna obserwacja na nazwę zadania, najwyżej 200 na wiersz opcji |
+| `ADMINISTRATOR_ACCOUNT` | `username` (do 200 znaków), `user_id`, `registered` (tylko w postaci `RRRR-MM-DD GG:MM:SS`), `user_level`, `role_value` (`"false"`, tylko gdy klucz roli ma wartość fałszywą) | wiersz `<prefiks>capabilities` i wiersz konta w `<prefiks>users`. Bez adresu e-mail, skrótu hasła i innych danych konta. Login bywa adresem e-mail — trafia wtedy do raportu jako login |
+| `CRON_HOOK` | `hook` (do 120 znaków), `next_run` (najbliższy czas uruchomienia, liczba) | opcja `cron`; jedna obserwacja na nazwę zadania, najwyżej 200 w całym przebiegu |
 | `ACTIVE_PLUGIN` | `plugin` (do 200 znaków) | opcja `active_plugins`; najwyżej 200 |
 
-Opcja `cron` albo `active_plugins`, której nie da się odczytać, wpis o nieoczekiwanej postaci i przekroczony limit to luki. Administrator bez wiersza w tabeli użytkowników to luka (bez loginu nie da się go porównać z listą).
+Nazwa opcji jest w WordPressie unikalna: do inwentarza trafia **pierwszy** wiersz `cron` i pierwszy wiersz `active_plugins` wybranego prefiksu, a powtórzone wiersze to luka z ich liczbą (reguła `SUSPICIOUS_DB_MARKUP` sprawdza każdy wiersz). Limit 200 dotyczy więc całego przebiegu, nie wiersza. Opcja `cron` albo `active_plugins`, której nie da się odczytać, wpis o nieoczekiwanej postaci i przekroczony limit to luki. Administrator bez wiersza w tabeli użytkowników to luka (bez loginu nie da się go porównać z listą).
 
 ### Dane serializowane PHP
 
