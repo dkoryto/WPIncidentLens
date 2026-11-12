@@ -3,7 +3,8 @@
 Parser dostaje kolejne porcje bajtów (``feed``) i oddaje wiersze instrukcji ``INSERT INTO … VALUES`` z samymi
 literałami. Każda inna instrukcja jest rozpoznana jako obojętna (ustawienia sesji, definicje tabel, blokady)
 albo liczona jako nieprzeanalizowana — nic nie znika bez śladu. Zrzut nie jest trzymany w pamięci w całości:
-bufor obejmuje najwyżej jedną instrukcję (``MAX_STATEMENT_BYTES``).
+bufor obejmuje najwyżej jedną instrukcję (``MAX_STATEMENT_BYTES``). Limit czasu sesji (``expired``) jest sprawdzany
+przy każdej porcji i co ``CLOCK_EVERY_STATEMENTS`` instrukcji; po jego upływie dalsza część zrzutu nie jest analizowana.
 
 Gramatyka wspierana:
     INSERT INTO <nazwa> [(<kolumna>, …)] VALUES (<literał>, …)[, (…)]… ;
@@ -21,6 +22,9 @@ from dataclasses import dataclass, field
 
 MAX_STATEMENT_BYTES = 16 * 1024 * 1024
 MAX_TABLES = 5000  # różnych nazw tabel zapamiętanych do raportu
+# Co tyle zakończonych instrukcji parser sprawdza limit czasu sesji (oprócz sprawdzenia przy każdej porcji ``feed``,
+# które ogranicza pracę między sprawdzeniami do jednej porcji odczytu i jednej instrukcji).
+CLOCK_EVERY_STATEMENTS = 256
 
 # Wszystko, co nie zaczyna komentarza, nie kończy instrukcji i nie jest poleceniem klienta, w jednym przebiegu w C.
 # Łańcuch musi być domknięty w buforze; ``''`` wewnątrz łańcucha to tu „zamknij i otwórz” — dla szukania granicy
@@ -130,6 +134,9 @@ class DumpParser:
     """
     wanted: Callable[[str], bool] | None = None
     max_statement: int = MAX_STATEMENT_BYTES
+    expired: Callable[[], bool] | None = None  # limit czasu sesji (``ingest.Session.expired``)
+    stopped_at: int | None = None  # liczba przeanalizowanych instrukcji, gdy limit czasu przerwał zrzut
+    statements: int = 0        # zakończone instrukcje (średnikiem)
     rows: int = 0
     tables: set[str] = field(default_factory=set)
     unanalysed: Counter = field(default_factory=Counter)  # słowo kluczowe → liczba instrukcji poza gramatyką
@@ -158,10 +165,10 @@ class DumpParser:
 
     @property
     def stopped(self) -> bool:
-        return self.oversized_at is not None or self.mode_change_at is not None
+        return self.oversized_at is not None or self.mode_change_at is not None or self.stopped_at is not None
 
     def feed(self, chunk: bytes) -> list[tuple[str, list[str], list[str | None], int]]:
-        if self.stopped:
+        if self.stopped or self._out_of_time():
             return []
         self._buf = self._buf[self._start:] + chunk
         self._offset += self._start
@@ -197,6 +204,9 @@ class DumpParser:
                     self._buf, self._start, self._pos = b"", 0, 0
                     return out
                 self._start = token.end()
+                self.statements += 1
+                if self.statements % CLOCK_EVERY_STATEMENTS == 0 and self._out_of_time():
+                    return out
             elif token["client"]:
                 # Ukośnik wsteczny poza łańcuchem to polecenie klienta (\d, \g, \G): może zakończyć instrukcję
                 # albo zmienić jej terminator, a poprawny zrzut go tam nie zawiera.
@@ -207,6 +217,14 @@ class DumpParser:
             self.oversized_at = self._offset + self._start
             self._buf = b""
         return out
+
+    def _out_of_time(self) -> bool:
+        """Po limicie czasu reszta zrzutu nie jest analizowana (bufor jest zwalniany); odczyt i skrót idą dalej."""
+        if self.expired is None or not self.expired():
+            return False
+        self.stopped_at = self.statements
+        self._buf, self._start, self._pos = b"", 0, 0
+        return True
 
     # --- jedna instrukcja -------------------------------------------------------------------------
 

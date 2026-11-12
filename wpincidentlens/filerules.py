@@ -26,6 +26,9 @@ STATIC_CORE_DIRS = ("wp-includes/images/", "wp-includes/fonts/", "wp-includes/cs
 # Położenia, w których kod jest oczekiwany; tam słabsze heurystyki dostają niższą pewność.
 KNOWN_CODE = frozenset({FileClass.CORE, FileClass.PLUGIN, FileClass.THEME})
 BLOB_MIN_BYTES = 4096
+# Od tego rozmiaru treści limit czasu sesji jest sprawdzany przed każdym przejściem reguły treści. Jedno przejście jest
+# liniowe względem treści (najwyżej ``Limits.max_scan_bytes``); mniejsze pliki dzieli sprawdzenie SecureIngest między wpisami.
+CLOCK_CONTENT_BYTES = 64 * 1024
 
 Spans = Iterator[tuple[int, int]]
 
@@ -232,19 +235,46 @@ def path_rules(item: ingest.Evidence) -> list[Detection]:
     return found
 
 
-def content_rules(item: ingest.Evidence) -> list[Detection]:
-    """Heurystyki treści pliku, którego bajty zatrzymano (``item.content``): jedno wykrycie na regułę i plik."""
-    found = []
+class ContentDetections(list):
+    """Wykrycia reguł treści jednego pliku; ``skipped`` to reguły niezastosowane, bo minął limit czasu sesji."""
+    applied: int = 0
+    skipped: tuple[str, ...] = ()
+
+
+def _direct(_rule: str, call: Callable, *args, default=None):
+    return call(*args)
+
+
+def _evaluate(rule: Rule, item: ingest.Evidence, raw: bytes) -> Detection | None:
+    """Jedno przejście reguły po treści: wykrycie z pierwszym trafieniem i liczbą trafień albo ``None``."""
+    first, count = None, 0
+    for span in rule.find(raw):
+        first, count = first or span, count + 1
+    if first is None:
+        return None
+    offset, length = first
+    return Detection(rule.id, rule.severity, _confidence(rule, item.rel), "file", rule.explanation,
+                     seen_in(item, rule.kind, rule_version=rule.version, offset=offset, length=length, match_count=count))
+
+
+def content_rules(item: ingest.Evidence, expired: Callable[[], bool] | None = None,
+                  guard: Callable = _direct) -> ContentDetections:
+    """Heurystyki treści pliku, którego bajty zatrzymano (``item.content``): jedno wykrycie na regułę i plik.
+
+    ``expired`` (limit czasu sesji) jest sprawdzany przed każdą regułą, gdy treść ma co najmniej ``CLOCK_CONTENT_BYTES``;
+    po jego upływie pozostałe reguły trafiają do ``skipped``. ``guard(id_reguły, funkcja, *argumenty, default=…)``
+    wywołuje ocenę reguły (``rules.guarded`` zamienia wyjątek w lukę); domyślnie wyjątek przechodzi dalej.
+    """
+    found = ContentDetections()
     raw = item.content.lower()
-    for rule in RULES.values():
-        if rule.find is None or not rule.applies(item.rel):
-            continue
-        first, count = None, 0
-        for span in rule.find(raw):
-            first, count = first or span, count + 1
-        if first:
-            offset, length = first
-            found.append(Detection(rule.id, rule.severity, _confidence(rule, item.rel), "file", rule.explanation,
-                                   seen_in(item, rule.kind, rule_version=rule.version, offset=offset, length=length,
-                                           match_count=count)))
+    timed = expired is not None and len(raw) >= CLOCK_CONTENT_BYTES
+    chosen = [rule for rule in RULES.values() if rule.find is not None and guard(rule.id, rule.applies, item.rel, default=False)]
+    for done, rule in enumerate(chosen):
+        if timed and expired():
+            found.applied, found.skipped = done, tuple(later.id for later in chosen[done:])
+            break
+        if (detection := guard(rule.id, _evaluate, rule, item, raw)) is not None:
+            found.append(detection)
+    else:
+        found.applied = len(chosen)
     return found

@@ -9,7 +9,9 @@ deklaruje i sprawdza przy każdym ustaleniu:
   testy i CI to wychwytują;
 - ``category``, ``severity`` albo ``confidence`` spoza deklaracji reguły: ustalenie zostaje **dokładnie takie, jak je
   wyemitowano** (ocena nie może przez to spaść), a pokrycie źródła dostaje lukę z identyfikatorem reguły
-  (spec C10: błąd reguły to luka, nie cisza).
+  (spec C10: błąd reguły to luka, nie cisza);
+- wyjątek zgłoszony w trakcie oceny reguły (błąd kodu wywołany danymi) przechodzi przez ``guarded``: staje się luką
+  źródła z identyfikatorem reguły (albo modułu) i nazwą typu wyjątku, a pozostałe reguły i pliki są analizowane dalej.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 
-from . import filerules, models
+from . import filerules, ingest, models
 from .analysis import Detection, SourceCoverage
 
 RULESET_ID = "wpincidentlens-poc"
@@ -27,11 +29,37 @@ RULESET_VERSION = "2026.11.2"
 
 # Źródło, którego pokrycie dostaje lukę, gdy ustalenie danej kategorii łamie deklarację reguły.
 REGISTRY_GAP = "Błąd rejestru reguł"  # początek tekstu luki przy naruszeniu deklaracji reguły
+RULE_ERROR_GAP = "Błąd reguły"  # początek tekstu luki, gdy reguła zgłosiła wyjątek
 SOURCE_OF_CATEGORY = {"file": "files", "database": "database", "http_log": "logs", "correlation": "logs"}
 
 
 class UnknownRule(LookupError):
     """Kod narzędzia wyemitował regułę spoza rejestru: błąd wewnętrzny, nie luka pokrycia."""
+
+
+# Nie są błędem reguły wywołanym danymi i przerywają przebieg jak dotąd: odmowa SecureIngest i błąd wejścia-wyjścia
+# (bezpieczeństwo odczytu), reguła spoza rejestru (błąd kodu narzędzia) i brak pamięci.
+NOT_RULE_ERRORS = (ingest.IngestRefusal, OSError, UnknownRule, MemoryError)
+
+
+def rule_failed(cover: SourceCoverage, rule: str, error: type[BaseException]) -> None:
+    """Luka po wyjątku w regule: tylko identyfikator reguły i nazwa typu wyjątku. Treść wyjątku (``str(exc)``) może
+    zawierać bajty dowodu albo ścieżki hosta, więc nie trafia do raportu. Ten sam błąd powtórzony daje jedną lukę."""
+    text = (f"{RULE_ERROR_GAP} {rule}: wyjątek {error.__name__}; wynik tej reguły dla części materiału jest nieznany, "
+            "pozostałe reguły i pliki analizowano dalej")
+    if text not in cover.reasons:
+        cover.degrade(text)
+
+
+def guarded(cover: SourceCoverage, rule: str, call: Callable, *args, default=None):
+    """``call(*args)``; wyjątek oceny reguły zamienia w lukę ``cover`` (``rule_failed``) i zwraca ``default``."""
+    try:
+        return call(*args)
+    except NOT_RULE_ERRORS:
+        raise
+    except Exception as error:
+        rule_failed(cover, rule, type(error))
+        return default
 
 
 @dataclass(frozen=True)

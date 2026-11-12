@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from . import filerules, ingest, logformats, models, redact
+from . import filerules, ingest, logformats, models, redact, rules
 from .analysis import Detection, SourceCoverage
 from .correlate import Focus
 from .analysis import evidence_of as _evidence
@@ -151,6 +151,7 @@ class LogFileParser:
     held: list[_Held] = field(default_factory=list)
     hits: list[tuple[_Held, bool]] = field(default_factory=list)  # wykrycia reguły: (żądanie, podwójne rozszerzenie)
     hits_seen: int = 0  # wszystkie trafienia reguły w pliku, także ponad limit
+    rule_errors: set = field(default_factory=set)  # typy wyjątków reguły; scan_logs zamienia je w lukę (``rules.rule_failed``)
     _buf: bytearray = field(default_factory=bytearray)
     _number: int = 0
     _skipping: bool = False
@@ -241,7 +242,7 @@ class LogFileParser:
             return
         # Reguły widzą ścieżkę zdekodowaną; do raportu (i do porównań korelacji) idzie postać bez znaków sterujących.
         shown = redact.neutralise(script)
-        uploads = _in_uploads(script)
+        uploads, double = self._rule(script)
         wanted = self.focus is None or self.focus.wants(shown, record.timestamp_utc)
         if not (uploads or wanted):
             return
@@ -252,9 +253,21 @@ class LogFileParser:
         if uploads:
             self.hits_seen += 1
             if self.cap.take():
-                self.hits.append((held, filerules.is_double_extension_in_uploads(_probe(script))))
+                self.hits.append((held, double))
         if wanted and self.budget.take(held):
             self.held.append(held)
+
+    def _rule(self, script: str) -> tuple[bool, bool]:
+        """Reguła ``HTTP_EXECUTABLE_IN_UPLOADS``: (trafienie, podwójne rozszerzenie). Wyjątek reguły (błąd kodu wywołany
+        danymi) nie przerywa odczytu: wiersz nie daje trafienia, a typ wyjątku trafia do luki pokrycia logów."""
+        try:
+            uploads = _in_uploads(script)
+            return uploads, uploads and filerules.is_double_extension_in_uploads(_probe(script))
+        except rules.NOT_RULE_ERRORS:
+            raise
+        except Exception as error:
+            self.rule_errors.add(type(error))
+            return False, False
 
 
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{0,31}://")
@@ -370,6 +383,8 @@ def scan_logs(root: Path, session: ingest.Session, config: LogConfig | None = No
                 cap.left += len(parser.hits)
             continue
         parser.close()
+        for error in parser.rule_errors:
+            rules.rule_failed(cover, "HTTP_EXECUTABLE_IN_UPLOADS", error)
         run.add(item.rel, parser)
         evidence_id = _evidence(item).id
         requests.extend(_observation(evidence_id, item.rel, held, fmt, config, "HTTP_REQUEST") for held in parser.held)

@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import filerules, ingest, integrity, models, wpdetect
+from . import filerules, ingest, integrity, models, rules, wpdetect
 from .analysis import Detection, SourceCoverage
 
 
@@ -20,16 +20,27 @@ class FileScan:
 
 
 def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core: integrity.CoreChecksums | None = None) -> FileScan:
-    """Statusy pominiętych wpisów obniżają pokrycie na podstawie rejestru sesji; tutaj trafiają tylko ich opisy."""
+    """Statusy pominiętych wpisów obniżają pokrycie na podstawie rejestru sesji; tutaj trafiają tylko ich opisy.
+
+    Wyjątek w regule (``rules.guarded``) jest luką tego źródła, a nie przerwaniem analizy; limit czasu sesji przerywa
+    reguły treści dużego pliku (luka „przeanalizowany do reguły …”), a dalsze wpisy pomija SecureIngest.
+    """
     scan = FileScan()
     comparison = integrity.ReferenceComparison(baseline, core)
     detector = wpdetect.WPDetector(baseline)
     scan_limit = session.limits.max_scan_bytes
+
+    def guard(rule: str, call, *args, default=None):
+        return rules.guarded(scan.cover, rule, call, *args, default=default)
+
     for item in session.read(root, "files", expect="dir", wanted=filerules.wants_content, md5=core is not None):
         scan.cover.note(*item.gaps)
-        scan.detections.extend(comparison.check(item))
-        scan.detections.extend(filerules.path_rules(item))
-        detector.feed(item)
+        checked = guard("integrity", comparison.check, item)
+        if checked is None:  # wpis nie trafił do porównania: jego „brak” względem referencji byłby fałszywym ustaleniem
+            comparison.complete = False
+        scan.detections.extend(checked or [])
+        scan.detections.extend(guard("filerules.path_rules", filerules.path_rules, item, default=[]))
+        guard("wpdetect", detector.feed, item)
         if item.sha256 is None:
             continue
         if item.size > scan_limit:
@@ -40,7 +51,13 @@ def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core:
                 scan.cover.note(text)
             continue
         if item.content is not None:
-            scan.detections.extend(filerules.content_rules(item))
-    scan.detections.extend(comparison.finish(session, scan.cover))
-    scan.observations.extend(detector.finish(scan.cover))
+            found = filerules.content_rules(item, session.expired, guard)
+            scan.detections.extend(found)
+            if found.skipped:
+                scan.cover.degrade(
+                    f"Limit czasu analizy {session.limits.max_seconds:g} s przekroczony w trakcie reguł treści: plik {item.rel} "
+                    f"przeanalizowany do reguły {found.applied} z {found.applied + len(found.skipped)}; "
+                    f"niezastosowane: {', '.join(found.skipped)}")
+    scan.detections.extend(guard("integrity", comparison.finish, session, scan.cover, default=[]))
+    scan.observations.extend(guard("wpdetect", detector.finish, scan.cover, default=[]))
     return scan
