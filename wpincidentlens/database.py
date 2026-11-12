@@ -49,7 +49,11 @@ def scan_database(path: Path, known_admins: set[str], session: ingest.Session,
         rules.feed(table, columns, cells, number)
     rules.note_tables(parser.tables)
     # Na serwerze z lower_case_table_names=1 lub 2 tabela WP_USERMETA to wp_usermeta: jej wierszy reguły nie widzą.
-    variants = sorted(table for table in parser.tables if not dbrules.is_core_table(table) and dbrules.is_core_table(table.lower()))
+    spellings: dict[str, set[str]] = {}
+    for table in parser.tables | getattr(parser, "ddl_names", set()):
+        if dbrules.is_core_table(table.lower()):
+            spellings.setdefault(table.lower(), set()).add(table)
+    variants = sorted(table for group in spellings.values() for table in group if not dbrules.is_core_table(table) or len(group) > 1)
     if variants:
         cover.degrade(f"Pominięto wiersze {len(variants)} tabel o nazwie różniącej się od tabel WordPressa tylko wielkością liter "
                       f"({', '.join(name[:40] for name in variants[:5])}{', …' if len(variants) > 5 else ''}); "

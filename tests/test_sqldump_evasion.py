@@ -156,7 +156,7 @@ def test_table_that_differs_from_a_core_table_only_in_case_is_a_gap(site, eviden
 
     run = analyze(site, database=write(evidence / "db.sql", admin_sql("siteadmin") + ghost), known_admins=("siteadmin",))
 
-    assert run.has_gap("tylko wielkością liter (WP_USERMETA)") and run.coverage("database")["status"] == "PARTIAL"
+    assert run.has_gap("tylko wielkością liter (WP_USERMETA") and run.coverage("database")["status"] == "PARTIAL"
 
 
 def test_session_mode_change_is_a_gap_in_the_report(site, evidence, analyze):
@@ -174,3 +174,53 @@ def test_jsonl_row_with_too_many_columns_is_rejected():
     parser.feed(('{"table": "wp_options", "row": {' + row + "}}\n").encode())
 
     assert parser.rejected == {"shape": 1}
+
+
+# --- druga runda (automatyczny przegląd commita #42) ---------------------------------------------
+
+@pytest.mark.parametrize("sql", [
+    "CREATE TABLE wp_usermeta (a int) /* ' */ SELECT 1 /* ' */;",
+    "CREATE TABLE wp_usermeta (a int) -- '\n SELECT 1 -- '\n;",
+    "CREATE TABLE wp_usermeta (a int) TABLE decoy;",
+    "CREATE TABLE wp_usermeta (a int) ENGINE=CSV;",
+    "CREATE TABLE wp_usermeta (a int) ENGINE=InnoDB PARTITION BY HASH(a);",
+    "CREATE TABLE wp_usermeta (a int) WITH x AS (SELECT 1) SELECT * FROM x;",
+], ids=["quote-in-block-comment", "quote-in-line-comment", "table-statement", "csv-engine", "partition", "cte"])
+def test_create_table_with_anything_but_known_options_is_unanalysed(sql):
+    _, parser = sqldump.parse([sql.encode()])
+
+    assert parser.unanalysed["CREATE TABLE"] == 1
+
+
+@pytest.mark.parametrize("statements, change", [
+    ("SET @m='NO_BACKSLASH_ESCAPES'; SET sql_mode=@m;", "NO_BACKSLASH_ESCAPES"),
+    ("SET @m := 'ANSI_QUOTES', sql_mode = @m;", "ANSI_QUOTES"),
+    ("SET sql_mode=2097152;", "wartości, której parser nie zna"),
+    ("SET sql_mode=0x4E4F;", "wartości, której parser nie zna"),
+    ("SET sql_mode='NO_BACK' 'SLASH_ESCAPES';", "NO_BACKSLASH_ESCAPES"),
+    ("SET sql_mode=@never_set;", "wartości, której parser nie zna"),
+    ("SET @c='gbk'; SET character_set_client=@c;", "gbk"),
+], ids=["user-variable", "same-statement-variable", "bitmask", "hex", "adjacent-strings", "unknown-variable", "charset-variable"])
+def test_mode_set_through_a_variable_or_number_still_stops_the_analysis(statements, change):
+    _, parser = sqldump.parse([statements.encode()])
+
+    assert change in parser.mode_change
+
+
+def test_mysqldump_restores_saved_mode_and_charset_without_a_stop():
+    sql = ("SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\nSET @saved_cs_client = @@character_set_client;\n"
+           "SET character_set_client = @saved_cs_client;\nSET SQL_MODE=@OLD_SQL_MODE;\n")
+
+    _, parser = sqldump.parse([sql.encode()])
+
+    assert parser.mode_change_at is None and not parser.unanalysed
+
+
+def test_table_definition_in_other_case_still_orders_the_columns_and_is_a_gap(site, evidence, analyze):
+    ghost = ("CREATE TABLE `WP_USERMETA` (`umeta_id` int, `meta_value` text, `meta_key` text, `user_id` int);\n"
+             f"INSERT INTO `wp_usermeta` VALUES (9,'{CAPS}','wp_capabilities',2);\n")
+
+    run = analyze(site, database=write(evidence / "db.sql", USERS + KNOWN + ghost), known_admins=("siteadmin",))
+
+    assert run.finding("UNRECOGNIZED_ADMIN")["metadata"]["username"] == "ghost"
+    assert run.has_gap("tylko wielkością liter") and run.coverage("database")["status"] == "PARTIAL"
