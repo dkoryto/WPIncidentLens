@@ -3,14 +3,14 @@
   "tool": "WPIncidentLens PoC",
   "tool_version": "0.1.0-poc",
   "case_id": "DEMO-001",
-  "analyzed_at_utc": "2026-11-12T09:41:01.452082+00:00",
+  "analyzed_at_utc": "2026-11-12T11:08:44.459708+00:00",
   "analyzed_at_time_source": "tool_clock",
   "assessment": "SUSPICIOUS",
   "scope_complete": false,
   "disclaimer": "Brak alertów nie dowodzi braku włamania. PoC, nie certyfikacja śledcza.",
   "findings": [
     {
-      "id": "fnd_bb9f37d9fa0f55772be69a24e031d8d3",
+      "id": "fnd_3c32ee74ba68a3240db62498e7f3e628",
       "rule_id": "CORRELATED_UPLOAD_REQUEST",
       "category": "correlation",
       "severity": "high",
@@ -18,7 +18,7 @@
       "reason": "Ten sam podejrzany plik występuje w obrazie witryny i w logu HTTP; to korelacja, nie dowód wykonania kodu.",
       "observations": [
         "obs_0bce47c79cdf200ff2507a952a3539cb",
-        "obs_8f09ebe185e5221250f7a894f3c868ef"
+        "obs_eec65075ff9a755ef969095689430635"
       ]
     },
     {
@@ -33,14 +33,14 @@
       ]
     },
     {
-      "id": "fnd_cd94187794a057bad8b7e5b682d3ad86",
+      "id": "fnd_fc5c32d877e4d1974f5aa286eca1ac0e",
       "rule_id": "HTTP_EXECUTABLE_IN_UPLOADS",
       "category": "http_log",
       "severity": "high",
       "confidence": "medium",
       "reason": "Żądanie HTTP do pliku PHP w uploads; brak dowodu wykonania kodu.",
       "observations": [
-        "obs_8f09ebe185e5221250f7a894f3c868ef"
+        "obs_eec65075ff9a755ef969095689430635"
       ]
     },
     {
@@ -143,24 +143,6 @@
       "time_source": null
     },
     {
-      "id": "obs_8f09ebe185e5221250f7a894f3c868ef",
-      "evidence_id": "ev_5d7d0fb9113455411b0531b6e76297ae",
-      "kind": "HTTP_REQUEST_FOR_PHP_IN_UPLOADS",
-      "location": {
-        "path": "access.log",
-        "line": 1
-      },
-      "attributes": {
-        "client_ip": "192.0.2.10",
-        "method": "POST",
-        "status": 200,
-        "uri": "/wp-content/uploads/2026/11/cache-view.php"
-      },
-      "timestamp_raw": "09/Nov/2026:02:14:01 +0100",
-      "timestamp_utc": "2026-11-09T01:14:01+00:00",
-      "time_source": "log"
-    },
-    {
       "id": "obs_d6402875bfc6895bbaa7c33de48fe153",
       "evidence_id": "ev_fae4ca6b150b337f30f397c34e5072be",
       "kind": "OPTION_VALUE_WITH_ACTIVE_MARKUP",
@@ -194,6 +176,30 @@
       "timestamp_raw": null,
       "timestamp_utc": null,
       "time_source": null
+    },
+    {
+      "id": "obs_eec65075ff9a755ef969095689430635",
+      "evidence_id": "ev_5d7d0fb9113455411b0531b6e76297ae",
+      "kind": "HTTP_REQUEST_FOR_PHP_IN_UPLOADS",
+      "location": {
+        "path": "access.log",
+        "line": 1
+      },
+      "attributes": {
+        "bytes": 75,
+        "client_ip": "192.0.2.10",
+        "client_ip_basis": "connection",
+        "clock_uncertainty_seconds": null,
+        "log_format": "combined@1",
+        "method": "POST",
+        "path": "wp-content/uploads/2026/11/cache-view.php",
+        "status": 200,
+        "timestamp_precision": "second",
+        "uri": "/wp-content/uploads/2026/11/cache-view.php"
+      },
+      "timestamp_raw": "09/Nov/2026:02:14:01 +0100",
+      "timestamp_utc": "2026-11-09T01:14:01+00:00",
+      "time_source": "log"
     }
   ],
   "evidence": [
@@ -205,7 +211,7 @@
       "read_reason": null,
       "sha256": "6cd5dcd6c3c68e4e8ab71f112b198528edfb4ac8f6c89d4d81ee26d8a1b799db",
       "size_bytes": 46,
-      "mtime_ns": 1794476080107847098,
+      "mtime_ns": 1794481152710940815,
       "hardlinked": false
     },
     {
@@ -216,7 +222,7 @@
       "read_reason": null,
       "sha256": "4537f75d228afaf9739f8969cccb4420e4cadfbe29b6e0d675b07adc039943fd",
       "size_bytes": 681,
-      "mtime_ns": 1794476080107949806,
+      "mtime_ns": 1794481152711013065,
       "hardlinked": false
     },
     {
@@ -227,7 +233,7 @@
       "read_reason": null,
       "sha256": "fd2178497bf11c65e4e9927059fc8f44a5fafdbf1c03591bbb08c260869642e9",
       "size_bytes": 85,
-      "mtime_ns": 1794476080108181223,
+      "mtime_ns": 1794481152711163441,
       "hardlinked": false
     },
     {
@@ -238,7 +244,7 @@
       "read_reason": null,
       "sha256": "f06a5eca5c633f61c89c35174036d188b3e67b26e827fc7ef2139cf5eae2b311",
       "size_bytes": 65,
-      "mtime_ns": 1794476080108261806,
+      "mtime_ns": 1794481152711235233,
       "hardlinked": false
     },
     {
@@ -249,7 +255,7 @@
       "read_reason": null,
       "sha256": "7f79efadcca2de0bd71f39a07aea6fbbf34fe1e4c683e884667fdf864f85ef8c",
       "size_bytes": 116,
-      "mtime_ns": 1794476080108358140,
+      "mtime_ns": 1794481152711324733,
       "hardlinked": false
     },
     {
@@ -260,7 +266,7 @@
       "read_reason": null,
       "sha256": "1b47959574b08906a6a4fb1916ef014256deeb84fa7b910219cd2900d696ecfc",
       "size_bytes": 225,
-      "mtime_ns": 1794476080108083931,
+      "mtime_ns": 1794481152711088565,
       "hardlinked": false
     }
   ],
@@ -344,10 +350,10 @@
       "source": "access.log:1",
       "confidence": "medium",
       "evidence_id": "ev_5d7d0fb9113455411b0531b6e76297ae",
-      "observation_id": "obs_8f09ebe185e5221250f7a894f3c868ef"
+      "observation_id": "obs_eec65075ff9a755ef969095689430635"
     },
     {
-      "time_utc": "2026-11-12T09:34:40.108358+00:00",
+      "time_utc": "2026-11-12T10:59:12.711325+00:00",
       "time_source": "mtime",
       "timestamp_basis": "Filesystem mtime: zmienialny; nie oznacza czasu ataku",
       "event": "SUSPICIOUS_FILE_MTIME",
