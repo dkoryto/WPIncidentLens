@@ -13,10 +13,21 @@ import signal
 import stat
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 
 import jsonschema
 import pytest
+from hypothesis import HealthCheck, settings
+
+# Fuzzing ze strukturą (ADR 0009 pkt 3). ``ci`` (domyślny): stały przebieg (derandomize) bez bazy przykładów, krótki;
+# ``nightly`` (HYPOTHESIS_PROFILE=nightly): losowe ziarno, wiele przykładów, baza w ``.hypothesis/`` (poza Git).
+# ``deadline`` to ograniczony czas jednego przykładu: wejścia mają kilka–kilkadziesiąt KiB, więc przekroczenie
+# oznacza czas nieliniowy, nie wolną maszynę.
+_FUZZ = {"deadline": timedelta(seconds=2), "print_blob": True, "suppress_health_check": [HealthCheck.too_slow]}
+settings.register_profile("ci", derandomize=True, database=None, max_examples=100, **_FUZZ)
+settings.register_profile("nightly", max_examples=4000, **_FUZZ)
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
 
 from wpincidentlens import ingest
 from wpincidentlens.cli import EXIT_COMPLETE, EXIT_PARTIAL, EXIT_UNPROCESSED, main
