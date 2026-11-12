@@ -10,9 +10,9 @@ Macierz nie jest dowodem bezpieczeństwa ani skuteczności detekcji. `PASS` znac
 - **XFAIL (#N)** — test uruchomiony, potwierdza znaną lukę; oznaczony `xfail(strict=True)` z numerem Issue w powodzie. Po naprawie test da XPASS i wymusi zdjęcie znacznika.
 - **SKIP** — test nie wykonał się na tej platformie; podany powód.
 - **NOT COVERED** — brak testu; podany powód.
-- Skróty plików (`tests/test_*.py`): `pos` = `test_scenarios_positive`, `neg` = `test_negative`, `sec` = `test_security_inputs`, `inv` = `test_invariants`, `cli` = `test_cli`, `ing` = `test_ingest`, `prop` = `test_ingest_properties`, `mod` = `test_models`, `con` = `test_contract`, `mig` = `test_migrate`, `case` = `test_case`, `rw` = `test_report_writer`, `fr` = `test_filerules`, `integ` = `test_integrity`, `wpd` = `test_wpdetect`, `fc` = `test_fileclass`.
+- Skróty plików (`tests/test_*.py`): `pos` = `test_scenarios_positive`, `neg` = `test_negative`, `sec` = `test_security_inputs`, `inv` = `test_invariants`, `cli` = `test_cli`, `ing` = `test_ingest`, `prop` = `test_ingest_properties`, `mod` = `test_models`, `con` = `test_contract`, `mig` = `test_migrate`, `case` = `test_case`, `rw` = `test_report_writer`, `fr` = `test_filerules`, `integ` = `test_integrity`, `wpd` = `test_wpdetect`, `fc` = `test_fileclass`, `sql` = `test_sqldump`, `dbr` = `test_dbrules`, `ps` = `test_phpserialize`, `red` = `test_redact`.
 - Raport ma schemat `poc-1` (ADR 0003). Kolumna „Dowód w raporcie” używa nazw widoku testowego `Run` z `tests/conftest.py` (`source`, `metadata`, `gaps`, `manifest`), który składa ustalenie z jego obserwacją i dowodem; nazwy pól w pliku opisuje ADR 0003.
-- Issue (stan z `gh issue list --state all`, 2026-11-12): **otwarte** #6 (T-201 pliki), #7 (T-301 SQL), #13 (T-401 logi); **zamknięte** #3 (T-003), #4 (T-101), #5 (T-102), #11, #14 (T-501), #15 (T-601), #17, #18 (T-006).
+- Issue (stan z `gh issue list --state all`, 2026-11-12): **otwarte** #7 (T-301 SQL), #13 (T-401 logi), #35 (T-202), #36 (T-203); **zamknięte** #3 (T-003), #4 (T-101), #5 (T-102), #6 (T-201, jako ukończone 2026-11-12), #11, #14 (T-501), #15 (T-601), #17, #18 (T-006). #14 i #15 zamknął właściciel 2026-11-11 bez komentarza i bez implementacji.
 
 ## Wyniki uruchomienia (2026-11-12)
 
@@ -28,6 +28,8 @@ Uruchomione przez agenta aktualizującego ten dokument w istniejącym środowisk
 | `python -m wpincidentlens --help` | jw. | kod 0 |
 
 Zebrano 2150 przypadków z 422 funkcji testowych (`pytest --collect-only -q`): 1066 w `prop`, 184 w `mod`, 126 w `con`, 124 w `fr`, 116 w `ing`, 109 w `sec`, 98 w `integ`, 91 w `case`, 61 w `mig`, 42 w `neg`, 38 w `inv`, 30 w `wpd`, 22 w `rw`, 19 w `pos`, 18 w `fc`, 6 w `cli`. M2 dodał cztery pliki testów: `test_wpdetect.py` (11 funkcji), `test_filerules.py` (12), `test_integrity.py` (32), `test_fileclass.py` (2).
+
+**Stan po PR #38 i #39 (M3 w toku, commit `0febf3d`, 2026-11-12).** Tabela wyżej i pokrycie kodu niżej opisują `6c4cc87`; nie były mierzone ponownie. Na `0febf3d` z odświeżonym `demo/` (macOS, to samo środowisko): `python -m pytest -q -rx` → **2399 passed, 5 skipped, 2 xfailed**; `python -m ruff check .` → All checks passed; zebrano 2406 przypadków. M3 dodał cztery pliki testów: `test_sqldump.py` (15 funkcji, 50 przypadków), `test_dbrules.py` (36, 94), `test_phpserialize.py` (10, 76), `test_redact.py` (8, 30). Polecenie demo (wiersz czwarty tabeli) kończy się kodem 3: `SUSPICIOUS`, 6 ustaleń (`NEW_SINCE_BASELINE` zamiast `UNRECOGNIZED_ADMIN`, bo lista administratorów pochodzi z baseline), 7 obserwacji (dodatkowo znany administrator w inwentarzu `ADMINISTRATOR_ACCOUNT`), 6 luk. Pięć znaczników XFAIL `(#7)` zdjęto w PR #38; zostały dwa `(#14)`.
 
 Pominięcia na macOS (5), wszystkie z powodu systemu plików APFS:
 
@@ -74,13 +76,13 @@ Pokrycie liniowe mierzy wykonanie, nie poprawność: 7 przypadków XFAIL wykonuj
 | P2 | Zmodyfikowany plik core, poprawny manifest | checksum mismatch | `BASELINE_FILE_CHANGED` z `sha256` i `baseline_sha256` (baseline); `CORE_CHECKSUM_MISMATCH` z `observed_md5`, `reference_md5`, `observed_sha256` (manifest sum rdzenia) | `pos::test_p2_modified_core_file_reports_observed_and_reference_hash`, `integ::test_core_checksum_mismatch_reports_both_digests_and_the_reference` | PASS |
 | P2 | — | dowód z wersją referencji | `reference_version` (i opcjonalny opis `reference`) w ustaleniu; dla manifestu także `reference_file` | `pos::test_p2_checksum_mismatch_names_reference_version`, `integ::test_manifest_nested_under_a_version_key_supplies_the_reference_version`, `integ::test_missing_baseline_file_carries_the_reference_version_and_label` | PASS — wersję deklaruje referencja; jej zgodności z wersją witryny narzędzie nie sprawdza |
 | P3 | Administrator dodany w nowszej migawce | ustalenie bez przypisania sprawstwa | `UNRECOGNIZED_ADMIN`, „nie dowodzi to włamania”, brak słowa `ATTACKER` | `pos::test_p3_admin_outside_trusted_list_is_flagged_without_attribution` | PASS |
-| P3 | — | `NEW_SINCE_BASELINE` | reguła o tej nazwie | `pos::test_p3_admin_added_since_baseline_is_new_since_baseline` | XFAIL (#7) |
-| P4 | Opcja z podejrzanym redirectem | finding DB | `SUSPICIOUS_DB_MARKUP`, źródło `tabela:opcja` | `pos::test_p4_option_with_redirect_markup_is_a_database_finding[script, iframe, javascript-scheme]` | PASS |
-| P4 | — | finding DB także dla meta-refresh | jw. | `pos::test_p4_option_with_redirect_markup_is_a_database_finding[meta-refresh]` | XFAIL (#7) |
-| P4 | — | cytat wartości po redakcji | fragment wartości bez sekretu | `pos::test_p4_finding_quotes_option_value_with_secret_redacted` | XFAIL (#7) |
+| P3 | — | `NEW_SINCE_BASELINE` | reguła o tej nazwie, gdy konto nie figuruje na liście `known_admins` z baseline | `pos::test_p3_admin_added_since_baseline_is_new_since_baseline`, `dbr::test_admin_outside_the_lists_gives_one_finding_named_after_the_list` (8), `dbr::test_new_since_baseline_explains_that_the_snapshot_may_be_outdated` | PASS — migawką jest lista loginów w baseline, nie drugi zrzut bazy |
+| P4 | Opcja z podejrzanym redirectem | finding DB | `SUSPICIOUS_DB_MARKUP`, źródło `tabela:opcja` | `pos::test_p4_option_with_redirect_markup_is_a_database_finding[script, iframe, javascript-scheme]`, `dbr::test_active_markup_variants_in_an_option_are_a_finding` (10) | PASS |
+| P4 | — | finding DB także dla meta-refresh | jw. | `pos::test_p4_option_with_redirect_markup_is_a_database_finding[meta-refresh]` | PASS |
+| P4 | — | cytat wartości po redakcji | `metadata.excerpt` (≤ 200 znaków) bez sekretu, z nazwą hosta | `pos::test_p4_finding_quotes_option_value_with_secret_redacted`, `dbr::test_quoted_excerpt_keeps_the_host_and_drops_the_secret` (4), `dbr::test_excerpt_of_a_long_value_is_bounded_and_centred_on_the_match`, `red::*` (8 funkcji, 30 przypadków) | PASS — cytat tylko w `report.json`; offsetu trafienia w wartości brak |
 | P5 | `mu-plugin` zmieniony wobec baseline | anomalia trwałości | `BASELINE_FILE_CHANGED` (ogólna reguła, bez klasy „persistence”) | `pos::test_p5_changed_mu_plugin_is_reported_against_baseline` | PASS |
 | P5 | Nowy `mu-plugin` lub drop-in nieobecny w baseline | ustalenie dla pliku, bez twierdzenia o włamaniu | `NEW_FILE_SINCE_BASELINE` medium/medium z `file_class`; dla wpisu nieodczytanego pewność `low` | `pos::test_p5_mu_plugin_added_since_baseline_is_reported`, `integ::test_new_autoloaded_file_is_a_finding_that_does_not_claim_compromise[mu-plugin, drop-in]`, `integ::test_unread_entry_in_autoloaded_location_is_reported_by_path_with_low_confidence`, `integ::test_unread_mu_plugins_directory_itself_is_reported_by_path` (2 warianty) | PASS |
-| P5 | Cron zmieniony wobec baseline | anomalia trwałości | — | — | NOT COVERED: PoC nie ma wejścia na bazową migawkę DB ani analizy opcji `cron` (#7) |
+| P5 | Cron zmieniony wobec baseline | anomalia trwałości | — | — | NOT COVERED: opcja `cron` trafia tylko do inwentarza `CRON_HOOK` (`dbr::test_cron_hooks_are_inventory_without_findings`), bez porównania z baseline — baseline nie przechowuje zadań cron, reguły WP-DB-005 nie ma |
 | P6 | Sygnatura sztucznego webshella | trafienie sygnatury | `SUSPICIOUS_PHP_EVAL_DECODE`, confidence `medium`, „heurystyka, nie dowód malware” | `pos::test_p6_synthetic_webshell_marker_is_a_heuristic_finding`, `cli::test_poc_end_to_end` | PASS |
 | P6 | — | finding z `rule_id` i offsetem | `metadata.offset`, `length`, `match_count`, `rule_version` — reguła wbudowana, **nie YARA-X** | `pos::test_p6_signature_finding_carries_match_offset`, `fr::test_content_finding_points_to_the_byte_offset_of_the_first_match` (10 reguł) | PASS — YARA-X: NOT COVERED (brak adaptera, R-52) |
 
@@ -94,7 +96,7 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | N2 | Legalny kod analytics w pliku motywu | brak ustaleń | `findings == []` | `neg::test_n2_analytics_snippet_in_theme_file_raises_nothing` | PASS |
 | N2 | Legalny kod analytics w opcji DB | brak wysokiego alarmu | jedno `SUSPICIOUS_DB_MARKUP` medium/low — **znany false positive** (każdy `<script>` w opcji) | `neg::test_n2_analytics_snippet_in_option_is_only_a_low_confidence_review_item` | PASS |
 | N3 | Legalny admin bez baseline | brak alertu, nota o braku listy | `findings == []`, gap „brak wiarygodnej listy porównawczej” | `neg::test_n3_admin_without_trusted_list_is_a_gap_not_an_alert` | PASS |
-| N3 | — | „tylko inventory” | konto w inwentarzu raportu | `neg::test_n3_admin_without_trusted_list_appears_in_inventory` | XFAIL (#7) |
+| N3 | — | „tylko inventory” | obserwacja `ADMINISTRATOR_ACCOUNT` bez ustalenia, `assessment` bez zmian | `neg::test_n3_admin_without_trusted_list_appears_in_inventory`, `dbr::test_existence_of_an_administrator_does_not_change_the_assessment`, `dbr::test_administrator_inventory_carries_no_personal_data` | PASS — atrybuty obserwacji są tylko w `report.json`, nie w HTML |
 | N3 | Admin z zaufanej listy (flaga lub baseline) | brak alertu | `findings == []` | `neg::test_trusted_admin_is_not_flagged[cli-flag, baseline-list]` | PASS |
 | N4 | Legalna aktualizacja wtyczki | „needs review”, nie exploit | `BASELINE_FILE_CHANGED` medium, „zmiana nie przesądza o ataku” | `neg::test_n4_updated_plugin_is_a_medium_review_item_not_an_exploit` | PASS |
 | N5 | Legalny PHP w nietypowym katalogu | heurystyka, nie silny dowód | `EXECUTABLE_IN_UPLOADS` confidence `medium`, „wymaga analizy kontekstu” (severity pozostaje `high`) | `neg::test_n5_harmless_php_in_uploads_is_heuristic_not_strong_evidence` | PASS |
@@ -177,7 +179,9 @@ Reguły PoC spoza P1–P6 (test pozytywny i negatywny): `REQUEST_TO_COMMAND_EXEC
 | S-10 | Stratne dekodowanie SQL | luka pokrycia | gap o kodowaniu | `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[sql-dump]` | PASS |
 | S-10 | Stratne dekodowanie logu | luka pokrycia | gap o kodowaniu | `sec::test_s10_lossy_decoding_is_reported_as_coverage_gap[access-log]` | PASS |
 | S-11 | Zserializowany obiekt PHP w opcji | traktowany jako tekst, nie trafia do raportu | zero ustaleń, brak nazwy klasy w wyjściu | `sec::test_s11_serialized_php_object_is_inert_text` | PASS |
-| S-11 | `administrator` z `b:0` | nie jest adminem | zero ustaleń | `sec::test_s11_revoked_administrator_capability_is_not_an_admin` | XFAIL (#7) |
+| S-11 | `administrator` z `b:0` | jest administratorem: WordPress wyznacza role po kluczach tablicy uprawnień (decyzja właściciela, ADR 0006 — zastępuje wcześniejsze oczekiwanie „nie jest adminem”) | ustalenie z `role_value: "false"`, zdanie w wyjaśnieniu, nota pokrycia | `sec::test_s11_administrator_role_key_with_false_value_is_still_an_admin`, `dbr::test_role_key_with_a_falsy_value_is_still_an_admin_and_says_so` (6) | PASS |
+| S-11 | Słowo `administrator` poza kluczem roli (jako wartość, w dłuższym kluczu, na liście) | nie jest adminem, bez wyszukiwania podłańcucha | zero ustaleń, pokrycie `ANALYZED` | `sec::test_s11_word_administrator_outside_the_role_key_is_not_an_admin[word-as-value, word-inside-another-key, word-in-a-list]`, `dbr::test_administrator_is_a_key_of_the_parsed_capabilities_array` (11) | PASS |
+| S-11 | Nieczytelna tablica uprawnień, dane serializowane PHP o złej postaci | luka z `user_id`, nigdy dopasowanie podłańcucha; błąd odczytu zamiast zgadywania | gap „Nie odczytano tablicy uprawnień” | `dbr::test_unreadable_capabilities_are_a_gap_naming_the_user_never_a_substring_match` (6), `ps::test_invalid_value_is_an_error_not_a_guess` (29), `ps::test_limits_are_errors` (4), `ps::test_hostile_input_is_rejected_quickly` (5) | PASS |
 | S-12 | HTML z `onerror` w ścieżce pliku, nazwie opcji, nazwie pliku logu, polu czasu logu, nazwie symlinka | escapowany w `report.html` | brak surowego znacznika, obecna postać `&lt;img…` | `sec::test_s12_markup_from_evidence_is_escaped_in_html_report[finding-file-path, finding-option-name, finding-log-file-name, gap-log-timestamp, gap-symlink-name]`, `con::test_html_report_escapes_every_new_field` | PASS |
 | S-12 | Znaczniki w `--case-id` | odmowa w CLI (kod 2); raport złożony z pominięciem CLI nadal escapowany | komunikat z nazwą flagi; `&lt;` w HTML | `sec::test_s12_markup_in_case_id_is_refused_by_the_command_line`, `sec::test_s12_markup_in_case_id_of_a_composed_report_is_escaped_in_html_report`, `cli::test_report_escapes_html` | PASS |
 | S-12 | CSP w raporcie HTML | deklaracja polityki | `Content-Security-Policy` | `sec::test_s12_html_report_declares_content_security_policy` | XFAIL (#14 — zamknięte) |
@@ -320,26 +324,21 @@ Ograniczenie opisane w samym pliku testów: katalog przejrzany bez przeszkód ni
 
 ## Zestawienie XFAIL
 
-7 przypadków w 7 funkcjach, wszystkie `xfail(strict=True)`; wszystkie wykonały się jako XFAIL w przebiegu z 2026-11-12 (macOS, `pytest -q -rx`). Kolumna „Issue” podaje numer z powodu w znaczniku i jego stan na GitHubie.
+2 przypadki w 2 funkcjach, oba `xfail(strict=True)`; oba wykonały się jako XFAIL w przebiegu na `0febf3d` (2026-11-12, macOS, `pytest -q -rx`). Kolumna „Issue” podaje numer z powodu w znaczniku i jego stan na GitHubie.
 
 | Nr | Test | Powód (ze znacznika) | Issue |
 |---|---|---|---|
-| 1 | `pos::test_p3_admin_added_since_baseline_is_new_since_baseline` | brak porównania dwóch migawek DB i reguły `NEW_SINCE_BASELINE` | #7 — otwarte |
-| 2 | `pos::test_p4_option_with_redirect_markup_is_a_database_finding[meta-refresh]` | redirect meta-refresh nie jest objęty regułą opcji | #7 — otwarte |
-| 3 | `pos::test_p4_finding_quotes_option_value_with_secret_redacted` | finding DB nie zawiera cytatu wartości, więc nie ma też redakcji | #7 — otwarte |
-| 4 | `neg::test_n3_admin_without_trusted_list_appears_in_inventory` | raport nie zawiera inwentarza kont administratorów | #7 — otwarte |
-| 5 | `sec::test_s11_revoked_administrator_capability_is_not_an_admin` | rola wykrywana podłańcuchem `administrator` bez parsowania serializacji PHP: `b:0` liczy się jak `b:1` | #7 — otwarte |
-| 6 | `sec::test_s12_html_report_declares_content_security_policy` | raport HTML nie deklaruje Content-Security-Policy | #14 — zamknięte |
-| 7 | `sec::test_s13_canary_secret_never_reaches_any_output[log-query-token]` | query string z logu trafia bez redakcji do `metadata.uri` w `report.json` | #14 — zamknięte |
+| 1 | `sec::test_s12_html_report_declares_content_security_policy` | raport HTML nie deklaruje Content-Security-Policy | #14 — zamknięte |
+| 2 | `sec::test_s13_canary_secret_never_reaches_any_output[log-query-token]` | query string z logu trafia bez redakcji do `metadata.uri` w `report.json` | #14 — zamknięte |
 
 | Issue | Liczba | Stan |
 |---|---|---|
-| #6 (T-201) | 0 | otwarte; trzy znaczniki zdjęte w M2: wersja referencji w ustaleniu (PR #32), nowy mu-plugin spoza baseline (PR #32), offset trafienia reguły (PR #33) |
-| #7 (T-301) | 5 | otwarte |
-| #14 (T-501) | 2 | **zamknięte**, zakres niezrealizowany (CSP, redakcja query stringu) |
+| #6 (T-201) | 0 | zamknięte jako ukończone 2026-11-12; trzy znaczniki zdjęte w M2: wersja referencji w ustaleniu (PR #32), nowy mu-plugin spoza baseline (PR #32), offset trafienia reguły (PR #33) |
+| #7 (T-301) | 0 | otwarte (adapter JSONL w toku); pięć znaczników zdjętych w PR #38: `NEW_SINCE_BASELINE`, meta-refresh, cytat po redakcji, inwentarz administratorów, `b:0` (test zastąpiony `sec::test_s11_administrator_role_key_with_false_value_is_still_an_admin` po decyzji właściciela o roli) |
+| #14 (T-501) | 2 | **zamknięte** przez właściciela 2026-11-11 bez komentarza i bez implementacji (CSP, redakcja query stringu) |
 | #4, #5 | 0 | wszystkie znaczniki zdjęte |
 
-Dwie luki z wierszy 6–7 wskazują Issue #14, które jest na GitHubie zamknięte. Zmiana numerów w znacznikach albo ponowne otwarcie Issue wymaga decyzji poza tą aktualizacją (testów nie edytowano).
+Obie luki wskazują Issue #14, które jest na GitHubie zamknięte. Zmiana numerów w znacznikach albo ponowne otwarcie Issue wymaga decyzji poza tą aktualizacją (testów nie edytowano).
 
 ## Ograniczenia tej macierzy
 
@@ -348,7 +347,7 @@ Dwie luki z wierszy 6–7 wskazują Issue #14, które jest na GitHubie zamknięt
 - Testy S-15 i S-17 blokują wywołania na poziomie Pythona i sprawdzają importy; nie zastępują izolacji kontenera. Kontener nie był uruchamiany.
 - Wyścigi: deterministyczne haki (`ing`, `sec`) oraz dwa testy z osobnym procesem (`prop`, marker `race`), które są próbkowaniem przez ok. 1,5 s, nie dowodem braku okna.
 - Budżety czasu w testach (`time_limit`) używają `SIGALRM`, więc działają tylko na systemach POSIX. Limit czasu narzędzia sprawdzono podstawionym zegarem.
-- Parsery SQL i logów nie były fuzzowane; testy własności na losowych drzewach obejmują wyłącznie SecureIngest.
+- Parser SQL ma deterministyczny fuzz mutacyjny (S-08, stałe ziarno, bez Hypothesis i bez generatora gramatyki); parser logów i `phpserialize` nie były fuzzowane; testy własności na losowych drzewach obejmują wyłącznie SecureIngest.
 - Reguły plików (M2): próbki pozytywne i „fałszywe alarmy” to krótkie teksty syntetyczne. Nie ma testu omijania reguł (konkatenacja, komentarz w środku wywołania) — to znane ograniczenie, nie sprawdzana własność — ani pomiaru na rzeczywistym kodzie wtyczek i motywów. Test czasu reguł używa 1 MiB, a limit treści to 4 MiB.
 - Integralność (M2): manifesty i baseline w testach mają po kilka wpisów; limity (200 ustaleń, 50 000 wpisów, 8 MiB) sprawdzono po obniżeniu przez monkeypatch. Zgodność manifestu z wersją witryny i baseline z bardzo dużą liczbą wpisów nie mają testu, bo kod ich nie obsługuje.
 - WPDetector (M2): testy obejmują `version.php`, `wp-config.php` i nazwy plików `.mo` w standardowych miejscach; heredoc, `$GLOBALS` i `include` nie są modelowane ani testowane.
