@@ -18,6 +18,7 @@ from .analysis import evidence_of as _evidence
 
 MAX_LINE_BYTES = logformats.MAX_LINE_BYTES
 MAX_REQUESTS = 50_000  # obserwacji HTTP_REQUEST (i wykryć z nich) w całym przebiegu; nadmiar jest luką
+MAX_HELD_CHARS = 32 * 1024 * 1024  # znaków ścieżek, uri i czasu trzymanych żądań w całym przebiegu; nadmiar jest luką
 MAX_URI_CHARS = 300
 MAX_FILE_NOTES = 20  # plików wymienionych z nazwy w luce o odrzuconych wierszach
 FORMATS = tuple(logformats.FORMATS)
@@ -56,12 +57,22 @@ class LogScan:
     requests: list[models.Observation]
 
 
-@dataclass
+@dataclass(frozen=True)
 class _Held:
-    """Żądanie do ścieżki kodu, zapamiętane do chwili, gdy znany jest dowód (``Evidence``) jego pliku."""
+    """Żądanie do ścieżki kodu, zapamiętane do chwili, gdy znany jest dowód (``Evidence``) jego pliku.
+
+    Tylko pola potrzebne obserwacji, z ``uri`` już zredagowanym i skróconym: pełny cel żądania (do 64 KiB) nie jest
+    trzymany, więc pamięć jednego wpisu ogranicza ``MAX_URI_CHARS``, ``logformats.MAX_PATH_CHARS`` i ``MAX_TIME_CHARS``.
+    """
     line: int
-    record: logformats.HttpRecord
     path: str
+    uri: str
+    method: str
+    status: int
+    bytes: int | None
+    precision: str
+    timestamp_raw: str
+    timestamp_utc: str | None
     client_ip: str
     basis: str
 
@@ -69,7 +80,24 @@ class _Held:
 @dataclass
 class _Budget:
     left: int = field(default_factory=lambda: MAX_REQUESTS)  # czytane przy tworzeniu: test może obniżyć limit
+    chars: int = field(default_factory=lambda: MAX_HELD_CHARS)
     dropped: int = 0
+
+    def take(self, held: _Held) -> bool:
+        cost = _cost(held)
+        if self.left <= 0 or cost > self.chars:
+            self.dropped += 1
+            return False
+        self.left, self.chars = self.left - 1, self.chars - cost
+        return True
+
+    def give_back(self, held: list[_Held]) -> None:
+        self.left += len(held)
+        self.chars += sum(map(_cost, held))
+
+
+def _cost(held: _Held) -> int:
+    return len(held.path) + len(held.uri) + len(held.timestamp_raw)
 
 
 @dataclass
@@ -161,24 +189,51 @@ class LogFileParser:
         if path is None:
             self.unresolved += 1
             return
-        if not _is_code_request(path):
+        path = _script_path(path)
+        if path is None:
             return
         client, basis, malformed = logformats.client_address(record, self.config.trusted_proxies)
         self.malformed_forwarded += malformed
-        if self.budget.left <= 0:
-            self.budget.dropped += 1
-            return
-        self.budget.left -= 1
-        self.held.append(_Held(self._number, record, path, client, basis))
+        held = _Held(self._number, path, redacted_uri(record.target), record.method, record.status,
+                     record.bytes, record.precision, redact.neutralise(record.timestamp_raw), record.timestamp_utc, client, basis)
+        if self.budget.take(held):
+            self.held.append(held)
 
 
-def _is_code_request(path: str) -> bool:
-    """Ścieżka z rozszerzeniem kodu (``filerules.CODE_SUFFIXES``) albo z podwójnym rozszerzeniem w uploads (pkt 4)."""
-    return filerules.is_code(path) or filerules.is_double_extension_in_uploads(path)
+def redacted_uri(target: str) -> str:
+    """``uri`` do raportu: query i fragment usunięte w całości strukturalnie (od pierwszego ``?`` albo ``#``), a nie
+    wzorcem ``redact``, który zatrzymuje się na cudzysłowie, ``<`` albo ukośniku wstecznym; reszta po redakcji."""
+    cut = min((at for at in (target.find("?"), target.find("#")) if at >= 0), default=len(target))
+    tail = f"{target[cut]}{redact.MARK}" if cut < len(target) else ""
+    return redact.excerpt(target[:cut], limit=MAX_URI_CHARS - len(tail)) + tail
+
+
+def _probe(path: str) -> str:
+    """Ścieżka do porównań z regułami: prefiks ``wp-content/uploads/`` bez względu na wielkość liter (serwer na systemie
+    plików nierozróżniającym jej trafi w ten sam katalog); ``filerules`` porównuje rozszerzenia już bez niej."""
+    head = path[:len(filerules.UPLOADS)]
+    return filerules.UPLOADS + path[len(head):] if head.lower() == filerules.UPLOADS else path
+
+
+def _is_code(path: str) -> bool:
+    """Rozszerzenie kodu (``filerules.CODE_SUFFIXES``) albo podwójne rozszerzenie w uploads (pkt 4)."""
+    probe = _probe(path)
+    return filerules.is_code(probe) or filerules.is_double_extension_in_uploads(probe)
+
+
+def _script_path(path: str) -> str | None:
+    """Plik kodu, który obsłuży żądanie: pierwszy segment z rozszerzeniem kodu, reszta to ``PATH_INFO``
+    (``/uploads/x.php/a.jpg`` wykona ``x.php``). ``None``, gdy żaden segment nie wskazuje pliku kodu."""
+    end = 0
+    while (end := path.find("/", end + 1)) >= 0:
+        if _is_code(path[:end]):
+            return path[:end]
+    return path if _is_code(path) else None
 
 
 def _in_uploads(path: str) -> bool:
-    return filerules.is_code_in_uploads(path) or filerules.is_double_extension_in_uploads(path)
+    probe = _probe(path)
+    return filerules.is_code_in_uploads(probe) or filerules.is_double_extension_in_uploads(probe)
 
 
 def scan_logs(root: Path, session: ingest.Session, config: LogConfig | None = None) -> LogScan:
@@ -205,7 +260,7 @@ def scan_logs(root: Path, session: ingest.Session, config: LogConfig | None = No
         parser = parsers.pop(item.rel, None)
         if item.sha256 is None or parser is None:
             if parser is not None:  # błąd w trakcie odczytu: wiersze tego pliku nie należą do żadnego dowodu
-                budget.left += len(parser.held)
+                budget.give_back(parser.held)
             continue
         hashed += 1
         parser.close()
@@ -226,7 +281,7 @@ def scan_logs(root: Path, session: ingest.Session, config: LogConfig | None = No
             request = _observation(evidence_id, item.rel, held, fmt, config, "HTTP_REQUEST")
             requests.append(request)
             if _in_uploads(held.path):
-                double = filerules.is_double_extension_in_uploads(held.path)
+                double = filerules.is_double_extension_in_uploads(_probe(held.path))
                 detections.append(Detection(
                     "HTTP_EXECUTABLE_IN_UPLOADS", "high", "low" if double else "medium", "http_log",
                     _EXPLANATION + (_DOUBLE_EXTENSION if double else ""),
@@ -236,13 +291,12 @@ def scan_logs(root: Path, session: ingest.Session, config: LogConfig | None = No
 
 
 def _observation(evidence_id: str, rel: str, held: _Held, fmt: str, config: LogConfig, kind: str) -> models.Observation:
-    record = held.record
     return models.Observation(
         evidence_id, kind, models.Location(path=rel, line=held.line),
-        {"path": held.path, "uri": redact.excerpt(record.target, limit=MAX_URI_CHARS), "method": record.method,
-         "status": record.status, "bytes": record.bytes, "client_ip": held.client_ip, "client_ip_basis": held.basis,
-         "log_format": fmt, "timestamp_precision": record.precision, "clock_uncertainty_seconds": config.uncertainty},
-        timestamp_raw=redact.neutralise(record.timestamp_raw), timestamp_utc=record.timestamp_utc, time_source=models.TimeSource.LOG)
+        {"path": held.path, "uri": held.uri, "method": held.method, "status": held.status, "bytes": held.bytes,
+         "client_ip": held.client_ip, "client_ip_basis": held.basis, "log_format": fmt, "timestamp_precision": held.precision,
+         "clock_uncertainty_seconds": config.uncertainty},
+        timestamp_raw=held.timestamp_raw, timestamp_utc=held.timestamp_utc, time_source=models.TimeSource.LOG)
 
 
 def _summarise(cover: SourceCoverage, fmt: str, hashed: int, totals: Counter, rejected: Counter, first_rejected: dict,
@@ -275,8 +329,10 @@ def _summarise(cover: SourceCoverage, fmt: str, hashed: int, totals: Counter, re
         cover.note(f"{totals['unresolved']} żądań ma ścieżkę, której nie da się przypisać do pliku (\"..\" ponad katalogiem "
                    "głównym, znak sterujący po dekodowaniu %XX, cel inny niż ścieżka); reguły ich nie sprawdzają")
     if totals["malformed"]:
-        cover.note(f"{totals['malformed']} żądań przez zaufane proxy ma niepoprawny wpis w forwarded_for: "
+        cover.note(f"{totals['malformed']} żądań przez zaufane proxy ma odrzucone forwarded_for (niepoprawny wpis albo "
+                   f"dłuższe niż {logformats.MAX_FORWARDED_CHARS} znaków): "
                    "adresem klienta jest adres połączenia")
     if budget.dropped:
-        cover.degrade(f"Limit {MAX_REQUESTS} żądań do plików kodu przekroczony: pominięto {budget.dropped}; "
+        cover.degrade(f"Limit {MAX_REQUESTS} żądań do plików kodu albo {MAX_HELD_CHARS} znaków ich ścieżek i adresów "
+                      f"przekroczony: pominięto {budget.dropped}; "
                       "nie sprawdzono ich regułą HTTP_EXECUTABLE_IN_UPLOADS ani korelacją")

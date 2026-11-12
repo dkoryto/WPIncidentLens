@@ -111,6 +111,27 @@ def test_requests_over_the_budget_are_counted_not_held():
     assert (len(parser.held), parser.budget.dropped) == (2, 3)
 
 
+def test_held_request_keeps_only_the_bounded_fields_not_the_whole_target():
+    """Pamięć trzymanych żądań: cel 60 KiB zostaje jako ``uri`` po redakcji (≤ 300 znaków), bez pełnego rekordu."""
+    parser = LogFileParser(max_line=httplog.MAX_LINE_BYTES)
+    parser.feed(access_line("/" + UPLOAD_PHP + "?" + "a" * 60_000).encode())
+    parser.close()
+
+    held = parser.held[0]
+    assert len(held.uri) <= httplog.MAX_URI_CHARS and held.path == UPLOAD_PHP
+    assert not any(isinstance(value, str) and len(value) > httplog.MAX_URI_CHARS for value in vars(held).values())
+
+
+def test_requests_over_the_character_budget_are_counted_not_held():
+    line = access_line("/wp-content/uploads/" + "d" * 300 + ".php").encode()
+    parser = LogFileParser(budget=httplog._Budget(chars=700), max_line=1000)
+    parser.feed(line * 3)
+    parser.close()
+
+    assert (len(parser.held), parser.budget.dropped) == (1, 2)
+    assert parser.budget.chars == 700 - httplog._cost(parser.held[0])
+
+
 def test_clock_uncertainty_is_whole_seconds_rounded_up():
     assert [LogConfig(clock_skew=value).uncertainty for value in (None, 0, 2.0, 2.1)] == [None, 0, 2, 3]
 
@@ -175,7 +196,13 @@ def test_request_observations_do_not_enter_the_report_by_themselves(site, eviden
     ("/wp-content/uploads/2026/11/x/%2e%2e/shell.php", "wp-content/uploads/2026/11/shell.php", "medium"),
     ("/wp-content/uploads/2026/11/shell%2ephp", "wp-content/uploads/2026/11/shell.php", "medium"),
     ("//wp-content//uploads/2026/11/shell.php?cmd=id", "wp-content/uploads/2026/11/shell.php", "medium"),
-], ids=["php", "php5", "uppercase-phtml", "double-extension", "encoded-dot-dot", "encoded-dot", "slashes-and-query"])
+    ("/wp-content/uploads/2026/11/x.php/foo", "wp-content/uploads/2026/11/x.php", "medium"),
+    ("/wp-content/uploads/2026/11/x.php/a.jpg/b", "wp-content/uploads/2026/11/x.php", "medium"),
+    ("/wp-content/uploads/2026/11/X.PHP", "wp-content/uploads/2026/11/X.PHP", "medium"),
+    ("/WP-CONTENT/UPLOADS/a.php", "WP-CONTENT/UPLOADS/a.php", "medium"),
+    ("/Wp-Content/Uploads/x.php.jpg/y", "Wp-Content/Uploads/x.php.jpg", "low"),
+], ids=["php", "php5", "uppercase-phtml", "double-extension", "encoded-dot-dot", "encoded-dot", "slashes-and-query",
+        "path-info", "path-info-with-image", "uppercase-name", "uppercase-uploads-prefix", "double-extension-with-path-info"])
 def test_request_for_code_in_uploads_is_flagged_after_normalisation(site, evidence, analyze, target, path, confidence):
     logs = write(evidence / "logs" / "access.log", access_line(target, method="HEAD")).parent
 
@@ -193,8 +220,10 @@ def test_request_for_code_in_uploads_is_flagged_after_normalisation(site, eviden
     "/wp-content/uploads/../../wp-content/uploads/x/%2e%2e/%2e%2e/%2e%2e/%2e%2e/shell.php",
     "/wp-content/uploads%00/shell.php",
     "/wp-content/uploadsX/shell.php",
+    "/wp-content/uploads/2026/11/photo.jpg/x.txt",
+    "/index.php/wp-content/uploads/2026/11/shell.php",
 ], ids=["code-outside-uploads", "image-in-uploads", "non-code-double-extension", "code-only-in-query", "dot-dot-above-root",
-        "encoded-nul", "similar-directory"])
+        "encoded-nul", "similar-directory", "path-info-without-code", "uploads-only-in-path-info"])
 def test_request_that_is_not_for_code_in_uploads_is_not_flagged(site, evidence, analyze, target):
     logs = write(evidence / "logs" / "access.log", access_line(target)).parent
 
@@ -217,6 +246,29 @@ def test_token_in_query_is_redacted_in_the_uri_and_absent_from_the_path(site, ev
 
     assert run.finding(RULE)["metadata"]["uri"] == f"/{UPLOAD_PHP}?[usunięto]"
     assert CANARY not in run.everything
+
+
+@pytest.mark.parametrize("target", [
+    f"/{UPLOAD_PHP}?x=\"&token={CANARY}", f"/{UPLOAD_PHP}?x='{CANARY}", f"/{UPLOAD_PHP}?x=<{CANARY}",
+    f"/{UPLOAD_PHP}?x=\\{CANARY}", f"/{UPLOAD_PHP}#{CANARY}", f"/{UPLOAD_PHP}#a?{CANARY}",
+], ids=["after-double-quote", "after-apostrophe", "after-less-than", "after-backslash", "fragment", "query-in-fragment"])
+def test_secret_after_a_character_that_stops_the_query_pattern_never_reaches_the_report(site, evidence, analyze, target):
+    record = {"time": "2026-11-09T01:14:01Z", "remote_addr": "192.0.2.10", "method": "GET", "uri": target, "status": 200}
+    logs = write(evidence / "logs" / "access.json", json.dumps(record) + "\n").parent
+
+    run = analyze(site, logs=logs, flags=("--log-format", "json"))
+
+    assert run.finding(RULE)["metadata"]["uri"] == f"/{UPLOAD_PHP}{target[len(UPLOAD_PHP) + 1]}[usunięto]"
+    assert CANARY not in run.everything
+
+
+@pytest.mark.parametrize("target, uri", [
+    ("/a.php", "/a.php"), ("/a.php?", "/a.php?[usunięto]"), ("/a.php#", "/a.php#[usunięto]"),
+    ("/" + "0123456789abcdef" * 2 + ".php", "/[usunięto].php"), ("/" + "z" * 400 + ".php?x", "/" + "z" * 287 + "…?[usunięto]"),
+], ids=["plain", "empty-query", "empty-fragment", "hex-run-in-path", "long-path"])
+def test_redacted_uri_cuts_query_and_fragment_before_redaction(target, uri):
+    assert httplog.redacted_uri(target) == uri
+    assert len(httplog.redacted_uri(target)) <= httplog.MAX_URI_CHARS
 
 
 def test_client_ip_from_json_log_through_trusted_proxy(site, evidence, analyze):
@@ -250,8 +302,22 @@ def test_malformed_forwarded_for_through_trusted_proxy_is_a_note(site, evidence,
 
     run = analyze(site, logs=logs, flags=("--log-format", "json", "--trusted-proxy", "10.0.0.0/8"))
 
-    assert run.finding(RULE)["metadata"]["client_ip"] == "10.0.0.5"
-    assert run.has_gap("niepoprawny wpis w forwarded_for")
+    facts = run.finding(RULE)["metadata"]
+    assert (facts["client_ip"], facts["client_ip_basis"]) == ("10.0.0.5", "connection_forwarded_for_rejected")
+    assert run.has_gap("1 żądań przez zaufane proxy ma odrzucone forwarded_for")
+
+
+def test_overlong_forwarded_for_with_a_forged_address_on_the_right_is_rejected(site, evidence, analyze):
+    padding = ", ".join(["198.51.100.1"] * 200)
+    record = {"time": "2026-11-09T01:14:01Z", "remote_addr": "10.0.0.5", "method": "GET", "uri": "/" + UPLOAD_PHP,
+              "status": 200, "forwarded_for": padding + ", 203.0.113.66"}
+    logs = write(evidence / "logs" / "access.json", json.dumps(record) + "\n").parent
+
+    run = analyze(site, logs=logs, flags=("--log-format", "json", "--trusted-proxy", "10.0.0.0/8"))
+
+    facts = run.finding(RULE)["metadata"]
+    assert (facts["client_ip"], facts["client_ip_basis"]) == ("10.0.0.5", "connection_forwarded_for_rejected")
+    assert "203.0.113.66" not in run.everything and run.has_gap("odrzucone forwarded_for")
 
 
 # --- opcje operatora i case.json ------------------------------------------------------------------
@@ -361,4 +427,5 @@ def test_request_limit_is_a_gap(site, evidence, analyze, monkeypatch):
     run = analyze(site, logs=logs)
 
     assert len([item for item in run.findings if item["rule"] == RULE]) == 2
-    assert run.has_gap("Limit 2 żądań do plików kodu przekroczony: pominięto 1")
+    assert run.has_gap("Limit 2 żądań do plików kodu albo")
+    assert run.has_gap("przekroczony: pominięto 1")

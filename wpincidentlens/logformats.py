@@ -204,7 +204,7 @@ def _json_record(line: str) -> HttpRecord:
     stamp = document["time"][:MAX_TIME_CHARS]
     moment, precision = _iso_time_utc(stamp)
     return HttpRecord(_client(document["remote_addr"]), stamp, moment, precision, method, target, _status(document["status"]),
-                      size, forwarded[:MAX_FORWARDED_CHARS] if forwarded else None)
+                      size, forwarded or None)
 
 
 def _iso_time_utc(stamp: str) -> tuple[str | None, str]:
@@ -276,21 +276,28 @@ def ip_or_none(text: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | Non
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
+FORWARDED_REJECTED = "connection_forwarded_for_rejected"
+
+
 def client_address(record: HttpRecord, trusted: Iterable[Network]) -> tuple[str, str, bool]:
-    """Adres klienta według pkt 5: (adres, podstawa, czy ``forwarded_for`` miał niepoprawny wpis).
+    """Adres klienta według pkt 5: (adres, podstawa, czy ``forwarded_for`` zaufanego proxy odrzucono).
 
     Nagłówek jest brany pod uwagę tylko wtedy, gdy format go niesie i adres połączenia należy do zaufanej sieci.
     Klientem jest wtedy ostatni od prawej adres spoza zaufanych; gdy cały łańcuch jest zaufany — pierwszy od lewej.
-    Niepoprawny wpis przed znalezieniem klienta przerywa przejście: zostaje adres połączenia.
+    Nagłówek dłuższy niż ``MAX_FORWARDED_CHARS`` albo niepoprawny wpis przed znalezieniem klienta: zostaje adres
+    połączenia z podstawą ``FORWARDED_REJECTED``. Nagłówka nie skraca się: wpisy dopisane przez zaufane proxy są
+    po prawej, więc ucięcie dowolnej strony mogłoby zostawić adres podstawiony przez klienta.
     """
     networks = tuple(trusted)
     if not (record.forwarded_for and networks and _within(ip_or_none(record.client), networks)):
         return record.client, "connection", False
+    if len(record.forwarded_for) > MAX_FORWARDED_CHARS:
+        return record.client, FORWARDED_REJECTED, True
     chain = [entry.strip() for entry in record.forwarded_for.split(",")]
     for entry in reversed(chain):
         address = ip_or_none(entry)
         if address is None:
-            return record.client, "connection", True
+            return record.client, FORWARDED_REJECTED, True
         if not _within(address, networks):
             return str(address), "forwarded_for_via_trusted_proxy", False
     return str(ip_or_none(chain[0])), "forwarded_for_via_trusted_proxy", False

@@ -218,10 +218,10 @@ def record(client: str, forwarded: str | None) -> HttpRecord:
     ("10.0.0.5", "198.51.100.1, 203.0.113.7, 10.1.1.1, 10.2.2.2", TRUSTED, ("203.0.113.7", "forwarded_for_via_trusted_proxy", False)),
     ("10.0.0.5", "10.9.9.9, 10.1.1.1", TRUSTED, ("10.9.9.9", "forwarded_for_via_trusted_proxy", False)),
     ("10.0.0.5", "spoofed, 203.0.113.7", TRUSTED, ("203.0.113.7", "forwarded_for_via_trusted_proxy", False)),
-    ("10.0.0.5", "203.0.113.7, unknown", TRUSTED, ("10.0.0.5", "connection", True)),
-    ("10.0.0.5", "203.0.113.7:443", TRUSTED, ("10.0.0.5", "connection", True)),
-    ("10.0.0.5", "203.0.113.7,", TRUSTED, ("10.0.0.5", "connection", True)),
-    ("10.0.0.5", "fe80::1%eth0", TRUSTED, ("10.0.0.5", "connection", True)),
+    ("10.0.0.5", "203.0.113.7, unknown", TRUSTED, ("10.0.0.5", logformats.FORWARDED_REJECTED, True)),
+    ("10.0.0.5", "203.0.113.7:443", TRUSTED, ("10.0.0.5", logformats.FORWARDED_REJECTED, True)),
+    ("10.0.0.5", "203.0.113.7,", TRUSTED, ("10.0.0.5", logformats.FORWARDED_REJECTED, True)),
+    ("10.0.0.5", "fe80::1%eth0", TRUSTED, ("10.0.0.5", logformats.FORWARDED_REJECTED, True)),
     ("2001:db8:ffff::1", "2001:db8::7", TRUSTED, ("2001:db8::7", "forwarded_for_via_trusted_proxy", False)),
     ("::ffff:10.0.0.5", "203.0.113.7", TRUSTED, ("203.0.113.7", "forwarded_for_via_trusted_proxy", False)),
     ("proxy.example.invalid", "203.0.113.7", TRUSTED, ("proxy.example.invalid", "connection", False)),
@@ -230,6 +230,21 @@ def record(client: str, forwarded: str | None) -> HttpRecord:
         "empty-entry", "scoped-ipv6", "ipv6-proxy", "ipv4-mapped-proxy", "hostname-is-never-trusted"])
 def test_client_address_uses_forwarded_for_only_through_trusted_proxies(client, forwarded, trusted, expected):
     assert client_address(record(client, forwarded), trusted) == expected
+
+
+def test_forwarded_for_over_the_limit_is_rejected_not_truncated():
+    """Prawy koniec dopisuje zaufane proxy: ucięcie z dowolnej strony mogłoby zostawić adres podstawiony przez klienta."""
+    padding = ", ".join(["198.51.100.1"] * (logformats.MAX_FORWARDED_CHARS // 14 + 1))
+    forged = record("10.0.0.5", padding + ", 203.0.113.66, 10.1.1.1")
+
+    assert len(forged.forwarded_for) > logformats.MAX_FORWARDED_CHARS
+    assert client_address(forged, TRUSTED) == ("10.0.0.5", logformats.FORWARDED_REJECTED, True)
+
+
+def test_json_record_keeps_the_whole_forwarded_for_for_the_length_check():
+    forwarded = "198.51.100.1, " * 300 + "203.0.113.66"
+
+    assert parse("json", json_line(forwarded_for=forwarded)).forwarded_for == forwarded
 
 
 def test_combined_format_never_carries_forwarded_for():
