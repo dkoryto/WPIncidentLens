@@ -1,7 +1,9 @@
 """Widoki wyniku (R-40, ADR 0008 pkt 6): pliki wyliczane z jednego słownika raportu ``poc-1``.
 
 ``report.json`` pozostaje źródłem prawdy; każdy widok to dosłowna kopia jego części, bez nowych faktów.
-Moduł nie dotyka plików: zwraca nazwy i bajty, a zapisuje je ``report.write`` jednym ``_publish``.
+Moduł nie dotyka plików: zwraca nazwy i bajty (``render``) albo strumienie bajtów (``streams``), a zapisuje je
+``report.write`` jednym ``_publish``. Strumień daje te same bajty co ``render``, lecz bez trzymania całego pliku
+w pamięci: ``report.json`` i ``evidence-manifest.json`` rosną o kilkaset bajtów na każdy plik witryny (Issue #67).
 
 Kształty (każdy widok JSON ma ``schema_version`` i ``case_id`` raportu, więc da się go odczytać bez ``report.json``):
 
@@ -27,6 +29,7 @@ i nie należy go używać.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Iterator
 
 EVIDENCE_MANIFEST = "evidence-manifest.json"
 OBSERVATIONS = "observations.jsonl"
@@ -42,12 +45,38 @@ def encode(text: str) -> bytes:
     return text.encode("utf-8", "backslashreplace")
 
 
+_PRETTY = json.JSONEncoder(indent=2, ensure_ascii=False)  # te same ustawienia co ``json.dumps(…, indent=2, ensure_ascii=False)``
+_BATCH_CHARS = 64 * 1024  # znaków na jedną porcję bajtów
+
+
+def _batched(pieces: Iterable[str]) -> Iterator[bytes]:
+    """Łączy drobne fragmenty tekstu w porcje bajtów. Kodowanie po porcjach daje te same bajty co kodowanie całości:
+    UTF-8 (także ``backslashreplace`` samotnego surogatu) przekształca każdy znak niezależnie od sąsiadów."""
+    batch: list[str] = []
+    size = 0
+    for piece in pieces:
+        batch.append(piece)
+        size += len(piece)
+        if size >= _BATCH_CHARS:
+            yield encode("".join(batch))
+            batch.clear()
+            size = 0
+    if batch:
+        yield encode("".join(batch))
+
+
+def json_chunks(document: dict) -> Iterator[bytes]:
+    """Bajty ``to_json(document)`` w porcjach. ``json.dumps`` z wcięciem buduje listę wszystkich fragmentów kodera
+    przed złączeniem (kilka KiB na wpis ``evidence``); tutaj w pamięci jest najwyżej jedna porcja."""
+    return _batched(_PRETTY.iterencode(document))
+
+
 def to_json(document: dict) -> bytes:
-    return encode(json.dumps(document, indent=2, ensure_ascii=False))
+    return b"".join(json_chunks(document))
 
 
-def _view(kind: str, report: dict, **parts) -> bytes:
-    return to_json({"schema_version": f"{kind}-poc-1", "case_id": report["case_id"], **parts})
+def _view(kind: str, report: dict, **parts) -> Iterator[bytes]:
+    return json_chunks({"schema_version": f"{kind}-poc-1", "case_id": report["case_id"], **parts})
 
 
 RUN_KEYS = ("event", "tool", "tool_version", "case_id", "analyzed_at_utc", "assessment", "scope_complete", "exit_code",
@@ -70,15 +99,19 @@ def run_log(report: dict, exit_code: int) -> str:
     return "".join(_line(record) for record in records)
 
 
-def render(report: dict, exit_code: int) -> dict[str, bytes]:
-    """Wszystkie widoki raportu jako ``{nazwa pliku: bajty}``, w kolejności ``VIEWS``."""
-    observations = "".join(_line(item) for item in report["observations"])
+def streams(report: dict, exit_code: int) -> dict[str, Iterator[bytes]]:
+    """Wszystkie widoki raportu jako ``{nazwa pliku: porcje bajtów}``, w kolejności ``VIEWS``; porcje powstają leniwie."""
     return {
         EVIDENCE_MANIFEST: _view("evidence-manifest", report, evidence=report["evidence"]),
-        OBSERVATIONS: encode(observations),
+        OBSERVATIONS: _batched(_line(item) for item in report["observations"]),
         FINDINGS: _view("findings", report, findings=report["findings"]),
         TIMELINE: _view("timeline", report, timeline=report["timeline"]),
         COVERAGE: _view("coverage", report, assessment=report["assessment"], scope_complete=report["scope_complete"],
                         coverage=report["coverage"], coverage_gaps=report["coverage_gaps"]),
-        RUN_LOG: encode(run_log(report, exit_code)),
+        RUN_LOG: iter([encode(run_log(report, exit_code))]),
     }
+
+
+def render(report: dict, exit_code: int) -> dict[str, bytes]:
+    """Wszystkie widoki raportu jako ``{nazwa pliku: bajty}``, w kolejności ``VIEWS``."""
+    return {name: b"".join(chunks) for name, chunks in streams(report, exit_code).items()}

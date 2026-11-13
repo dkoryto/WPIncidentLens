@@ -65,11 +65,24 @@ class IngestRefusal(Exception):
         return self._MESSAGES.get(self.reason, f"nie można bezpiecznie otworzyć ({self.reason})")
 
 
+# Budżet pamięci (Issue #67). Każdy wpis rejestru (plik przeczytany albo pominięty) zostaje w pamięci do końca analizy:
+# w rejestrze sesji, w ``evidence`` raportu, w słowniku raportu i w lukach. Najdroższy jest wpis pominięty z własną luką
+# (np. dowiązanie symboliczne): zmierzone ok. 2,1 KiB maks. RSS na wpis, plik przeczytany ok. 1,4 KiB (macOS,
+# ``bench/RESULTS.md``, 2026-11-13). Wpisów rejestru jest najwyżej ``max_entries``, więc ten limit ogranicza pamięć:
+# domyślnie 250 000 × 2,5 KiB ≈ 610 MiB plus zapas na interpreter i reguły bazy (zmierzone ok. 305 MiB) mieści się
+# w ``--memory=1g`` kontenera (``docker/run-flags.txt``). Przekroczenie limitu daje lukę ``MAX_ENTRIES``, nie zabicie
+# procesu (OOM). Podniesienie ``--max-entries`` wymaga proporcjonalnie więcej pamięci.
+ENTRY_MEMORY_BYTES = 2560          # szacunek pamięci na jeden wpis rejestru przez całą analizę, z zapasem
+MEMORY_RESERVE_BYTES = 320 * 1024**2  # interpreter, reguły bazy danych, logi
+
+
 @dataclass(frozen=True)
 class Limits:
     """Limity ADR 0002 B6; obowiązują łącznie dla wszystkich źródeł jednej sesji."""
     max_files: int = 200_000
-    max_entries: int = 1_000_000  # wszystkie wpisy: pliki, katalogi, dowiązania, pliki specjalne
+    # Wszystkie wpisy: pliki, katalogi, dowiązania, pliki specjalne. Ogranicza też pamięć (``ENTRY_MEMORY_BYTES``);
+    # 250 000 zostawia ponad domyślnym ``max_files`` miejsce na katalogi typowej witryny.
+    max_entries: int = 250_000
     max_file_bytes: int = 2 * 1024**3
     max_total_bytes: int = 20 * 1024**3
     max_scan_bytes: int = 4 * 1024**2
@@ -83,9 +96,12 @@ class Limits:
                 raise ValueError(f"limit {limit.name} musi być dodatni")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Evidence:
-    """Wynik próby odczytu jednego wpisu. ``sha256`` jest ustawione wtedy i tylko wtedy, gdy bajty przeczytano."""
+    """Wynik próby odczytu jednego wpisu. ``sha256`` jest ustawione wtedy i tylko wtedy, gdy bajty przeczytano.
+
+    ``slots``: rejestr sesji trzyma jeden taki wpis na plik, więc obiekt nie ma własnego ``__dict__`` (Issue #67).
+    """
     source: str
     rel: str
     status: ReadStatus
@@ -100,11 +116,19 @@ class Evidence:
     md5: str | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class _Seen:
+    """Przeczytany plik do ponownej weryfikacji. Jeden na plik, więc bez ``__dict__`` i bez krotki pełnej ścieżki:
+    ``parent`` to krotka katalogu współdzielona przez wszystkie pliki tego katalogu (Issue #67)."""
     entry: int  # indeks w Session.ledger
-    parts: tuple[str, ...]
-    identity: tuple[int, int]
+    parent: tuple[str, ...]  # nazwy katalogów od źródła do katalogu pliku
+    name: str                # nazwa pliku w ``parent``; pusta dla źródła będącego plikiem
+    dev: int
+    ino: int
+
+    @property
+    def identity(self) -> tuple[int, int]:
+        return self.dev, self.ino
 
 
 @dataclass
@@ -309,7 +333,7 @@ class Session:
             yield from self._walk(fd, root, wanted, keep_limit, md5, sink_factory)
             return
         try:
-            yield self._read_regular(fd, info, root, (), Path(path).name, wanted, keep_limit, md5, sink, sink_factory)
+            yield self._read_regular(fd, info, root, (), "", Path(path).name, wanted, keep_limit, md5, sink, sink_factory)
         finally:
             os.close(fd)
 
@@ -377,7 +401,7 @@ class Session:
                     continue
                 try:
                     if stat.S_ISREG(info.st_mode):
-                        record = self._read_regular(fd, info, root, here, rel, wanted, keep_limit, md5, None, sink_factory)
+                        record = self._read_regular(fd, info, root, parts, name, rel, wanted, keep_limit, md5, None, sink_factory)
                     else:
                         record = self._skip(root.source, rel, ReadStatus.SKIPPED_SPECIAL, _kind(info.st_mode))
                 finally:
@@ -409,7 +433,7 @@ class Session:
             return self._skip(source, where, ReadStatus.SKIPPED_LIMIT, "MAX_ENTRIES")
         return None
 
-    def _read_regular(self, fd: int, info: os.stat_result, root: _Root, parts: tuple[str, ...], rel: str,
+    def _read_regular(self, fd: int, info: os.stat_result, root: _Root, parent: tuple[str, ...], name: str, rel: str,
                       wanted, keep_limit: int, md5: bool = False, sink: Callable[[bytes], None] | None = None,
                       sink_factory: Callable[[str], Callable[[bytes], None]] | None = None) -> Evidence:
         self._files += 1
@@ -442,9 +466,9 @@ class Session:
             gaps.append(f"Nazwa spoza UTF-8 zapisana w postaci zastępczej: {_where(root.source, shown)}")
         record = Evidence(root.source, shown, ReadStatus.CHANGED if changed else ReadStatus.READ, "DURING_READ" if changed else "",
                           sha, got, info.st_mtime_ns, hardlinked, content, tuple(gaps), extra)
-        self.ledger.append(replace(record, content=None))
+        self.ledger.append(record if content is None else replace(record, content=None))
         if not changed:
-            root.seen.append(_Seen(len(self.ledger) - 1, parts, _identity(info)))
+            root.seen.append(_Seen(len(self.ledger) - 1, parent, name, info.st_dev, info.st_ino))
         return record
 
     def _skip(self, source: str, rel: str, status: ReadStatus, reason: str) -> Evidence:
@@ -506,11 +530,11 @@ class Session:
                         return gaps
                     done += 1
                     try:
-                        if seen.parts[:-1] != dir_parts:
+                        if seen.parent != dir_parts:
                             if dir_fd != root_fd:
                                 os.close(dir_fd)
                             dir_parts, dir_fd = (), root_fd
-                            dir_parts, dir_fd = seen.parts[:-1], self._descend(root_fd, seen.parts[:-1])
+                            dir_parts, dir_fd = seen.parent, self._descend(root_fd, seen.parent)
                         difference = self._difference(None if root.is_dir else root_fd, dir_fd, seen)
                     except OSError as exc:  # m.in. ELOOP, gdy wpis lub katalog nadrzędny stał się dowiązaniem
                         difference = _error_name(exc)
@@ -538,7 +562,7 @@ class Session:
         entry = self.ledger[seen.entry]
         if file_fd is not None:
             return self._compare(file_fd, os.fstat(file_fd), seen, entry)
-        fd, info = _open_at(seen.parts[-1], _OPEN_ENTRY, dir_fd)
+        fd, info = _open_at(seen.name, _OPEN_ENTRY, dir_fd)
         try:
             return self._compare(fd, info, seen, entry)
         finally:

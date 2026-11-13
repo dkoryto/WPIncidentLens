@@ -65,12 +65,14 @@ Materiał dowodowy otwiera wyłącznie moduł `wpincidentlens/ingest.py`: wzglę
 | `--allow-hardlinks` | wyłączona | czytaj pliki z wieloma dowiązaniami twardymi; raport podaje ich liczbę |
 | `--no-reverify` | wyłączona | pomiń ponowną weryfikację skrótów po analizie (odnotowane jako luka) |
 | `--max-files` | 200000 | limit liczby plików |
-| `--max-entries` | 1000000 | limit wszystkich wpisów (pliki, katalogi, dowiązania, pliki specjalne) |
+| `--max-entries` | 250000 | limit wszystkich wpisów (pliki, katalogi, dowiązania, pliki specjalne) |
 | `--max-file-bytes` | 2147483648 (2 GiB) | większy plik jest pomijany bez liczenia skrótu |
 | `--max-total-bytes` | 21474836480 (20 GiB) | limit łącznego rozmiaru czytanych plików |
 | `--max-seconds` | 1800 | limit czasu całej analizy, sprawdzany między plikami oraz w trakcie parsowania SQL, JSONL i logów, reguł bazy i treści plików i korelacji; nie przerywa odczytu i skrótu jednego pliku |
 | `--max-depth` | 64 | limit głębokości katalogów; głębszy katalog nie jest przeglądany |
 | `--max-path-bytes` | 4096 | limit długości ścieżki względnej do źródła; dłuższa ścieżka jest pomijana |
+
+`--max-entries` ogranicza też pamięć: każdy wpis (plik przeczytany albo pominięty) zostaje w pamięci do końca analizy, szacunkowo do 2,5 KiB, więc domyślne 250 000 wpisów mieści się z zapasem w limicie 1 GiB kontenera (`docker/run-flags.txt`); nadmiar wpisów daje lukę `MAX_ENTRIES` zamiast zabicia procesu. Podniesienie limitu wymaga proporcjonalnie więcej pamięci (pomiary w `bench/RESULTS.md`).
 
 Każdy limit musi być dodatni i skończony, inaczej wywołanie jest odrzucane (kod 2). Stałe limity: treść plików analizowana do 4 MiB, zrzut SQL czytany strumieniowo (limit pliku `--max-file-bytes`, jedna instrukcja do 16 MiB), log czytany strumieniowo (limit pliku `--max-file-bytes`, jeden wiersz do 64 KiB), baseline do 64 MiB, manifest sum rdzenia do 8 MiB i 50 000 wpisów. Bezpieczny odczyt nie zastępuje izolacji: nie wykrywa punktów montowania w drzewie ani zmian cofniętych przed ponowną weryfikacją; materiał montuj tylko do odczytu, z `nodev`.
 
