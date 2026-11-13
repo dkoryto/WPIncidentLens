@@ -28,6 +28,13 @@ Powiązane dokumenty: `docs/TEST_MATRIX.md` (wyniki i lista testów), `docs/THRE
 > - §5 i §8 (Issue #14 i #15 „zamknięte”): oba zostały ponownie otwarte 2026-11-12; kod M5 i M6 jest scalony, zamknięcie należy do właściciela. Tabela etapów w §8: M6 wykonany w kodzie (PR #61–#66, #68, #69), w tym fuzzing ze strukturą, benchmarki i pomiar kontenera; Linux mierzony tylko w CI.
 > - §7 (warunek B10): pomiar kontenera się odbył, ale zakaz pracy na realnym materiale trwa — ADR 0009 pkt 7 przedłuża go do bramki GO/NO-GO (M7) z przeglądem człowieka; bramka M1 nadal nie jest zatwierdzona przez właściciela.
 
+> **Nota 2026-11-13 (po poprawkach po M6, `main` `ebca55a`).** Po scaleniu PR #72 (Issue #36), #73 (Issue #58), #74 (Issue #67) i #71 (Issue #35, ADR 0010) nieaktualne są następujące stwierdzenia tego raportu:
+>
+> - §6.3 (tabela flag): domyślne `--max-entries` to **250 000**, nie 1 000 000 (PR #74) — limit dobrany do budżetu pamięci kontenera 1 GiB; nadmiar wpisów daje lukę `MAX_ENTRIES`. Odwołania do numerów linii `ingest.py` i `cli.py` w tej sekcji też są nieaktualne.
+> - §4, wiersz „Limity” („nie mierzono pamięci ani miliona plików”): pamięć i milion plików zmierzono benchmarkiem w M6 (PR #66), a po PR #74 pamięć na wpis ma test budżetu (`tests/test_memory_budget.py`); pomiar RSS tylko na macOS.
+> - §4, wiersz „Izolacja” („brak … wywołań procesów na poziomie Pythona”): z opcją `--yara-rules` moduł `wpincidentlens/yarax.py` uruchamia jeden proces potomny ze stałą listą argumentów (wyjątek od S-17, ADR 0010 pkt 9); bez tej opcji stwierdzenie nadal jest prawdziwe. W nocie z 2026-11-12 o D9: izolacja parserów w Pythonie nadal „nie teraz”, ale YARA-X (kod natywny) działa w osobnym procesie (ADR 0010 pkt 4).
+> - §5 i §8 (Issue #14 i #15): bez zmian względem noty z 2026-11-12 — oba otwarte, decyzja należy do właściciela; Issue #35, #36, #58 i #67 zamknięto 2026-11-13.
+
 ## 1. Co uruchomiono
 
 Świeże środowisko (`uv venv --python 3.12`, `pip install -e '.[dev]'`), macOS 27.0.1 (Darwin 27.0.0, arm64, APFS), Python 3.12.11, pytest 8.4.2, ruff 0.8.6.
