@@ -140,3 +140,105 @@ def test_secret_named_in_a_query_never_survives(text):
 
     assert "hunter2" not in out and "s3cr3t" not in out
     assert out.count("?") <= 1 and redact.redact(out) == out
+
+
+_WP_CONFIG_SECRETS = ["DB_PASSWORD", "DB_USER", "AUTH_KEY", "SECURE_AUTH_KEY", "LOGGED_IN_KEY", "NONCE_KEY",
+                      "AUTH_SALT", "SECURE_AUTH_SALT", "LOGGED_IN_SALT", "NONCE_SALT"]
+
+
+@pytest.mark.parametrize("text", [
+    "define('DB_PASSWORD', 'hunter2');",
+    'define( "AUTH_KEY" , "hunter2" );',
+    "define ( 'LOGGED_IN_KEY' ,'hunter2 with spaces' ) ;",
+    "define('NONCE_SALT', \"mixed 'quotes' hunter2\");",
+    "define('DB_PASSWORD', 'it\\'s hunter2');",
+    "'DB_PASSWORD' => 'hunter2',",
+    '"password" => "hunter2"',
+    "array('db_user'=>'hunter2')",
+    "$password = 'hunter2';",
+    "$db_pass='hunter2';",
+    "INSERT INTO wp_options VALUES (1,'auth_key','hunter2 x','yes');",
+    "secret=<hunter2>",
+    "secret=<hunter2",
+    'key = "' + "a b " * 60 + 'hunter2"',
+    "key = '" + "x" * 300 + " hunter2'",
+    "pass: 'hunter2 x",
+    "pass: 'x hunter2",
+    'password="hunter2',
+    'password="a<b hunter2"',
+    "password: 'x\\' hunter2",
+    'key=" password: "hunter2"',
+    'key=" password: "x hunter2" tail',
+    "key=\n'DB_PASSWORD'=>            hunter2,",
+    'key="\ndefine("DB_PASSWORD",hunter2);',
+], ids=["define-single", "define-double-spaced", "define-spaces-in-value", "define-mixed-quotes", "define-escaped-quote",
+        "array-arrow", "array-arrow-double", "array-arrow-db-user", "assignment", "assignment-glued", "sql-tuple",
+        "angle-brackets", "angle-unclosed", "long-quoted-double", "long-quoted-single", "unclosed-quote-two-words",
+        "unclosed-quote-tail", "unclosed-double", "lt-inside-quotes", "escaped-quote-in-unclosed",
+        "quote-closing-early-glued", "quote-closing-early-glued-words",
+        "value-swallowing-the-next-array-key", "value-swallowing-the-next-define-name"])
+def test_php_and_config_secret_shapes_are_redacted(text):
+    out = redact.redact(text)
+
+    assert "hunter2" not in out
+    assert redact.redact(out) == out
+
+
+@pytest.mark.parametrize("name", _WP_CONFIG_SECRETS)
+def test_every_wp_config_credential_constant_is_redacted(name):
+    out = redact.redact(f"define( '{name}', 'synthetic hunter2 value' );")
+
+    assert out == f"define( '{name}', {MARK} );"
+
+
+@pytest.mark.parametrize("text", [
+    "define('DB_HOST', 'localhost');",
+    "define('DB_NAME', 'wordpress');",
+    "define('WP_DEBUG', false);",
+    "$table_prefix = 'wp_';",
+    "add_action( 'init', array( $this, 'register' ) );",
+    '<a title="the key" href="/x">',
+], ids=["db-host", "db-name", "wp-debug", "table-prefix", "hook", "comma-after-name-in-markup-without-quote-separator"])
+def test_non_secret_config_and_code_stays(text):
+    """``DB_HOST`` to wskaźnik (dokąd łączy się witryna), ``DB_NAME`` nie jest poświadczeniem: zostają."""
+    assert redact.redact(text) == text
+
+
+def test_unclosed_quote_stops_before_markup():
+    """Niedomknięty cudzysłów nie zjada reszty dokumentu ze wskaźnikami: kończy się przed znacznikiem HTML."""
+    out = redact.redact("token='hunter2 <script src=https://redirect.example.net/x.js></script>")
+
+    assert "hunter2" not in out
+    assert "<script src=https://redirect.example.net/x.js>" in out
+
+
+@pytest.mark.parametrize("unit", ["define(", "'a'=>", "define('DB_PASSWORD', ", "'key'=>", "key='", 'key="<', "'auth',",
+                                  "key='x', ", "key='a\\", 'salt: "', "pass=>", 'key="a"b, ', 'key="""', 'key=\\"', 'key="x" key '])
+def test_redaction_of_hostile_php_fragments_is_linear(unit):
+    """1 MiB powtórzonych fragmentów ``define(`` / ``'a'=>``: czas liniowy, nie kwadratowy.
+
+    Bezwzględny budżet (``time_limit``) łapie zawieszenie; stosunek czasów 1 MiB / 256 KiB łapie wzrost kwadratowy
+    (liniowy daje ok. 4, kwadratowy ok. 16) niezależnie od szybkości maszyny.
+    """
+    import time
+
+    def measure(size: int) -> float:
+        text = (unit * (size // len(unit) + 1))[:size]
+        times = []
+        for _ in range(3):  # najkrótszy z trzech: odporny na chwilowe obciążenie maszyny
+            start = time.perf_counter()
+            with time_limit(5):
+                redact.redact(text)
+            times.append(time.perf_counter() - start)
+        return min(times)
+
+    small, large = measure(1 << 18), measure(1 << 20)
+    assert large < 10 * max(small, 0.05)
+
+
+@pytest.mark.parametrize("unit", ["define(", "'a'=>"])
+def test_redaction_of_megabyte_without_secret_names_is_well_under_a_second(unit):
+    text = (unit * ((1 << 20) // len(unit) + 1))[:1 << 20]
+
+    with time_limit(1):
+        redact.redact(text)

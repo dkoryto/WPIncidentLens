@@ -5,7 +5,10 @@ wskaźnikiem (nazwę hosta, ścieżkę, znacznik). Kolejność kroków:
 
 1. dane logowania w adresie (``://użytkownik:hasło@host``) → ``://[usunięto]@host``;
 2. wartość po nazwie wyglądającej na sekret (``key``, ``token``, ``password``, ``secret``, ``auth``,
-   ``sig``, ``nonce``, ``session``, ``credential`` — także jako część dłuższej nazwy) → ``nazwa=[usunięto]``;
+   ``sig``, ``nonce``, ``session``, ``credential``, ``salt``, ``db_user`` — także jako część dłuższej nazwy) →
+   ``nazwa=[usunięto]``; separatorem jest ``=``, ``:``, ``=>`` albo przecinek po cudzysłowie, więc obejmuje to też
+   ``define('DB_PASSWORD', '…')``, ``'AUTH_KEY' => '…'`` i ``$password = '…'``; wartość w cudzysłowie zastępowana jest
+   cała, bez limitu długości, a niedomknięty cudzysłów sięga do końca tekstu albo do znacznika HTML;
    przed krokiem 3, bo ten zjadłby samą nazwę (``?token: wartość``) i zostawił wartość po spacji;
 3. parametry zapytania: wszystko po ``?`` do końca adresu → ``?[usunięto]``;
 4. część lokalna adresu e-mail → ``[usunięto]@domena``;
@@ -30,20 +33,55 @@ EXCERPT_LEAD = 40  # ile znaków przed trafieniem zostaje w wycinku
 
 _USERINFO = re.compile(r"(://)[^\s/@\"'<>]{1,200}@")
 _QUERY = re.compile(r"\?[^\s\"'<>]+")  # także „\”: inaczej „?c\sekret” zostawiłby resztę wartości
-# Jeden element wartości: łańcuch w cudzysłowie (do 200 znaków), schemat nagłówka Authorization z tokenem
-# (``Bearer <token>``: sam token stoi po spacji) albo słowo bez białych znaków, opcjonalnie po cudzysłowie
-# (niedomknięty cudzysłów — wiersz ucięty — nie chroni wartości). Słowo kończy się na ``=``/``:`` (dalej jest
-# następny element: ``key=Bearer X``) i nie obejmuje „?”, więc znacznik zapytania zawsze zostaje dla _QUERY.
-_SECRET_PART = (r"(?:\"[^\"<>]{0,200}\"|'[^'<>]{0,200}'"
-                r"|(?:(?:Bearer|Basic|Digest|Negotiate|Token)\s{1,3}|[\"']?)(?:[^\s\"'<>&;,?=:]++[=:]*+|[=:]++))")
+# Łańcuch w cudzysłowie ``q``, bez limitu długości (wartość dłuższa niż limit nie może zostawić jawnego ogona), z ucieczkami
+# ``\\q``. Domknięty obejmuje wszystko do cudzysłowu zamykającego, także ``<``. Niedomknięty (wiersz ucięty) nie chroni
+# wartości: sięga do końca tekstu albo do znacznika HTML (``<`` + litera, ``/``, ``!``, ``?``), żeby nie zjadał reszty
+# dokumentu ze wskaźnikami. Kwantyfikatory zaborcze; wariant domknięty zawodzi tylko wtedy, gdy po cudzysłowie otwierającym
+# nie ma już żadnego cudzysłowu tego rodzaju, a każde z tych przeszukań kończy się na następnym cudzysłowie: czas liniowy.
+_NOT_TAG = r"<(?![A-Za-z/!?])"
+
+
+def _rest(quote: str) -> str:
+    """Treść po cudzysłowie ``quote`` do następnego takiego cudzysłowu włącznie, końca tekstu albo znacznika HTML."""
+    return rf"(?:[^{quote}\\<]++|\\[\s\S]|{_NOT_TAG})*+{quote}?"
+
+
+def _quoted(quote: str) -> str:
+    return rf"{quote}(?:[^{quote}\\]++|\\[\s\S])*+{quote}|{quote}{_rest(quote)}"
+
+
+# Cudzysłów „domykający” sklejony z dalszą treścią (``key=" password: "X y"``) w rzeczywistości otwierał kolejną wartość:
+# ta treść, do następnego takiego cudzysłowu, też należy do wartości. Nie dotyczy cudzysłowu, po którym stoi odstęp,
+# separator albo znak kończący wyrażenie (``'a'.$b``, ``"v",``, ``"x">``, ``"x"/>``).
+_GLUED = r"(?![\s,;.)\]}&<>/?=:])"
+_GLUED_REST = rf"(?:(?<=\"){_GLUED}{_rest(chr(34))}|(?<='){_GLUED}{_rest(chr(39))})"
+
+
+# Jeden element wartości: łańcuch w cudzysłowie, schemat nagłówka Authorization z tokenem (``Bearer <token>``: sam
+# token stoi po spacji) albo słowo bez białych znaków, opcjonalnie po ``<`` (``secret=<x>``). Słowo kończy się na
+# ``=``/``:`` (dalej jest następny element: ``key=Bearer X``) i nie obejmuje „?”, więc znacznik zapytania zawsze
+# zostaje dla _QUERY.
+_SECRET_PART = (rf"(?:{_quoted(chr(34))}|{_quoted(chr(39))}"
+                r"|(?:(?:Bearer|Basic|Digest|Negotiate|Token)\s{1,3}|<?)(?:[^\s\"'<>&;,?=:]++[=:]*+|[=:]++))")
+# Separator nazwy i wartości: ``=``, ``:``, ``=>`` (tablica PHP: ``'DB_PASSWORD' => 'x'``) albo przecinek po
+# cudzysłowie (``define('DB_PASSWORD', 'x')``, krotka SQL ``('auth_key','x')``). Przecinek bez cudzysłowu nie jest
+# separatorem: w prozie (``key, value``) byłby za częsty. Do 40 odstępów wokół separatora (wyrównane tablice PHP).
+_SEPARATOR = r"(?:[\"']\s{0,40}+,|[\"']?\s{0,40}+(?:=>|[=:]))"
+# Sklejona treść mogła być nazwą kolejnego sekretu (``key="`` przed ``define("DB_PASSWORD", X)``): przecinek po niej
+# też prowadzi do wartości.
+_GLUED_CHAIN = _GLUED_REST + r"(?:\s{0,40}+,\s{0,40}+(?!\[usunięto\])" + _SECRET_PART + r")?+"
 _SECRET = re.compile(
-    r"(key|token|passw(?:or)?d|pass|pwd|secret|auth|sig|nonce|session|credential)"
-    r"([\w\-\[\]]{0,40}?[\"']?\s{0,3}[=:]\s{0,3})"
+    # Nazwy: ``salt`` i ``db_user`` dla stałych wp-config (``*_SALT``, ``DB_USER``); ``DB_HOST`` i ``DB_NAME`` zostają —
+    # nazwa hosta jest wskaźnikiem, nazwa bazy nie jest poświadczeniem.
+    r"(key|token|passw(?:or)?d|pass|pwd|secret|auth|sig|nonce|session|credential|salt|db_?user)"
+    r"([\w\-\[\]]{0,40}?" + _SEPARATOR + r"\s{0,40}+)"
     # Element kończący się na ``=``/``:`` albo z separatorem po nim wygląda jak kolejna nazwa (``key=token: X``,
     # ``key=token: "a b"``, ``key=key = X``, ``key=//Authorization: Bearer X``): wartość obejmuje wtedy także
-    # następny element, dowolnej postaci.
+    # następny element, dowolnej postaci (także po ``=>``: ``key=\n'DB_PASSWORD' => X``). Przecinek nie łączy elementów,
+    # poza treścią sklejoną (_GLUED_CHAIN), bo zjadałby całe tablice PHP i krotki SQL po pierwszej wartości.
     # Lepiej za dużo niż jawne ``X``. Kwantyfikatory zaborcze i ograniczone: czas liniowy.
-    r"(?!\[usunięto\])" + _SECRET_PART + r"(?:(?:(?<=[=:])|[\"']?\s{0,3}[=:])\s{0,3}" + _SECRET_PART + r")*+", re.I)  # wartość już zastąpiona zostaje
+    r"(?!\[usunięto\])" + _SECRET_PART + r"(?:(?:(?<=[=:])|[\"']?\s{0,40}+(?:=>|[=:]))\s{0,40}+" + _SECRET_PART + "|" + _GLUED_CHAIN + r")*+",
+    re.I)  # wartość już zastąpiona zostaje
 _AT_DOMAIN = re.compile(r"@(?=[\w\-]{1,63}\.[\w\-])")
 _LOCAL_PART_CHARS = frozenset("._+-")
 _MAX_LOCAL_PART = 64
