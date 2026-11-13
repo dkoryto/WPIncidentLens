@@ -532,12 +532,31 @@ def test_manifest_of_another_version_or_locale_is_one_coverage_gap_instead_of_mi
 
     run = analyze(site, core_checksums=differing_manifest(site, **labels))
 
-    assert run.rules.isdisjoint(CORE_FINDINGS)
+    assert run.rules == {"CORE_MANIFEST_MISMATCH"}  # dokładnie jedno ustalenie zamiast rozbieżności per plik
+    withheld = "CORE_CHECKSUM_MISMATCH ×2, CORE_FILE_NOT_IN_MANIFEST ×1, CORE_FILE_MISSING ×1"
     gap = next(gap for gap in run.gaps if gap.startswith("CORE_MANIFEST_MISMATCH"))
-    assert f"({conflict})" in gap
-    assert "CORE_CHECKSUM_MISMATCH ×2, CORE_FILE_NOT_IN_MANIFEST ×1, CORE_FILE_MISSING ×1" in gap
+    assert f"({conflict})" in gap and withheld in gap
+    finding = run.finding("CORE_MANIFEST_MISMATCH")
+    assert (finding["source"], finding["severity"], finding["confidence"]) == (CORE_FILE, "medium", "low")
+    assert f"({conflict})" in finding["explanation"] and withheld in finding["explanation"]
+    assert finding["metadata"]["withheld_core_checksum_mismatch"] == 2
     assert not run.has_gap("ustaleń reguły CORE_")
-    assert (run.coverage("files")["status"], run.report["assessment"], run.exit_code) == ("PARTIAL", "INCONCLUSIVE", 3)
+    assert (run.coverage("files")["status"], run.report["assessment"], run.exit_code) == ("PARTIAL", "SUSPICIOUS", 3)
+
+
+def test_edited_site_version_cannot_hide_modified_core_files_behind_a_gap(site, analyze):
+    """Napastnik zmienia plik rdzenia i wersję w version.php, żeby manifest wyglądał na niepasujący."""
+    tampered = write(site / "wp-includes" / "load.php", "<?php // synthetic placeholder, never executed: tampered\n")
+    manifest = {"wordpress_version": "9.9.9", "locale": "en_US",
+                "checksums": {"index.php": md5(site / "index.php"), CORE_FILE: OLD_MD5, "wp-includes/load.php": OLD_MD5}}
+    site_version(site, version="9.9.10")
+
+    run = analyze(site, core_checksums=manifest)
+
+    assert run.rules == {"CORE_MANIFEST_MISMATCH"}
+    assert "CORE_CHECKSUM_MISMATCH ×2" in run.finding("CORE_MANIFEST_MISMATCH")["explanation"]
+    assert run.report["assessment"] == "SUSPICIOUS"
+    assert tampered.exists()
 
 
 @pytest.mark.parametrize("version, labels, unknown", [

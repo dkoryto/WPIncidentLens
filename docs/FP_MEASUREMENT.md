@@ -1,6 +1,6 @@
 # Pomiar fałszywych alarmów reguł plików (T-203, #36)
 
-Data pomiaru: **2026-11-13**. Zestaw reguł przed poprawką: `RULESET_VERSION = "2026.11.2"`, po poprawce: `"2026.11.3"`.
+Data pomiaru: **2026-11-13**. Zestaw reguł przed poprawką: `RULESET_VERSION = "2026.11.2"`, po poprawce: `"2026.11.4"`.
 
 Cel: sprawdzić, ile trafień dają reguły ścieżki i treści (`wpincidentlens/filerules.py`) na **legalnym, publicznym** kodzie WordPressa, i poprawić reguły wyraźnie hałaśliwe bez utraty przypadków pozytywnych z `tests/test_filerules.py`. Pomiar nie zawiera danych z incydentów ani kodu z witryn klientów. Kod z korpusu **nie jest częścią repozytorium**: archiwa pobrano i rozpakowano poza nim (katalog roboczy poza Gitem) i niczego z nich nie wykonano.
 
@@ -44,7 +44,7 @@ Cel: sprawdzić, ile trafień dają reguły ścieżki i treści (`wpincidentlens
 
 ## Wyniki: reguły ścieżki i treści
 
-| Reguła | Trafienia przed (2026.11.2) | Trafienia po (2026.11.3) | Gdzie |
+| Reguła | Trafienia przed (2026.11.2) | Trafienia po (2026.11.4) | Gdzie |
 |---|---:|---:|---|
 | `EXECUTABLE_IN_UPLOADS` | 0 | 0 | — (korpus nie ma uploads) |
 | `DOUBLE_EXTENSION_IN_UPLOADS` | 0 | 0 | — (jw.) |
@@ -84,10 +84,10 @@ Jedno trafienie na 19 673 pliki, w kodzie wtyczki, więc z pewnością `low`. Od
 
 ## Wyniki: manifest sum rdzenia (rdzeń 7.1.4)
 
-| Manifest | Przed (2026.11.2) | Po (2026.11.3) |
+| Manifest | Przed (2026.11.2) | Po (2026.11.4) |
 |---|---|---|
 | 7.1.4, `en_US` | 0 ustaleń | 0 ustaleń, bez noty o zgodności (MD5 `version.php` zgodne z manifestem) |
-| 7.1.3, `en_US` | 49 ustaleń `CORE_CHECKSUM_MISMATCH` | 0 ustaleń; jedna luka `CORE_MANIFEST_MISMATCH` (wersja manifestu 7.1.3, witryny 7.1.4; wstrzymane wykrycia: `CORE_CHECKSUM_MISMATCH ×49`), pokrycie `files` `PARTIAL` |
+| 7.1.3, `en_US` | 49 ustaleń `CORE_CHECKSUM_MISMATCH` | 1 ustalenie i jedna luka `CORE_MANIFEST_MISMATCH` (wersja manifestu 7.1.3, witryny 7.1.4; wstrzymane wykrycia: `CORE_CHECKSUM_MISMATCH ×49`), pokrycie `files` `PARTIAL`, ocena `SUSPICIOUS` |
 
 Liczba „przed” to liczba wykryć wstrzymanych po poprawce; każde z nich było skutkiem złego manifestu, nie zmiany plików.
 

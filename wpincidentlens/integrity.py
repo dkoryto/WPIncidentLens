@@ -143,6 +143,7 @@ class ReferenceComparison:
         self.complete = True                 # czy przejście objęło całe drzewo
         self.core_found: list[Detection] = []  # wykrycia reguł CORE_RULES, oddawane w ``finish`` po sprawdzeniu zgodności
         self.version_file_matches = False    # wp-includes/version.php ma MD5 z manifestu
+        self.version_file: ingest.Evidence | None = None  # odczytany wp-includes/version.php (miejsce ustalenia o niezgodności)
 
     def _emit(self, found: list[Detection], rule: str, severity: str, confidence: str, explanation: str, fact) -> None:
         """Dodaje wykrycie, dopóki reguła nie wyczerpała limitu; ``fact`` buduje obserwację dopiero wtedy, gdy jest potrzebna."""
@@ -185,7 +186,7 @@ class ReferenceComparison:
         reference_md5 = self.checksums.get(rel)
         if self.core is not None and item.md5 is not None:
             if rel == wpdetect.VERSION_FILE:
-                self.version_file_matches = reference_md5 == item.md5
+                self.version_file, self.version_file_matches = item, reference_md5 == item.md5
             if reference_md5 is None:
                 if _is_core_code(rel):
                     reported = True
@@ -265,15 +266,14 @@ class ReferenceComparison:
             else:
                 cover.note(text)
 
-    def _core_conflict(self, site: wpdetect.CoreIdentity | None, cover: SourceCoverage) -> str | None:
+    def _core_conflict(self, site: wpdetect.CoreIdentity, cover: SourceCoverage) -> str | None:
         """Opis niezgodności wersji lub locale manifestu z witryną (R-46) albo ``None``; niewiadome trafiają do noty.
 
         ``version.php`` zgodny z manifestem rozstrzyga sprawę bez etykiet: to ten sam pakiet. Kandydat z plików witryny
-        mógł zostać zmieniony, dlatego niezgodność nie usuwa wykryć bez śladu, tylko zamienia je w lukę pokrycia.
+        mógł zostać zmieniony, dlatego niezgodność nie usuwa wykryć bez śladu: zostaje luka pokrycia i jedno ustalenie.
         """
         if self.version_file_matches:
             return None
-        site = site or wpdetect.CoreIdentity()
         conflicts, unknown = [], []
         for name, of, stated, found, field_name in (("wersja", "wersji", self.core.version, site.version, "wordpress_version"),
                                                     ("locale", "locale", self.core.locale, site.locale, "locale")):
@@ -290,8 +290,14 @@ class ReferenceComparison:
                        + ". Manifest innej wersji lub locale daje rozbieżności niebędące zmianą plików")
         return None
 
-    def _withhold_core(self, conflict: str, cover: SourceCoverage) -> None:
-        """Manifest innej wersji lub locale: zamiast setek rozbieżności jedna luka z liczbą wstrzymanych wykryć."""
+    def _withhold_core(self, conflict: str, site: wpdetect.CoreIdentity, cover: SourceCoverage) -> Detection:
+        """Manifest innej wersji lub locale: zamiast setek rozbieżności jedna luka z liczbą wstrzymanych wykryć i jedno
+        ustalenie ``CORE_MANIFEST_MISMATCH``.
+
+        Etykieta witryny pochodzi z ``version.php``, który napastnik może zmienić; samo wstrzymanie wykryć obniżyłoby
+        wtedy ocenę (ADR 0008: warunek zależny od materiału nie może usuwać ustaleń), więc niezgodność zawsze zostawia
+        ustalenie i ocena nie spada poniżej ``SUSPICIOUS``.
+        """
         missing = sum(not rel.startswith("wp-content/") for rel in self._absent(self.checksums)) if self.complete else 0
         counts = {**{rule: self.detected.pop(rule, 0) for rule in CORE_RULES}, "CORE_FILE_MISSING": missing}
         withheld = ", ".join(f"{rule} ×{total}" for rule, total in counts.items() if total) or "brak"
@@ -299,20 +305,33 @@ class ReferenceComparison:
         cover.degrade(f"{CORE_MANIFEST_MISMATCH}: manifest sum rdzenia nie odpowiada witrynie ({conflict}); porównanie z nim "
                       f"pominięte, pliki rdzenia niezweryfikowane (wstrzymane wykrycia: {withheld}). Podaj manifest właściwej "
                       f"wersji i locale; kandydat z {wpdetect.VERSION_FILE} mógł zostać zmieniony, co samo wymaga sprawdzenia")
+        facts = {key: value for key, value in (("reference_version", self.core.version), ("reference_locale", self.core.locale),
+                                               ("site_version", site.version), ("site_locale", site.locale)) if value is not None}
+        facts.update({f"withheld_{rule.lower()}": total for rule, total in counts.items()},
+                     reference_file=f"{self.core.record.source}/{self.core.record.rel}")
+        if self.version_file is not None:
+            fact = seen_in(self.version_file, "CORE_MANIFEST_DIFFERS_FROM_SITE", **facts)
+        else:
+            fact = observe(self.core.record, "CORE_MANIFEST_DIFFERS_FROM_SITE", models.Location(path=self.core.record.rel), **facts)
+        return Detection("CORE_MANIFEST_MISMATCH", "medium", "low", "file",
+                         f"Manifest sum rdzenia nie odpowiada wersji lub locale witryny ({conflict}); wstrzymano wykrycia: "
+                         f"{withheld}. Albo podano manifest innego pakietu, albo zmieniono {wpdetect.VERSION_FILE} "
+                         "(np. by ukryć zmiany rdzenia) — wymaga ręcznej weryfikacji z manifestem właściwej wersji.", fact)
 
     def finish(self, session: ingest.Session, cover: SourceCoverage, site: wpdetect.CoreIdentity | None = None) -> list[Detection]:
         """Po przejściu drzewa: luki o plikach bez referencji i wykrycia plików, których w materiale brakuje.
 
         ``site`` (wersja i locale pakietu z WPDetector) jest porównywane z manifestem sum rdzenia; przy niezgodności
-        wykrycia reguł ``CORE_RULES`` zastępuje jedna luka ``CORE_MANIFEST_MISMATCH``.
+        wykrycia reguł ``CORE_RULES`` zastępuje jedna luka i jedno ustalenie ``CORE_MANIFEST_MISMATCH``.
         """
         found: list[Detection] = []
         if self.baseline_entries > MAX_BASELINE_ENTRIES:
             cover.degrade(f"Baseline ma {self.baseline_entries} wpisów files, więcej niż limit {MAX_BASELINE_ENTRIES}: "
                           "porównanie plików z baseline niewykonane")
+        site = site or wpdetect.CoreIdentity()
         conflict = self._core_conflict(site, cover) if self.core is not None else None
         if conflict:
-            self._withhold_core(conflict, cover)
+            found.append(self._withhold_core(conflict, site, cover))
         found.extend(self.core_found)
         if (self.ref or self.core) and self.unreferenced:
             # Plik bez wpisu w referencji nie jest porównywany: bez tej noty nowy plik znikałby z raportu bez śladu.

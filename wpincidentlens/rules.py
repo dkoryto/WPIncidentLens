@@ -25,7 +25,7 @@ from .analysis import Detection, SourceCoverage
 
 RULESET_ID = "wpincidentlens-poc"
 # Zmienia się przy każdej zmianie rejestru (test pilnuje pary wersja–skrót) albo logiki dopasowania którejkolwiek reguły.
-RULESET_VERSION = "2026.11.3"
+RULESET_VERSION = "2026.11.4"
 
 # Źródło, którego pokrycie dostaje lukę, gdy ustalenie danej kategorii łamie deklarację reguły.
 REGISTRY_GAP = "Błąd rejestru reguł"  # początek tekstu luki przy naruszeniu deklaracji reguły
@@ -122,6 +122,11 @@ _OTHER_RULES = (
           "Plik wymieniony w manifeście sum rdzenia nie występuje w materiale wejściowym; wstrzymane przy niezgodności "
           "wersji lub locale manifestu z witryną.",
           "Manifest innej wersji, gdy nie da się tego ustalić; kopia bez części katalogów.", version=2),
+    _rule("CORE_MANIFEST_MISMATCH", "file", "medium", ("low",),
+          "Manifest sum rdzenia opisuje inną wersję lub locale niż wp-includes/version.php witryny; wykrycia CORE_* są "
+          "wstrzymane, a to jedno ustalenie podaje ich liczbę.",
+          "Operator podał manifest innego pakietu (np. po aktualizacji witryny); ustalenie zostaje, bo tak samo wygląda "
+          "zmieniony version.php ukrywający zmiany rdzenia."),
     _rule("REFERENCE_FILE_UNREADABLE", "file", "medium", ("low",),
           "Wpis wymieniony w zaufanej referencji nie został odczytany, więc nie dało się go zweryfikować.",
           "Dowiązania i dodatkowe dowiązania twarde w kopii, brak uprawnień przy zabezpieczaniu."),

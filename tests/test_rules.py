@@ -31,7 +31,7 @@ EXPECTED_SEVERITY = {
     "REQUEST_INPUT_TO_INCLUDE": "high", "REQUEST_CONTROLLED_FILE_WRITE": "high", "HTACCESS_ENABLES_PHP_IN_UPLOADS": "high",
     "PHP_AUTO_PREPEND_CONFIG": "high",
     "BASELINE_FILE_CHANGED": "medium", "BASELINE_FILE_MISSING": "low", "NEW_FILE_SINCE_BASELINE": "medium",
-    "CORE_CHECKSUM_MISMATCH": "medium", "CORE_FILE_NOT_IN_MANIFEST": "medium", "CORE_FILE_MISSING": "low",
+    "CORE_CHECKSUM_MISMATCH": "medium", "CORE_FILE_NOT_IN_MANIFEST": "medium", "CORE_FILE_MISSING": "low", "CORE_MANIFEST_MISMATCH": "medium",
     "REFERENCE_FILE_UNREADABLE": "medium",
     "UNRECOGNIZED_ADMIN": "high", "NEW_SINCE_BASELINE": "high", "SUSPICIOUS_DB_MARKUP": "medium",
     "HTTP_EXECUTABLE_IN_UPLOADS": "high",
@@ -45,7 +45,7 @@ EXPECTED_CONFIDENCE = {
     "REQUEST_INPUT_TO_INCLUDE": {"medium", "low"}, "REQUEST_CONTROLLED_FILE_WRITE": {"medium", "low"},
     "HTACCESS_ENABLES_PHP_IN_UPLOADS": {"medium"}, "PHP_AUTO_PREPEND_CONFIG": {"low"},
     "BASELINE_FILE_CHANGED": {"high"}, "BASELINE_FILE_MISSING": {"high"}, "NEW_FILE_SINCE_BASELINE": {"medium", "low"},
-    "CORE_CHECKSUM_MISMATCH": {"high"}, "CORE_FILE_NOT_IN_MANIFEST": {"low"}, "CORE_FILE_MISSING": {"high"},
+    "CORE_CHECKSUM_MISMATCH": {"high"}, "CORE_FILE_NOT_IN_MANIFEST": {"low"}, "CORE_FILE_MISSING": {"high"}, "CORE_MANIFEST_MISMATCH": {"low"},
     "REFERENCE_FILE_UNREADABLE": {"low"},
     "UNRECOGNIZED_ADMIN": {"medium"}, "NEW_SINCE_BASELINE": {"medium"}, "SUSPICIOUS_DB_MARKUP": {"low"},
     "HTTP_EXECUTABLE_IN_UPLOADS": {"medium", "low"},
@@ -82,7 +82,7 @@ def test_file_rules_are_taken_from_filerules_without_change():
 def test_ruleset_digest_is_pinned_to_its_version():
     """Każda zmiana rejestru zmienia skrót; wtedy trzeba podnieść ``RULESET_VERSION`` i zaktualizować tę parę."""
     assert (rules.RULESET_ID, rules.RULESET_VERSION, rules.ruleset_sha256()) == (
-        "wpincidentlens-poc", "2026.11.3", "95debea2451c955bcbb4d075779d29d2381709916688d3b13da77e64b9c6c9e5")
+        "wpincidentlens-poc", "2026.11.4", "378b4135e14a3655801e334d5e02a6a3f415b14caa75a0218cc4523eb90da7dd")
 
 
 def test_ruleset_digest_is_computed_over_canonical_json():
