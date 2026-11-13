@@ -122,6 +122,24 @@
         "version": {"type": "string", "pattern": "^[0-9]{4}\\.[0-9]{1,2}\\.[0-9]{1,4}$"},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
+    },
+    "yara": {
+      "description": "Opcjonalne (od T-202, ADR 0010): pakiet reguł YARA i silnik użyte w przebiegu z --yara-rules. Brak pola: adapter wyłączony. applied=false: pakietu albo silnika nie dało się użyć (luka pokrycia files).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provided", "name", "applied", "pack_sha256", "pack_version", "engine", "rules", "file_timeout_seconds"],
+      "properties": {
+        "provided": {"const": true},
+        "name": {"description": "Wyłącznie nazwa ostatniego składnika ścieżki pakietu.", "type": ["string", "null"], "pattern": "^[^/]+$"},
+        "applied": {"type": "boolean"},
+        "pack_sha256": {"description": "Wersja pakietu: SHA-256 posortowanych ścieżek i skrótów plików reguł oraz wersji deklarowanej.",
+                        "anyOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]},
+        "pack_version": {"description": "Wersja deklarowana w pliku VERSION pakietu.",
+                         "anyOf": [{"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"}, {"type": "null"}]},
+        "engine": {"type": ["string", "null"], "maxLength": 64},
+        "rules": {"type": ["integer", "null"], "minimum": 0},
+        "file_timeout_seconds": {"$ref": "#/$defs/positive"}
+      }
     }
   },
   "$defs": {

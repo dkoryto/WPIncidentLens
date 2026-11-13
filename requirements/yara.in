@@ -1,0 +1,2 @@
+# Opcjonalny adapter YARA-X (ADR 0010); instalowany tylko w zadaniu CI yara i na życzenie operatora.
+yara-x==1.22.1

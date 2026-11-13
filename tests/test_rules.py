@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import importlib.util
 import json
 import os
 import re
@@ -21,6 +22,8 @@ from wpincidentlens.analysis import Detection, SourceCoverage
 PACKAGE = Path(rules.__file__).parent
 RULES_DOC = PACKAGE.parent / "docs" / "RULES.md"
 UPLOAD = "wp-content/uploads/2026/11/"
+NEEDS_YARA_X = pytest.mark.skipif(importlib.util.find_spec("yara_x") is None,
+                                  reason="yara-x nie jest zainstalowany (extra 'yara'); scenariusze uruchamia zadanie CI yara")
 
 # --- tabele regresyjne (spec §9.2): zmiana wagi albo pewności reguły musi zmienić tę tabelę ----------
 
@@ -36,6 +39,7 @@ EXPECTED_SEVERITY = {
     "UNRECOGNIZED_ADMIN": "high", "NEW_SINCE_BASELINE": "high", "SUSPICIOUS_DB_MARKUP": "medium",
     "HTTP_EXECUTABLE_IN_UPLOADS": "high",
     "CORRELATED_UPLOAD_REQUEST": "high", "CORRELATED_FILE_REQUEST": "medium", "REQUEST_NEAR_FILE_CHANGE": "medium",
+    "YARA_MATCH": "medium",
 }
 
 EXPECTED_CONFIDENCE = {
@@ -50,6 +54,7 @@ EXPECTED_CONFIDENCE = {
     "UNRECOGNIZED_ADMIN": {"medium"}, "NEW_SINCE_BASELINE": {"medium"}, "SUSPICIOUS_DB_MARKUP": {"low"},
     "HTTP_EXECUTABLE_IN_UPLOADS": {"medium", "low"},
     "CORRELATED_UPLOAD_REQUEST": {"medium"}, "CORRELATED_FILE_REQUEST": {"low"}, "REQUEST_NEAR_FILE_CHANGE": {"low"},
+    "YARA_MATCH": {"low", "medium"},
 }
 
 
@@ -82,7 +87,7 @@ def test_file_rules_are_taken_from_filerules_without_change():
 def test_ruleset_digest_is_pinned_to_its_version():
     """Każda zmiana rejestru zmienia skrót; wtedy trzeba podnieść ``RULESET_VERSION`` i zaktualizować tę parę."""
     assert (rules.RULESET_ID, rules.RULESET_VERSION, rules.ruleset_sha256()) == (
-        "wpincidentlens-poc", "2026.11.4", "378b4135e14a3655801e334d5e02a6a3f415b14caa75a0218cc4523eb90da7dd")
+        "wpincidentlens-poc", "2026.11.5", "5025868649ee671b01e6f9615da8cab39f3b794fcc299a38b2fc9d74e44dedfd")
 
 
 def test_ruleset_digest_is_computed_over_canonical_json():
@@ -107,7 +112,7 @@ def test_ruleset_digest_changes_with_any_declared_value(monkeypatch):
 # stała dla tej funkcji (kategoria) albo pobierana z tabeli ``filerules.RULES`` (waga w ``detect``).
 EMITTERS = {"Detection": (0, 1, 2, 3), "_emit": (1, 2, 3, None), "detect": (0, None, 1, None), "_finding": (0, 1, 2, None)}
 FIXED_CATEGORY = {"_emit": "file", "detect": "file", "_finding": "correlation"}
-EMITTING_MODULES = {"filerules.py", "integrity.py", "dbrules.py", "httplog.py", "correlate.py"}
+EMITTING_MODULES = {"filerules.py", "integrity.py", "dbrules.py", "httplog.py", "correlate.py", "yarax.py"}
 
 
 def _literals(node: ast.AST | None) -> set[str]:
@@ -189,6 +194,16 @@ def _file(rel: str, content: str | None = None):
     return lambda site, evidence: write(site / rel, *([content] if content is not None else [])) and {}
 
 
+def _yara(confidence: str | None):
+    meta = f'meta: confidence = "{confidence}" ' if confidence else ""
+
+    def prepare(site: Path, evidence: Path) -> dict:
+        write(site / "wp-content/mu-plugins/a.php", "<?php // synthetic-yara-marker\n")
+        pack = write(evidence.parent / "pack.yar", f'rule Synthetic {{ {meta}strings: $a = "synthetic-yara-marker" condition: $a }}\n')
+        return {"flags": ("--yara-rules", str(pack))}
+    return prepare
+
+
 def _log(uri: str):
     return lambda site, evidence: {"logs": write(evidence / "logs" / "access.log", access_line(uri)).parent}
 
@@ -202,6 +217,8 @@ BRANCHES = [
     pytest.param(_mu_plugin_symlink, "NEW_FILE_SINCE_BASELINE", "low", id="new-autoloaded-unread"),
     pytest.param(_log("/wp-content/uploads/x.php"), "HTTP_EXECUTABLE_IN_UPLOADS", "medium", id="log-code-in-uploads"),
     pytest.param(_log("/wp-content/uploads/x.php.jpg"), "HTTP_EXECUTABLE_IN_UPLOADS", "low", id="log-double-extension"),
+    pytest.param(_yara(None), "YARA_MATCH", "low", id="yara-default", marks=NEEDS_YARA_X),
+    pytest.param(_yara("medium"), "YARA_MATCH", "medium", id="yara-meta-medium", marks=NEEDS_YARA_X),
     *(pytest.param(_file(PLUGIN + "a.php", POSITIVE[name][1]), name, "low", id=f"{name}-plugin")
       for name, rule in sorted(filerules.RULES.items()) if rule.known_code_confidence),
     *(pytest.param(_file("wp-content/mu-plugins/a.php", POSITIVE[name][1]), name, "medium", id=f"{name}-mu-plugin")

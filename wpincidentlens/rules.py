@@ -25,7 +25,7 @@ from .analysis import Detection, SourceCoverage
 
 RULESET_ID = "wpincidentlens-poc"
 # Zmienia się przy każdej zmianie rejestru (test pilnuje pary wersja–skrót) albo logiki dopasowania którejkolwiek reguły.
-RULESET_VERSION = "2026.11.4"
+RULESET_VERSION = "2026.11.5"
 
 # Źródło, którego pokrycie dostaje lukę, gdy ustalenie danej kategorii łamie deklarację reguły.
 REGISTRY_GAP = "Błąd rejestru reguł"  # początek tekstu luki przy naruszeniu deklaracji reguły
@@ -154,6 +154,11 @@ _OTHER_RULES = (
     _rule("REQUEST_NEAR_FILE_CHANGE", "correlation", "medium", ("low",),
           "Żądanie HTTP do pliku kodu w oknie --correlation-window od mtime pliku z ustaleniem (NEAR_IN_TIME).",
           "Przypadkowa bliskość w czasie; mtime zmieniony przez rozpakowanie kopii; przesunięty zegar serwera."),
+    # --- opcjonalny adapter YARA-X (yarax, ADR 0010) ---
+    _rule("YARA_MATCH", "file", "medium", ("low", "medium"),
+          "Reguła z lokalnego pakietu YARA operatora pasuje do treści pliku kodu lub konfiguracji; pewność z meta "
+          "confidence reguły (low albo medium, domyślnie low), nigdy high.",
+          "Zależą od pakietu: zbyt ogólne sygnatury, tekst wzorca w komentarzu lub w sygnaturach skanera bezpieczeństwa."),
 )
 
 REGISTRY: dict[str, Rule] = {rule.id: rule for rule in (*map(_from_filerules, filerules.RULES.values()), *_OTHER_RULES)}
