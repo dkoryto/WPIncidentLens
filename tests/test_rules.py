@@ -82,7 +82,7 @@ def test_file_rules_are_taken_from_filerules_without_change():
 def test_ruleset_digest_is_pinned_to_its_version():
     """Każda zmiana rejestru zmienia skrót; wtedy trzeba podnieść ``RULESET_VERSION`` i zaktualizować tę parę."""
     assert (rules.RULESET_ID, rules.RULESET_VERSION, rules.ruleset_sha256()) == (
-        "wpincidentlens-poc", "2026.11.2", "c4b23db8bfe8a4390f35f5b12da49547b7dad59fb86e6b53b22c5345130b9fb1")
+        "wpincidentlens-poc", "2026.11.3", "95debea2451c955bcbb4d075779d29d2381709916688d3b13da77e64b9c6c9e5")
 
 
 def test_ruleset_digest_is_computed_over_canonical_json():

@@ -225,8 +225,10 @@ def _positive_seconds(value: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="WPIncidentLens PoC — statyczna analiza kopii WordPressa, bazy SQL i logów",
-        epilog="Kody wyjścia: 0 — zakres analizy pełny (ustalenia możliwe); 2 — błąd wywołania; 3 — analiza częściowa "
-               "(brak źródła, pominięte lub zmienione wpisy, limit); 4 — podane źródło nieprzetworzone. "
+        epilog="Kody wyjścia: 0 — zakres analizy pełny (ustalenia możliwe); 2 — błąd wywołania; 3 — zakres niepełny: "
+               "najczęściej plik kodu niezweryfikowany względem zaufanej referencji (bez --baseline i --core-checksums "
+               "dotyczy to każdego pliku kodu) albo brak --database lub --logs; także pominięte lub zmienione wpisy, "
+               "limit, manifest sum innej wersji lub locale; 4 — podane źródło nieprzetworzone. "
                "Kod nie jest oceną kompromitacji: ocenę podaje pole assessment w report.json.")
     parser.add_argument("--files", type=Path, required=True)
     parser.add_argument("--database", type=Path)
@@ -246,7 +248,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline", type=Path, help="Zaufany JSON: {files: {ścieżka: sha256}, known_admins: [...]} ")
     parser.add_argument("--core-checksums", type=Path,
                         help="Lokalny plik JSON z sumami MD5 rdzenia w kształcie api.wordpress.org core/checksums/1.0: "
-                             "{checksums: {ścieżka: md5}}; narzędzie niczego nie pobiera z sieci")
+                             "{checksums: {ścieżka: md5}}, opcjonalnie z wordpress_version i locale, porównywanymi "
+                             "z wersją i locale witryny; narzędzie niczego nie pobiera z sieci")
     parser.add_argument("--known-admin", action="append", default=[])
     parser.add_argument("--case-id", default="WPINCIDENTLENS-DEMO",
                         help="Identyfikator sprawy: 1–64 znaki A-Z a-z 0-9 . _ -, pierwszy znak inny niż kropka i łącznik (%(default)s)")

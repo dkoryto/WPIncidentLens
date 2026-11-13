@@ -13,13 +13,18 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from . import case, filerules, ingest, models
+from . import case, filerules, ingest, models, wpdetect
 from .analysis import Detection, SourceCoverage, observe, seen_in
 from .fileclass import AUTOLOADED, CONFIG_NAMES, FileClass, classify
 
 MAX_CORE_CHECKSUMS = 50_000  # pełny manifest WordPressa ma kilka tysięcy wpisów
+MAX_BASELINE_ENTRIES = 200_000  # jak domyślny limit liczby plików sesji; ponad limit baseline nie jest porównywany (luka)
 MAX_FINDINGS_PER_RULE = 200  # ponad limit powstaje luka pokrycia z łączną liczbą wykryć, nie kolejne ustalenia
+# Reguły porównania z manifestem sum rdzenia: wstrzymywane, gdy manifest opisuje inną wersję lub locale niż witryna.
+CORE_RULES = ("CORE_CHECKSUM_MISMATCH", "CORE_FILE_NOT_IN_MANIFEST", "CORE_FILE_MISSING")
+CORE_MANIFEST_MISMATCH = "CORE_MANIFEST_MISMATCH"  # początek tekstu luki
 _MD5 = re.compile(r"[0-9a-f]{32}")
+_LOCALE = re.compile(wpdetect.LOCALE)
 _VERSION_KEY = re.compile(r"\d+(\.\d+){1,2}([-+][0-9A-Za-z.]+)?")
 # Klasy, dla których brak referencji jest zapisywany w pokryciu także wtedy, gdy nie dotyczy pliku kodu (ADR 0005, pkt 3).
 CHECKED_CLASSES = (FileClass.CORE, FileClass.PLUGIN, FileClass.THEME, FileClass.MU_PLUGIN, FileClass.DROPIN)
@@ -35,17 +40,22 @@ class CoreChecksums:
     checksums: Mapping[str, str]
     version: str | None = None
     label: str | None = None
+    locale: str | None = None
 
 
 def parse_core_checksums(data: object, record: ingest.Evidence) -> CoreChecksums:
     """Sprawdza kształt ``{"checksums": {ścieżka: md5}}`` (api.wordpress.org ``core/checksums/1.0``); ``ValueError`` przy odstępstwie.
 
-    Przyjmuje też wariant ``{"checksums": {"<wersja>": {ścieżka: md5}}}``, w którym jedyny klucz wygląda jak numer wersji.
+    Przyjmuje też wariant ``{"checksums": {"<wersja>": {ścieżka: md5}}}``, w którym jedyny klucz wygląda jak numer wersji,
+    oraz opcjonalne pole ``locale`` (np. ``"pl_PL"``; api.wordpress.org go nie zwraca — dopisuje je operator).
     Komunikaty nie powtarzają odrzuconych wartości.
     """
     if not isinstance(data, dict) or not isinstance(data.get("checksums"), dict):
         raise ValueError('manifest musi być obiektem JSON {"checksums": {ścieżka: md5}}')
     version, label = case.reference_labels(data)
+    locale = data.get("locale")
+    if locale is not None and not (isinstance(locale, str) and _LOCALE.fullmatch(locale)):
+        raise ValueError("locale: dozwolony jest kod locale WordPressa, np. pl_PL albo de_DE_formal")
     checksums = data["checksums"]
     if len(checksums) == 1 and isinstance(next(iter(checksums.values())), dict):
         (nested_version, checksums), = checksums.items()
@@ -62,7 +72,7 @@ def parse_core_checksums(data: object, record: ingest.Evidence) -> CoreChecksums
                          f"znaków sterujących i dłuższych niż {case.MAX_REFERENCE_PATH} znaków")
     if not all(isinstance(value, str) and _MD5.fullmatch(value) for value in checksums.values()):
         raise ValueError("wartości checksums muszą być skrótami MD5: 32 małe cyfry szesnastkowe")
-    return CoreChecksums(record, checksums, version, label)
+    return CoreChecksums(record, checksums, version, label, locale)
 
 
 def baseline_record(session: ingest.Session, core: CoreChecksums | None = None) -> ingest.Evidence | None:
@@ -112,7 +122,10 @@ class ReferenceComparison:
 
     def __init__(self, baseline: dict | None, core: CoreChecksums | None = None) -> None:
         self.baseline = baseline
-        self.ref: dict[str, str] = (baseline or {}).get("files", {})
+        listed: dict[str, str] = (baseline or {}).get("files", {})
+        # Baseline ponad limit nie jest porównywany wcale: obcięty dawałby fałszywe „nowe” i „brakujące” pliki.
+        self.baseline_entries = len(listed)
+        self.ref = listed if self.baseline_entries <= MAX_BASELINE_ENTRIES else {}
         self.ref_dirs = _directories(self.ref)
         self.baseline_facts = _reference_facts((baseline or {}).get("wordpress_version"), (baseline or {}).get("reference"))
         self.core = core
@@ -128,6 +141,8 @@ class ReferenceComparison:
         self.unchecked_code_in_class: Counter = Counter()  # …z nich pliki kodu (``filerules.wants_content``)
         self.detected: Counter = Counter()   # wykrycia według reguły, także te ponad limit ustaleń
         self.complete = True                 # czy przejście objęło całe drzewo
+        self.core_found: list[Detection] = []  # wykrycia reguł CORE_RULES, oddawane w ``finish`` po sprawdzeniu zgodności
+        self.version_file_matches = False    # wp-includes/version.php ma MD5 z manifestu
 
     def _emit(self, found: list[Detection], rule: str, severity: str, confidence: str, explanation: str, fact) -> None:
         """Dodaje wykrycie, dopóki reguła nie wyczerpała limitu; ``fact`` buduje obserwację dopiero wtedy, gdy jest potrzebna."""
@@ -169,13 +184,15 @@ class ReferenceComparison:
                        lambda: seen_in(item, "FILE_NOT_IN_BASELINE", file_class=str(kind), **self.baseline_facts))
         reference_md5 = self.checksums.get(rel)
         if self.core is not None and item.md5 is not None:
+            if rel == wpdetect.VERSION_FILE:
+                self.version_file_matches = reference_md5 == item.md5
             if reference_md5 is None:
                 if _is_core_code(rel):
                     reported = True
-                    self._not_in_manifest(item, found)
+                    self._not_in_manifest(item)
             elif reference_md5 != item.md5:
                 stated = f"dla wersji {self.core.version}" if self.core.version else "z podanego manifestu (bez oznaczenia wersji)"
-                self._emit(found, "CORE_CHECKSUM_MISMATCH", "medium", "high",
+                self._emit(self.core_found, "CORE_CHECKSUM_MISMATCH", "medium", "high",
                            f"Plik różni się od publicznej referencji WordPress.org {stated}. Manifest innej wersji lub innego "
                            "locale także daje rozbieżności; sama różnica nie przesądza o ataku.",
                            lambda: seen_in(item, "FILE_DIFFERS_FROM_CORE_MANIFEST", observed_sha256=item.sha256,
@@ -211,14 +228,14 @@ class ReferenceComparison:
                        f"(status odczytu: {state}), wymaga ręcznej analizy. {_NOT_PROOF}",
                        lambda: seen_in(item, "ENTRY_NOT_IN_BASELINE", file_class=str(kind), **self.baseline_facts))
         elif self.core is not None and _is_core_code(rel):
-            self._not_in_manifest(item, found, unread=state)
+            self._not_in_manifest(item, unread=state)
 
-    def _not_in_manifest(self, item: ingest.Evidence, found: list[Detection], unread: str | None = None) -> None:
+    def _not_in_manifest(self, item: ingest.Evidence, unread: str | None = None) -> None:
         # Katalog główny, wp-admin i wp-includes są osiągalne wprost z sieci, a dystrybucja WordPressa nie przewiduje tam
         # dodatkowych plików kodu ani konfiguracji. Pewność niska: manifest innej wersji lub locale daje ten sam obraz,
         # a w katalogu głównym bywają legalne pliki spoza dystrybucji (np. skrypty hostingu).
         note = f" Treść nieodczytana (status odczytu: {unread})." if unread else ""
-        self._emit(found, "CORE_FILE_NOT_IN_MANIFEST", "medium", "low",
+        self._emit(self.core_found, "CORE_FILE_NOT_IN_MANIFEST", "medium", "low",
                    "Plik kodu lub konfiguracji w katalogu głównym, wp-admin albo wp-includes nie występuje w manifeście sum "
                    "rdzenia; może pochodzić z innej wersji lub locale WordPressa, z legalnego dodatku albo być plikiem "
                    f"podrzuconym — wymaga ręcznej weryfikacji.{note}",
@@ -248,9 +265,55 @@ class ReferenceComparison:
             else:
                 cover.note(text)
 
-    def finish(self, session: ingest.Session, cover: SourceCoverage) -> list[Detection]:
-        """Po przejściu drzewa: luki o plikach bez referencji i wykrycia plików, których w materiale brakuje."""
+    def _core_conflict(self, site: wpdetect.CoreIdentity | None, cover: SourceCoverage) -> str | None:
+        """Opis niezgodności wersji lub locale manifestu z witryną (R-46) albo ``None``; niewiadome trafiają do noty.
+
+        ``version.php`` zgodny z manifestem rozstrzyga sprawę bez etykiet: to ten sam pakiet. Kandydat z plików witryny
+        mógł zostać zmieniony, dlatego niezgodność nie usuwa wykryć bez śladu, tylko zamienia je w lukę pokrycia.
+        """
+        if self.version_file_matches:
+            return None
+        site = site or wpdetect.CoreIdentity()
+        conflicts, unknown = [], []
+        for name, of, stated, found, field_name in (("wersja", "wersji", self.core.version, site.version, "wordpress_version"),
+                                                    ("locale", "locale", self.core.locale, site.locale, "locale")):
+            if stated is None:
+                unknown.append(f"brak {of} manifestu (pole {field_name})")
+            elif found is None:
+                unknown.append(f"brak {of} witryny w {wpdetect.VERSION_FILE}")
+            elif stated != found:
+                conflicts.append(f"{name} manifestu {stated}, witryny {found}")
+        if conflicts:
+            return "; ".join(conflicts)
+        if unknown:
+            cover.note("Zgodność manifestu sum rdzenia z witryną niesprawdzona: " + "; ".join(unknown)
+                       + ". Manifest innej wersji lub locale daje rozbieżności niebędące zmianą plików")
+        return None
+
+    def _withhold_core(self, conflict: str, cover: SourceCoverage) -> None:
+        """Manifest innej wersji lub locale: zamiast setek rozbieżności jedna luka z liczbą wstrzymanych wykryć."""
+        missing = sum(not rel.startswith("wp-content/") for rel in self._absent(self.checksums)) if self.complete else 0
+        counts = {**{rule: self.detected.pop(rule, 0) for rule in CORE_RULES}, "CORE_FILE_MISSING": missing}
+        withheld = ", ".join(f"{rule} ×{total}" for rule, total in counts.items() if total) or "brak"
+        self.core_found = []
+        cover.degrade(f"{CORE_MANIFEST_MISMATCH}: manifest sum rdzenia nie odpowiada witrynie ({conflict}); porównanie z nim "
+                      f"pominięte, pliki rdzenia niezweryfikowane (wstrzymane wykrycia: {withheld}). Podaj manifest właściwej "
+                      f"wersji i locale; kandydat z {wpdetect.VERSION_FILE} mógł zostać zmieniony, co samo wymaga sprawdzenia")
+
+    def finish(self, session: ingest.Session, cover: SourceCoverage, site: wpdetect.CoreIdentity | None = None) -> list[Detection]:
+        """Po przejściu drzewa: luki o plikach bez referencji i wykrycia plików, których w materiale brakuje.
+
+        ``site`` (wersja i locale pakietu z WPDetector) jest porównywane z manifestem sum rdzenia; przy niezgodności
+        wykrycia reguł ``CORE_RULES`` zastępuje jedna luka ``CORE_MANIFEST_MISMATCH``.
+        """
         found: list[Detection] = []
+        if self.baseline_entries > MAX_BASELINE_ENTRIES:
+            cover.degrade(f"Baseline ma {self.baseline_entries} wpisów files, więcej niż limit {MAX_BASELINE_ENTRIES}: "
+                          "porównanie plików z baseline niewykonane")
+        conflict = self._core_conflict(site, cover) if self.core is not None else None
+        if conflict:
+            self._withhold_core(conflict, cover)
+        found.extend(self.core_found)
         if (self.ref or self.core) and self.unreferenced:
             # Plik bez wpisu w referencji nie jest porównywany: bez tej noty nowy plik znikałby z raportu bez śladu.
             unreferenced = sorted(self.unreferenced)
@@ -260,14 +323,13 @@ class ReferenceComparison:
                        f"więc ich zmiany lub pojawienia się nie da się ocenić ({examples})")
         self._note_unchecked(cover)
         if self.complete:  # po przerwanym przejściu nie wiadomo, czego w materiale brakuje
-            self._missing(session, cover, found)
+            self._missing(session, cover, found, core=not conflict)
         for rule, total in sorted(self.detected.items()):
             if total > MAX_FINDINGS_PER_RULE:
-                cover.degrade(f"Limit {MAX_FINDINGS_PER_RULE} ustaleń reguły {rule} wyczerpany: wykryć było {total}, "
-                              "pozostałe nie są wymienione w raporcie")
+                cover.degrade(filerules.cap_exceeded(rule, total, MAX_FINDINGS_PER_RULE))
         return found
 
-    def _missing(self, session: ingest.Session, cover: SourceCoverage, found: list[Detection]) -> None:
+    def _missing(self, session: ingest.Session, cover: SourceCoverage, found: list[Detection], core: bool = True) -> None:
         if self.ref:
             reference = baseline_record(session, self.core)  # dowodem braku pliku jest baseline, który ten plik wymienia
             for rel in self._absent(self.ref):
@@ -275,7 +337,7 @@ class ReferenceComparison:
                            "Plik obecny w migawce bazowej nie występuje w materiale wejściowym.",
                            lambda rel=rel: observe(reference, "BASELINE_ENTRY_NOT_IN_FILES", models.Location(path=rel),
                                                    **self.baseline_facts))
-        if self.core is None:
+        if self.core is None or not core:
             return
         bundled = 0
         for rel in self._absent(self.checksums):

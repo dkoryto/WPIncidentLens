@@ -52,6 +52,10 @@ CASES = [
     case("wp-content/languages/helper.php", HARMLESS_PHP, "CODE_IN_UNEXPECTED_LOCATION", id="code-in-languages"),
     case("wp-includes/images/smilies/x.php", HARMLESS_PHP, "CODE_IN_UNEXPECTED_LOCATION", id="code-in-core-images"),
     case("wp-includes/class-synthetic.php", HARMLESS_PHP, id="code-in-wp-includes"),
+    case("wp-includes/css/dist/helper.php", HARMLESS_PHP, "CODE_IN_UNEXPECTED_LOCATION", id="code-in-core-css"),
+    # pomiar FP (docs/FP_MEASUREMENT.md): pliki PHP dystrybucji WordPressa w katalogach zasobów
+    case("wp-includes/fonts/class-wp-font-face.php", HARMLESS_PHP, id="fp-core-font-library"),
+    case("wp-includes/css/dist/registry.php", "<?php return array();\n", id="fp-core-style-registry"),
     case("wp-content/languages/plugins/demo-pl_PL.l10n.php", "<?php return ['messages' => []];\n", id="fp-l10n-translation"),
     case("wp-content/languages/pl_PL.mo", "synthetic", id="fp-mo-translation"),
     # SUSPICIOUS_PHP_EVAL_DECODE
@@ -251,10 +255,39 @@ HOSTILE = [
 @pytest.mark.parametrize("rel", [UPLOADS + "a.php", UPLOADS + ".htaccess"])
 @pytest.mark.parametrize("chunk", HOSTILE, ids=range(len(HOSTILE)))
 def test_s08_hostile_content_does_not_stall_the_file_rules(rel, chunk):
-    content = chunk * (1024**2 // len(chunk))
+    content = chunk * (ingest.Limits().max_scan_bytes // len(chunk))  # największa treść, jaką dostają reguły (4 MiB)
     item = ingest.Evidence("files", rel, ingest.ReadStatus.READ, sha256="0" * 64, size=len(content), content=content)
 
-    with time_limit(5):
+    with time_limit(10):
         found = filerules.content_rules(item)
 
     assert len(found) <= len(filerules.RULES)
+
+
+# --- limit ustaleń na regułę w przebiegu ---------------------------------------------------------
+
+def test_path_and_content_findings_over_the_per_rule_limit_become_a_visible_gap(site, analyze, monkeypatch):
+    monkeypatch.setattr(filerules, "MAX_FINDINGS_PER_RULE", 2)
+    for number in range(5):
+        write(site / f"{UPLOADS}cache-{number}.php", HARMLESS_PHP)
+    for number in range(3):
+        write(site / f"{PLUGIN}eval-{number}.php", EVAL_MARKER)
+
+    run = analyze(site)
+
+    assert sum(found["rule"] == "EXECUTABLE_IN_UPLOADS" for found in run.findings) == 2
+    assert sum(found["rule"] == "SUSPICIOUS_PHP_EVAL_DECODE" for found in run.findings) == 2
+    assert run.has_gap("Limit 2 ustaleń reguły EXECUTABLE_IN_UPLOADS wyczerpany: wykryć było 5")
+    assert run.has_gap("Limit 2 ustaleń reguły SUSPICIOUS_PHP_EVAL_DECODE wyczerpany: wykryć było 3")
+    assert run.coverage("files")["status"] == "PARTIAL"
+
+
+def test_findings_up_to_the_per_rule_limit_leave_no_gap(site, analyze, monkeypatch):
+    monkeypatch.setattr(filerules, "MAX_FINDINGS_PER_RULE", 2)
+    for number in range(2):
+        write(site / f"{UPLOADS}cache-{number}.php", HARMLESS_PHP)
+
+    run = analyze(site)
+
+    assert sum(found["rule"] == "EXECUTABLE_IN_UPLOADS" for found in run.findings) == 2
+    assert not run.has_gap("ustaleń reguły")

@@ -478,3 +478,130 @@ def test_manifest_alone_is_reported_under_the_baseline_source_without_new_source
 
 def test_case_json_has_no_manifest_entry_when_none_was_given(site, analyze):
     assert "core_checksums" not in analyze(site, baseline=index_only(site)).case["sources"]
+
+
+# --- zgodność manifestu sum rdzenia z wersją i locale witryny (R-46) -----------------------------
+
+CORE_FINDINGS = {"CORE_CHECKSUM_MISMATCH", "CORE_FILE_NOT_IN_MANIFEST", "CORE_FILE_MISSING"}
+UNCHECKED_MATCH = "Zgodność manifestu sum rdzenia z witryną niesprawdzona"
+
+
+def site_version(site, version: str | None = "9.9.9", package: str | None = None) -> None:
+    """``version.php`` witryny z ``$wp_version`` i opcjonalnie ``$wp_local_package`` (pakiet spoza en_US)."""
+    lines = ["<?php // synthetic placeholder, never executed"]
+    lines += [f"$wp_version = '{version}';"] if version else []
+    lines += [f"$wp_local_package = '{package}';"] if package else []
+    write(site / CORE_FILE, "\n".join(lines) + "\n")
+
+
+def differing_manifest(site, nested: str | None = None, **labels) -> dict:
+    """Manifest, od którego witryna różni się w dwóch plikach, ma plik kodu spoza niego i nie ma jednego z jego plików."""
+    write(site / "wp-includes" / "changed.php")
+    write(site / "wp-admin" / "extra.php")
+    checksums = {"index.php": md5(site / "index.php"), CORE_FILE: OLD_MD5, "wp-includes/changed.php": OLD_MD5,
+                 "wp-includes/gone.php": OLD_MD5}
+    return {**labels, "checksums": {nested: checksums} if nested else checksums}
+
+
+@pytest.mark.parametrize("package, nested, labels", [
+    (None, None, {"wordpress_version": "9.9.9", "locale": "en_US"}),
+    ("pl_PL", None, {"wordpress_version": "9.9.9", "locale": "pl_PL"}),
+    (None, "9.9.9", {"locale": "en_US"}),
+], ids=["en-us-package", "localised-package", "version-in-nested-key"])
+def test_manifest_matching_the_site_version_and_locale_keeps_its_findings(site, analyze, package, nested, labels):
+    site_version(site, package=package)
+
+    run = analyze(site, core_checksums=differing_manifest(site, nested, **labels))
+
+    assert run.rules == CORE_FINDINGS
+    assert sum(found["rule"] == "CORE_CHECKSUM_MISMATCH" for found in run.findings) == 2
+    assert not run.has_gap("CORE_MANIFEST_MISMATCH") and not run.has_gap(UNCHECKED_MATCH)
+
+
+@pytest.mark.parametrize("package, labels, conflict", [
+    (None, {"wordpress_version": "9.9.8", "locale": "en_US"}, "wersja manifestu 9.9.8, witryny 9.9.9"),
+    (None, {"wordpress_version": "9.9.9", "locale": "pl_PL"}, "locale manifestu pl_PL, witryny en_US"),
+    ("de_DE", {"wordpress_version": "9.9.9", "locale": "pl_PL"}, "locale manifestu pl_PL, witryny de_DE"),
+    ("de_DE", {"wordpress_version": "9.9.8", "locale": "en_US"},
+     "wersja manifestu 9.9.8, witryny 9.9.9; locale manifestu en_US, witryny de_DE"),
+], ids=["version", "locale-en-us-site", "locale-localised-site", "version-and-locale"])
+def test_manifest_of_another_version_or_locale_is_one_coverage_gap_instead_of_mismatches(site, analyze, monkeypatch,
+                                                                                        package, labels, conflict):
+    monkeypatch.setattr(integrity, "MAX_FINDINGS_PER_RULE", 1)  # wstrzymane wykrycia nie dają też luki limitu
+    site_version(site, package=package)
+
+    run = analyze(site, core_checksums=differing_manifest(site, **labels))
+
+    assert run.rules.isdisjoint(CORE_FINDINGS)
+    gap = next(gap for gap in run.gaps if gap.startswith("CORE_MANIFEST_MISMATCH"))
+    assert f"({conflict})" in gap
+    assert "CORE_CHECKSUM_MISMATCH ×2, CORE_FILE_NOT_IN_MANIFEST ×1, CORE_FILE_MISSING ×1" in gap
+    assert not run.has_gap("ustaleń reguły CORE_")
+    assert (run.coverage("files")["status"], run.report["assessment"], run.exit_code) == ("PARTIAL", "INCONCLUSIVE", 3)
+
+
+@pytest.mark.parametrize("version, labels, unknown", [
+    ("9.9.9", {}, "brak wersji manifestu (pole wordpress_version); brak locale manifestu (pole locale)"),
+    (None, {"wordpress_version": "9.9.9", "locale": "en_US"}, "brak wersji witryny w wp-includes/version.php"),
+    ("9.9.9", {"wordpress_version": "9.9.9"}, "brak locale manifestu (pole locale)"),
+], ids=["unlabelled-manifest", "unknown-site-version", "unlabelled-locale"])
+def test_unknown_version_or_locale_keeps_the_findings_and_notes_the_unchecked_match(site, analyze, version, labels, unknown):
+    site_version(site, version=version)
+
+    run = analyze(site, core_checksums=differing_manifest(site, **labels))
+
+    assert run.rules == CORE_FINDINGS
+    assert unknown in next(gap for gap in run.gaps if gap.startswith(UNCHECKED_MATCH))
+    assert not run.has_gap("CORE_MANIFEST_MISMATCH")
+
+
+def test_ambiguous_site_version_is_unknown_not_a_conflict(site, analyze):
+    write(site / CORE_FILE, "<?php // synthetic placeholder\n$wp_version = '9.9.8';\n$wp_version = '9.9.9';\n")
+
+    run = analyze(site, core_checksums=differing_manifest(site, wordpress_version="9.9.9", locale="en_US"))
+
+    assert run.rules == CORE_FINDINGS
+    assert "brak wersji witryny" in next(gap for gap in run.gaps if gap.startswith(UNCHECKED_MATCH))
+
+
+def test_version_file_identical_to_the_manifest_settles_the_match_despite_other_labels(site, analyze):
+    site_version(site)
+    manifest = differing_manifest(site, wordpress_version="9.9.8", locale="pl_PL")
+    manifest["checksums"][CORE_FILE] = md5(site / CORE_FILE)
+
+    run = analyze(site, core_checksums=manifest)
+
+    assert run.rules == CORE_FINDINGS
+    assert not run.has_gap("CORE_MANIFEST_MISMATCH") and not run.has_gap(UNCHECKED_MATCH)
+
+
+def test_invalid_manifest_locale_is_a_usage_error_that_echoes_no_value(site, tmp_path, refuse):
+    manifest = write(tmp_path / "core.json", json.dumps({"locale": "pl PL outside-canary", "checksums": {"index.php": OLD_MD5}}))
+
+    message = refuse("--files", str(site), "--core-checksums", str(manifest))
+
+    assert "--core-checksums" in message and "locale" in message and "outside-canary" not in message
+
+
+# --- limit liczby wpisów baseline --------------------------------------------------------------
+
+def test_baseline_over_the_entry_limit_is_not_compared_and_leaves_a_gap(site, analyze, monkeypatch):
+    monkeypatch.setattr(integrity, "MAX_BASELINE_ENTRIES", 2)
+    write(site / "wp-includes" / "changed.php")
+    baseline = {"files": {**index_only(site)["files"], "wp-includes/changed.php": OLD_SHA, "wp-includes/removed.php": OLD_SHA}}
+
+    run = analyze(site, baseline=baseline)
+
+    assert run.rules == set()
+    assert run.has_gap("Baseline ma 3 wpisów files, więcej niż limit 2: porównanie plików z baseline niewykonane")
+    assert run.coverage("files")["status"] == "PARTIAL"
+
+
+def test_baseline_at_the_entry_limit_is_compared(site, analyze, monkeypatch):
+    monkeypatch.setattr(integrity, "MAX_BASELINE_ENTRIES", 2)
+    write(site / "wp-includes" / "changed.php")
+
+    run = analyze(site, baseline={"files": {**index_only(site)["files"], "wp-includes/changed.php": OLD_SHA}})
+
+    assert run.rules == {"BASELINE_FILE_CHANGED"}
+    assert not run.has_gap("więcej niż limit")
