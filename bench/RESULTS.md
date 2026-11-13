@@ -95,3 +95,57 @@ Kontrola liniowości SQL (osobny przebieg, scale 0.25, zrzut 256 MiB): `sql` 28,
    administratora dopisane na końcu dużego zrzutu nie zostanie ocenione (luka jest jawna). Obserwacja wydajnościowa,
    nie błąd poprawności; nie sprawdzano, które dalsze elementy (np. nazwy tabel, prefiksy) korzystają z dalszego
    parsowania.
+
+## 2026-11-13 — pamięć na plik (Issue #67)
+
+Ta sama maszyna, Python 3.12.11. „Przed” to `main` `27264b7`, „po” to gałąź `agent/T-601-memory`; oba przebiegi
+na tych samych danych (`bench/generate.py --scale 0.2 --scenario files`: 200 000 plików), sekwencyjnie, bez innego
+obciążenia. Wyniki sekcji z 2026-11-12 powyżej zostają bez zmian (inny silnik i skala).
+
+```sh
+PYTHONPATH=$PWD python bench/run.py --data /tmp/wpil-bench --scale 0.2 --generate --only files --keep
+```
+
+| Scenariusz (200 000 plików) | Wall przed [s] | Wall po [s] | Max RSS przed [MiB] | Max RSS po [MiB] | Kod | Ocena |
+|---|---:|---:|---:|---:|---:|---|
+| files-default-limits | 46.98 / 45.78 | 45.76 | 926.4 / 973.0 | 284.9 | 3 | SUSPICIOUS |
+| files-raised-limits | 53.05 / 45.17 | 45.19 | 973.8 / 975.7 | 283.0 | 3 | SUSPICIOUS |
+| files-tight-time | 2.37 / 2.37 | 2.41 | 98.4 / 100.5 | 42.2 | 3 | INCONCLUSIVE |
+
+„Przed” zmierzono dwukrotnie (przed i po przebiegu „po”). `report.json` bez zmian (76,33 MiB, te same bajty co
+przed zmianą — porównanie na demo i na drzewie 50 000 plików po zastąpieniu czasu analizy). Pamięć: ok. 4,8 KiB →
+ok. 1,3 KiB maks. RSS na plik; czas bez zmian (dominuje odczyt i skrót plików).
+
+Najgorszy przypadek — wpisy pominięte z własną luką (300 000 dowiązań symbolicznych w 1200 katalogach, domyślne limity):
+
+| Silnik | Wall [s] | Max RSS [MiB] | Wpisy w `evidence` | Luka limitu |
+|---|---:|---:|---:|---|
+| przed (`max_entries` 1 000 000) | 29.77 | 1668.0 | 300 000 | — (w kontenerze 1 GiB: OOM) |
+| po (`max_entries` 250 000) | 26.05 | 545.3 | 249 003 | „Limit 250000 wpisów … wyczerpany” |
+
+### Skąd pamięć (profil `tracemalloc`, 50 000 plików, B na plik)
+
+Przed zmianą szczyt (ok. 3,6 KiB/plik w `tracemalloc`) wypadał przy zapisie wyników:
+
+| Etap | Przed | Po | Co trzyma |
+|---|---:|---:|---|
+| po przejściu drzewa | 883 | 686 | wpis rejestru `ingest.Evidence` (z `__dict__`), `_Seen` z krotką pełnej ścieżki i krotką tożsamości, skrót SHA-256 (64 znaki), liczby z `fstat`, nazwa i ścieżka względna, zbiory `integrity` |
+| po `privacy.sanitize` | +412 | +327 | `models.Evidence` (z `__dict__`), `logical_path`, identyfikator `ev_…`, osobny napis statusu na każdy wpis (`str(StrEnum)`) |
+| po `Report.to_dict` | +318 | +273 | słownik każdego wpisu `evidence` (9 kluczy) i osobny napis `origin_kind` na wpis |
+| zapis wyników | +2040 (szczyt) | ≈ 0 | `json.dumps(indent=2)` buduje listę wszystkich fragmentów kodera przed złączeniem (kilka KiB na wpis), potem napis i bajty `report.json`, to samo dla `evidence-manifest.json`; wszystkie pliki w pamięci naraz do `_publish` |
+
+Zmiany: `slots` w `ingest.Evidence`, `models.Evidence`, `Location`, `Observation` i `_Seen`; `_Seen` trzyma krotkę
+katalogu współdzieloną przez pliki tego katalogu, nazwę i dwie liczby zamiast krotki pełnej ścieżki i krotki
+tożsamości; wspólne napisy statusu i rodzaju źródła (`.value` zamiast `str()`); pliki JSON kodowane i zapisywane
+porcjami (`outputs.json_chunks`, `outputs.streams`, `report._publish` z porcjami i `seal` dla `case.json`), więc
+żaden plik wynikowy nie leży w pamięci w całości.
+
+### Siatka bezpieczeństwa
+
+Pamięć rośnie z liczbą wpisów rejestru, których jest najwyżej `--max-entries`. Domyślny limit obniżono z 1 000 000
+do 250 000 (powyżej domyślnych 200 000 plików, z miejscem na katalogi): szacunek 250 000 × 2,5 KiB (najgorszy wpis
+zmierzony: ok. 2,1 KiB) + 320 MiB zapasu na interpreter i reguły bazy (≈ 930 MiB) mieści się w `--memory=1g`.
+Nadmiar wpisów daje nazwaną lukę `MAX_ENTRIES` i ocenę bez „brak wskaźników” zamiast zabicia procesu.
+`tests/test_memory_budget.py` sprawdza ten rachunek względem `docker/run-flags.txt` oraz że przyrost szczytu
+`tracemalloc` na wpis (plik przeczytany i dowiązanie pominięte) nie przekracza 2,5 KiB (po zmianie ok. 1,0 i 2,1 KiB;
+przed nią 3,5 i 4,0 KiB — test nie przechodzi na `27264b7`). Nadal niezmierzone w kontenerze (Linux, inny alokator).

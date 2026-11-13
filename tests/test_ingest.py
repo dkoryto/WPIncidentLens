@@ -472,7 +472,7 @@ def test_disabled_reverification_is_itself_reported_and_detects_nothing(site):
 # --- B6: limity (każdy osobno) ----------------------------------------------------------------------
 
 def test_default_limits_match_adr_0002():
-    assert Limits() == Limits(max_files=200_000, max_entries=1_000_000, max_file_bytes=2 * 1024**3, max_total_bytes=20 * 1024**3,
+    assert Limits() == Limits(max_files=200_000, max_entries=250_000, max_file_bytes=2 * 1024**3, max_total_bytes=20 * 1024**3,
                               max_scan_bytes=4 * 1024**2, max_path_bytes=4096, max_depth=64, max_seconds=1800)
 
 

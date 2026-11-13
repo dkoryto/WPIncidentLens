@@ -43,7 +43,8 @@ class SourceCoverage:
 
 def evidence_of(record: ingest.Evidence) -> models.Evidence:
     """Wpis rejestru SecureIngest jako dowód raportu; ścieżka logiczna jest względna do źródła."""
-    return models.Evidence(models.ORIGIN_OF_SOURCE[record.source], f"{record.source}/{record.rel}", str(record.status),
+    # ``status.value``: wspólny obiekt napisu statusu zamiast nowej kopii na każdy wpis (Issue #67).
+    return models.Evidence(models.ORIGIN_OF_SOURCE[record.source], f"{record.source}/{record.rel}", ingest.ReadStatus(record.status).value,
                            sha256=record.sha256, size_bytes=record.size, mtime_ns=record.mtime_ns,
                            read_reason=record.reason or None, hardlinked=record.hardlinked)
 

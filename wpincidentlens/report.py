@@ -18,6 +18,7 @@ import hashlib
 import html
 import os
 import secrets
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 from . import ingest, models, outputs, redact, rules
@@ -52,24 +53,39 @@ def _open_directory(directory: str | os.PathLike[str], *, create: bool) -> int:
         raise OutputRefusal(errno.errorcode.get(exc.errno, "OSError")) from None
 
 
-def _create(dir_fd: int, name: str, data: bytes) -> None:
+def _create(dir_fd: int, name: str, data: bytes | Iterable[bytes]) -> str:
+    """Tworzy plik z bajtów albo z kolejnych porcji bajtów i zwraca SHA-256 zapisanej treści."""
     fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dir_fd)
+    digest = hashlib.sha256()
     try:
-        view = memoryview(data)
-        while view:
-            view = view[os.write(fd, view):]
+        for chunk in [data] if isinstance(data, bytes) else data:
+            digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                view = view[os.write(fd, view):]
         os.fsync(fd)
     finally:
         os.close(fd)
+    return digest.hexdigest()
 
 
-def _publish(dir_fd: int, files: dict[str, bytes]) -> None:
-    """Zapisuje wszystkie pliki pod nazwami tymczasowymi, potem zamienia je na docelowe; po błędzie sprząta."""
-    pending = {name: f".{name}.{secrets.token_hex(8)}.tmp" for name in files}
+def _publish(dir_fd: int, files: Mapping[str, bytes | Iterable[bytes]],
+             seal: Callable[[dict[str, str]], dict[str, bytes]] | None = None) -> None:
+    """Zapisuje wszystkie pliki pod nazwami tymczasowymi, potem zamienia je na docelowe; po błędzie sprząta.
+
+    Treść pliku to bajty albo porcje bajtów zapisywane po kolei (pliku nie trzeba trzymać w pamięci w całości).
+    ``seal`` dostaje SHA-256 zapisanych plików i zwraca pliki dopisywane po nich (``case.json``), zamieniane jako ostatnie.
+    """
+    pending: dict[str, str] = {}
     try:
+        digests = {}
         for name, data in files.items():
+            pending[name] = f".{name}.{secrets.token_hex(8)}.tmp"
+            digests[name] = _create(dir_fd, pending[name], data)
+        for name, data in (seal(digests) if seal else {}).items():
+            pending[name] = f".{name}.{secrets.token_hex(8)}.tmp"
             _create(dir_fd, pending[name], data)
-        for name in files:
+        for name in list(pending):
             os.replace(pending[name], name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
             del pending[name]
     finally:
@@ -223,14 +239,17 @@ def write(directory: Path, report: dict, case: dict, exit_code: int) -> None:
     oraz ``case.json``.
 
     Wszystkie pliki przechodzą przez jeden ``_publish``; ``case.json`` jest zamieniany jako ostatni i podaje SHA-256
-    każdego pozostałego pliku (``report`` i ``outputs``).
+    każdego pozostałego pliku (``report`` i ``outputs``). Pliki JSON są kodowane i zapisywane porcjami, więc w pamięci
+    nie leży jednocześnie cały ``report.json`` i ``evidence-manifest.json`` (Issue #67).
     """
-    html_page = render_html(report, pseudonymized=case["flags"].get("pseudonymize", False))
-    files = {REPORT_JSON: _json(report), REPORT_HTML: _encode(html_page), **outputs.render(report, exit_code)}
-    digests = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
-    files[CASE_JSON] = _json(case_record(case, report, digests[REPORT_JSON], exit_code, digests))
+    html_page = _encode(render_html(report, pseudonymized=case["flags"].get("pseudonymize", False)))  # bez kopii jako str
+    files = {REPORT_JSON: outputs.json_chunks(report), REPORT_HTML: html_page, **outputs.streams(report, exit_code)}
+
+    def seal(digests: dict[str, str]) -> dict[str, bytes]:
+        return {CASE_JSON: _json(case_record(case, report, digests[REPORT_JSON], exit_code, digests))}
+
     dir_fd = _open_directory(directory, create=True)
     try:
-        _publish(dir_fd, files)
+        _publish(dir_fd, files, seal)
     finally:
         os.close(dir_fd)

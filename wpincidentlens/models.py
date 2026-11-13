@@ -238,7 +238,7 @@ def describe_location(location: Mapping[str, Any]) -> str:
 
 # --- obiekty kontraktu --------------------------------------------------------------------------
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)  # jeden obiekt na wpis materiału: bez ``__dict__`` (Issue #67)
 class Evidence:
     """Jeden wpis materiału wejściowego wraz z wynikiem próby odczytu — także wpis pominięty.
 
@@ -277,7 +277,8 @@ class Evidence:
             "origin_kind": self.origin_kind, "logical_path": self.logical_path, "sha256": self.sha256, "unread": unread}))
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "origin_kind": str(self.origin_kind), "logical_path": self.logical_path, "read_status": self.read_status,
+        # ``.value`` zamiast ``str()``: ten sam obiekt napisu dla każdego wpisu, nie nowa kopia na wpis.
+        return {"id": self.id, "origin_kind": self.origin_kind.value, "logical_path": self.logical_path, "read_status": self.read_status,
                 "read_reason": self.read_reason, "sha256": self.sha256, "size_bytes": self.size_bytes, "mtime_ns": self.mtime_ns,
                 "hardlinked": self.hardlinked}
 
@@ -288,7 +289,7 @@ class Evidence:
         return _build(cls, where, fields)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)  # jeden obiekt na wpis materiału: bez ``__dict__`` (Issue #67)
 class Location:
     """Miejsce faktu w dowodzie; wypełniane są tylko pola znane parserowi."""
     path: str | None = None   # ścieżka względna do źródła (plik witryny albo plik logu)
@@ -311,7 +312,7 @@ class Location:
         return _build(cls, where, _object(fields, where, (), ("path", "line", "table", "key", "row")))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)  # jeden obiekt na wpis materiału: bez ``__dict__`` (Issue #67)
 class Observation:
     """Fakt odczytany przez parser, bez oceny. Wskazuje dokładnie jeden dowód."""
     evidence_id: str
