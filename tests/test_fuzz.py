@@ -614,6 +614,46 @@ def test_value_at_the_end_of_a_chain_of_secret_names_never_survives(before, chai
     assert secret not in redact.redact(text)
 
 
+PHP_SECRET_NAMES = st.sampled_from(["DB_PASSWORD", "DB_USER", "AUTH_KEY", "SECURE_AUTH_KEY", "LOGGED_IN_KEY", "NONCE_KEY", "AUTH_SALT",
+                                    "SECURE_AUTH_SALT", "LOGGED_IN_SALT", "NONCE_SALT", "password", "db_pass", "api_key", "secret"])
+SPACES = st.sampled_from(["", " ", "  ", "\t", " " * 12])
+QUOTES = st.sampled_from(["'", '"'])
+
+
+@st.composite
+def php_value(draw, secret: str) -> str:
+    """Wartość PHP: goła albo w cudzysłowie (domkniętym lub nie), z innymi słowami, ``<``, ucieczką, ponad 200 znaków."""
+    quote = draw(QUOTES)
+    filler = st.sampled_from(["a", "b c", "x<y", "<", "> z", "\\" + quote, "'" if quote == '"' else '"', "a" * 250, "=", ":", ","])
+    inner = "".join([*draw(st.lists(filler, max_size=3)), secret, *draw(st.lists(filler, max_size=3))])
+    unclosed = "".join([*draw(st.lists(st.sampled_from(["a", "b c", "=", ":", "a" * 250]), max_size=3)), secret, " x"])
+    return draw(st.sampled_from([secret, f"{quote}{inner}{quote}", f"{quote}{unclosed}"]))
+
+
+@st.composite
+def php_secret_statement(draw, secret: str) -> str:
+    """``define('NAZWA', wartość)``, ``'NAZWA' => wartość`` albo ``$nazwa = wartość;`` z losowym cudzysłowem i odstępami."""
+    name, quote, value = draw(PHP_SECRET_NAMES), draw(QUOTES), draw(php_value(secret))
+    s1, s2, s3, s4 = (draw(SPACES) for _ in range(4))
+    return draw(st.sampled_from([
+        f"define({s1}{quote}{name}{quote}{s2},{s3}{value}{s4});",
+        f"{quote}{name}{quote}{s2}=>{s3}{value},",
+        f"array({s1}{quote}{name}{quote}{s2}=>{s3}{value}{s4})",
+        f"${name.lower()}{s2}={s3}{value};",
+    ]))
+
+
+@given(REDACT_TEXT, st.from_regex(r"[A-Za-z0-9]{12,20}", fullmatch=True), st.data(), REDACT_TEXT)
+def test_php_secret_statement_never_leaks_its_value(before, secret, data, after):
+    """Stałe wp-config, tablice i przypisania PHP: wartość nigdy nie zostaje jawna, a redakcja jest idempotentna."""
+    secret = "Zq" + secret
+    assume(secret not in before + after)
+    text = before + "\n" + data.draw(php_secret_statement(secret)) + "\n" + after
+    clean = redact.redact(text)
+    assert secret not in clean
+    assert redact.redact(clean) == clean
+
+
 @given(REDACT_TEXT, st.integers(2, 300), st.sampled_from([None, re.compile("eval"), re.compile("a"), re.compile(r"\?")]))
 def test_excerpt_respects_its_limit(text, limit, pattern):
     assert len(redact.excerpt(text, pattern, limit=limit)) <= max(limit, len(redact.ELLIPSIS) * 2)
