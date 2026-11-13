@@ -14,6 +14,9 @@ dependencies = []  # silnik analizy używa wyłącznie biblioteki standardowej
 [project.optional-dependencies]
 # jsonschema: wyłącznie do walidacji raportu w testach (ADR 0002 D2); silnik go nie importuje.
 test = ["pytest>=9.0.3,<10", "pytest-cov>=5,<7", "jsonschema>=4.21,<5", "hypothesis>=6.100,<7"]
+# yara: opcjonalny adapter YARA-X (ADR 0010), poza dev — domyślne środowisko i testy działają bez niego.
+# Dokładna wersja; lock z hashami: requirements/yara.lock (uv pip compile requirements/yara.in --generate-hashes ...).
+yara = ["yara-x==1.22.1"]
 dev = ["pytest>=9.0.3,<10", "pytest-cov>=5,<7", "jsonschema>=4.21,<5", "ruff>=0.8,<0.9", "hypothesis>=6.100,<7"]
 
 [project.scripts]

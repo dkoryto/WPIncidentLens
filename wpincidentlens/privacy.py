@@ -42,7 +42,7 @@ import secrets
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
 
-from . import filerules, logformats, models, redact, wpdetect
+from . import filerules, logformats, models, redact, wpdetect, yarax
 
 PSEUDONYM_HEX = 16
 IDENTITY = {"client_ip": "ip", "username": "user", "user_id": "uid"}  # atrybut → przedrostek pseudonimu
@@ -75,6 +75,7 @@ _STRUCTURAL: dict[str, Mapping[str, re.Pattern[str]]] = {
     **{kind: {"value": _TOKEN, "confidence": _TOKEN, "origin": _TOKEN}
        for kind in ("WP_VERSION_CANDIDATE", "WP_DB_VERSION_CANDIDATE", "WP_TABLE_PREFIX_CANDIDATE", wpdetect.LOCALE_KIND)},
     **{rule.kind: {"rule_version": _TOKEN} for rule in filerules.RULES.values()},
+    yarax.KIND: {"yara_rule": yarax.RULE_NAME, "pack_sha256": _SHA256, "pack_version": _TOKEN},
 }
 # Strukturalne nazwy z materiału, w których adres IP albo nazwa hosta klienta mogą wystąpić: z flagą dostają pseudonimy,
 # nigdy redakcję. Korelacja porównała je wcześniej, więc pseudonim jej nie psuje.

@@ -231,6 +231,8 @@ def case_record(case: dict, report: dict, report_sha256: str, exit_code: int, ou
     }
     if output_digests is not None:
         record["outputs"] = output_digests
+    if "yara" in case:  # pole opcjonalne (ADR 0010): tylko przebieg z --yara-rules
+        record["yara"] = case["yara"]
     return record
 
 

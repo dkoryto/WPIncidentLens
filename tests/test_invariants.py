@@ -34,9 +34,15 @@ def _forbid(monkeypatch, owner, names):
         monkeypatch.setattr(owner, name, refuse)
 
 
-def _imported_modules() -> set[str]:
+# ADR 0010: jedyny moduł uruchamiający proces — izolacja natywnego YARA-X (osobne testy poniżej).
+SPAWNING_MODULE = "yarax.py"
+
+
+def _imported_modules(skip: frozenset[str] = frozenset()) -> set[str]:
     found = set()
     for source in SOURCES:
+        if source.name in skip:
+            continue
         for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):
                 found |= {alias.name.split(".")[0] for alias in node.names}
@@ -211,7 +217,47 @@ def test_s17_engine_has_no_dynamic_execution_primitives():
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
 
     assert calls & {"eval", "exec", "compile", "__import__"} == set()
-    assert _imported_modules() & EXECUTION_MODULES == set()
+    assert _imported_modules(skip=frozenset({SPAWNING_MODULE})) & EXECUTION_MODULES == set()
+
+
+def _enclosing_functions(tree: ast.AST) -> dict[ast.AST, str]:
+    """Węzeł → nazwa najbliższej funkcji (``<module>`` poza funkcjami)."""
+    owner: dict[ast.AST, str] = {}
+
+    def visit(node: ast.AST, name: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            inner = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else name
+            owner[child] = inner
+            visit(child, inner)
+    visit(tree, "<module>")
+    return owner
+
+
+def test_s17_only_the_yara_adapter_spawns_a_process_and_only_its_fixed_worker():
+    """Wyjątek od S-17 (ADR 0010): ``yarax`` importuje ``subprocess`` i woła ``Popen`` dokładnie raz — z listą argumentów
+    z ``worker_argv()`` (ten sam interpreter, stały kod), bez powłoki i z pustym środowiskiem; ``importlib.metadata``
+    (wersja silnika) tylko w procesie potomnym."""
+    tree = ast.parse((PACKAGE / SPAWNING_MODULE).read_text(encoding="utf-8"))
+    owner = _enclosing_functions(tree)
+    names = [(alias.name, node) for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]
+    names += [(node.module, node) for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.level == 0]
+    imports = sorted((name, owner[node]) for name, node in names if name.split(".")[0] in EXECUTION_MODULES)
+    popen = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "Popen"]
+
+    assert imports == [("importlib.metadata", "worker_main"), ("subprocess", "<module>")]
+    assert len(popen) == 1 and owner[popen[0]] == "__init__"
+    (argv,) = popen[0].args
+    keywords = {keyword.arg: keyword.value for keyword in popen[0].keywords}
+    assert isinstance(argv, ast.Call) and argv.func.id == "worker_argv" and not argv.args
+    assert "shell" not in keywords and isinstance(keywords["env"], ast.Dict) and not keywords["env"].keys
+
+
+def test_s17_worker_command_is_the_same_interpreter_in_isolated_mode():
+    from wpincidentlens import yarax
+
+    argv = yarax.worker_argv()
+
+    assert argv[:3] == [os.sys.executable, "-I", "-c"] and argv[3] == yarax._BOOTSTRAP and Path(argv[4]) == PACKAGE.parent
 
 
 def test_s18_two_runs_on_same_evidence_give_identical_json(demo_case, analyze):

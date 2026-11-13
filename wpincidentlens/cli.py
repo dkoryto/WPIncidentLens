@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import case, files, ingest, integrity, models, privacy, report, rules
+from . import case, files, ingest, integrity, models, privacy, report, rules, yarax
 from . import database as database_scan
 from .analysis import Detection, SourceCoverage
 from .correlate import DEFAULT_WINDOW_SECONDS, Correlation, check_window, correlate, focus as _focus, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
@@ -117,14 +117,14 @@ def _log_scan(result) -> tuple[list[Detection], SourceCoverage, list[models.Obse
 def _scan_sources(root: Path, database: Path | None, logs: Path | None, baseline: dict | None, known_admins: set[str],
                   session: ingest.Session, core: integrity.CoreChecksums | None = None, database_format: str = "sql",
                   log_config: LogConfig | None = None, correlation_window: int = DEFAULT_WINDOW_SECONDS,
-                  ) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation], list[models.Observation]]:
+                  yara: yarax.Adapter | None = None) -> tuple[list[Detection], dict[str, SourceCoverage], list[models.Observation], list[models.Observation]]:
     """Uruchamia skanery podanych źródeł; źródło niepodane dostaje powód zamiast skanu.
 
     Trzeci wynik: fakty bez ustalenia; czwarty: obserwacje ``HTTP_REQUEST`` z logów, materiał korelacji. Logi są
     czytane po plikach i bazie: ustalenia plikowe wyznaczają, które żądania korelacja może wykorzystać (``Focus``).
     """
     cover = {source: SourceCoverage(provided=False) for source in models.SOURCES}
-    scan = files.scan_files(root, baseline, session, core)
+    scan = files.scan_files(root, baseline, session, core, yara)
     detections, cover["files"], facts = scan.detections, scan.cover, list(scan.observations)
     if database:
         found, cover["database"], database_facts = database_scan.scan_database(
@@ -165,7 +165,8 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
                    baseline: dict | None, known_admins: set[str], case_id: str, *,
                    session: ingest.Session | None = None, core: integrity.CoreChecksums | None = None,
                    database_format: str = "sql", correlation_window: int = DEFAULT_WINDOW_SECONDS,
-                   log_config: LogConfig | None = None, pseudonymizer: privacy.Pseudonymizer | None = None) -> dict:
+                   log_config: LogConfig | None = None, pseudonymizer: privacy.Pseudonymizer | None = None,
+                   yara: yarax.Adapter | None = None) -> dict:
     """Zwraca raport ``poc-1`` jako słownik gotowy do zapisu.
 
     ``baseline`` musi pochodzić z ``load_baseline``, a ``core`` z ``load_core_checksums`` tej samej sesji.
@@ -174,6 +175,7 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
     ``log_config`` to wybory operatora dotyczące logów (format, zaufane proxy, niepewność zegara); domyślnie combined.
     Teksty swobodne raportu są redagowane w jednym miejscu (``privacy.sanitize``); z ``pseudonymizer`` adresy IP
     klientów, loginy i ``user_id`` kont zastępują pseudonimy. Porównanie z ``known_admins`` odbywa się wcześniej, na loginach.
+    ``yara`` to uruchomiony adapter YARA-X (``yarax.open_adapter``); jego cyklem życia zarządza wywołujący.
     """
     session = session or _session()
     check_window(correlation_window)
@@ -182,7 +184,7 @@ def compose_report(root: Path, database: Path | None, logs: Path | None,
     if core is not None and core.record not in session.ledger:
         raise ValueError("manifest sum musi być wczytany przez load_core_checksums w tej samej sesji odczytu")
     detections, cover, facts, requests = _scan_sources(root, database, logs, baseline, known_admins, session, core,
-                                                        database_format, log_config, correlation_window)
+                                                        database_format, log_config, correlation_window, yara)
     session_gaps = session.finish()  # od tej chwili rejestr sesji ma ostateczne statusy (także CHANGED z ponownej weryfikacji)
     for source, text in session.integrity_notes:
         for name in [source] if source else [name for name in models.SOURCES if cover[name].provided]:
@@ -220,6 +222,13 @@ def _positive_seconds(value: str) -> int:
     if not value.isascii() or not value.isdigit() or int(value) <= 0:
         raise argparse.ArgumentTypeError("wymagana dodatnia liczba całkowita sekund")
     return int(value)
+
+
+def _timeout_seconds(value: str) -> int:
+    seconds = _positive_seconds(value)
+    if seconds > 3600:
+        raise argparse.ArgumentTypeError("najwyżej 3600 sekund")
+    return seconds
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -262,6 +271,12 @@ def main(argv: list[str] | None = None) -> int:
                              "z kluczem losowanym na jedno uruchomienie i nigdzie niezapisywanym): ta sama wartość ma ten sam "
                              "pseudonim tylko w obrębie jednego raportu. Jawne pozostają m.in. czas rejestracji konta, nazwy "
                              "w ścieżkach i kluczach (np. slug autora w URL) oraz domeny e-mail w cytatach")
+    parser.add_argument("--yara-rules", type=Path, metavar="PATH",
+                        help="Opcjonalnie: lokalny pakiet reguł YARA (plik .yar/.yara albo katalog takich plików z opcjonalnym "
+                             "plikiem VERSION), skanowany YARA-X w osobnym procesie z limitami. Wymaga extra 'yara' (yara-x); "
+                             "bez niego albo przy nieczytelnym pakiecie raport ma lukę pokrycia files. Błąd kompilacji: kod 2")
+    parser.add_argument("--yara-timeout", type=_timeout_seconds, default=yarax.FILE_TIMEOUT_SECONDS, metavar="SECONDS",
+                        help="Limit czasu skanu YARA jednego pliku w sekundach (%(default)s)")
     parser.add_argument("--output", type=Path, required=True)
     defaults = ingest.Limits()
     parser.add_argument("--allow-hardlinks", action="store_true",
@@ -304,13 +319,31 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as invalid:
             parser.error(f"--core-checksums: {invalid}")
     admins = set(context.known_admins) | set((baseline or {}).get("known_admins", []))
-    output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session, core=core,
-                            database_format=context.database_format, correlation_window=args.correlation_window,
-                            log_config=LogConfig(context.log_format, context.proxy_networks(), context.log_clock_skew),
-                            pseudonymizer=privacy.Pseudonymizer() if context.pseudonymize else None)
+    described = context.describe()
+    yara = None
+    if args.yara_rules is not None:
+        evidence = [path for path in (context.files, context.database, context.logs) if path is not None]
+        try:  # pakiet w materiale dowodowym byłby regułami napisanymi przez napastnika
+            ingest.resolve_output(args.yara_rules, evidence)
+        except ingest.IngestRefusal:
+            parser.error("--yara-rules: pakiet reguł nie może leżeć w źródle dowodów (--files, --database, --logs) ani go zawierać")
+        try:
+            yara = yarax.open_adapter(args.yara_rules, args.yara_timeout, context.limits.max_seconds)
+        except yarax.PackError as invalid:
+            parser.error(f"--yara-rules: pakiet reguł się nie kompiluje:\n{invalid}")
+    try:
+        output = compose_report(context.files, context.database, context.logs, baseline, admins, context.case_id, session=session, core=core,
+                                database_format=context.database_format, correlation_window=args.correlation_window,
+                                log_config=LogConfig(context.log_format, context.proxy_networks(), context.log_clock_skew),
+                                pseudonymizer=privacy.Pseudonymizer() if context.pseudonymize else None, yara=yara)
+    finally:
+        if yara is not None:
+            yara.close()
+    if yara is not None:
+        described["yara"] = yara.describe()
     code = exit_code(output)
     try:
-        report.write(context.output, output, context.describe(), code)
+        report.write(context.output, output, described, code)
     except report.OutputRefusal as refusal:
         parser.error(f"--output: {refusal}")
     if not context.pseudonymize and privacy.personal_data(output):

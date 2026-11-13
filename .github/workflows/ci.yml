@@ -44,6 +44,29 @@ jobs:
           path: sbom-test-env.cdx.json
           if-no-files-found: error
 
+  # Opcjonalny adapter YARA-X (ADR 0010): osobne środowisko z extra yara; zadanie test działa bez niego.
+  yara:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install (dev + yara locks, hashes required)
+        run: |
+          python -m pip install --require-hashes -r requirements/dev.lock
+          python -m pip install --require-hashes --only-binary=:all: -r requirements/yara.lock
+          python -m pip install --no-deps -e .
+      - name: YARA-X tests (no skips allowed)
+        run: |
+          set -o pipefail
+          python -c "import yara_x"
+          python -m pytest -q -rs tests/test_yarax.py tests/test_rules.py tests/test_supply_chain.py tests/test_invariants.py | tee yara-tests.txt
+          ! grep -q "SKIPPED.*yara-x nie jest zainstalowany" yara-tests.txt
+
   audit:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -62,5 +85,7 @@ jobs:
       # bez instalowania audytowanych pakietów do tymczasowego venv. Podatność = czerwone CI.
       - name: pip-audit (dev lock)
         run: '"$RUNNER_TEMP/sca/bin/pip-audit" -r requirements/dev.lock --require-hashes --disable-pip --strict'
+      - name: pip-audit (yara lock)
+        run: '"$RUNNER_TEMP/sca/bin/pip-audit" -r requirements/yara.lock --require-hashes --disable-pip --strict'
       - name: pip-audit (audit lock)
         run: '"$RUNNER_TEMP/sca/bin/pip-audit" -r requirements/audit.lock --require-hashes --disable-pip --strict'

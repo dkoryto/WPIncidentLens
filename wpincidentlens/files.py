@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import filerules, ingest, integrity, models, redact, rules, wpdetect
+from . import filerules, ingest, integrity, models, redact, rules, wpdetect, yarax
 from .analysis import Detection, SourceCoverage
 
 
@@ -19,7 +19,8 @@ class FileScan:
     observations: list[models.Observation] = field(default_factory=list)  # fakty, z których nie powstaje ustalenie
 
 
-def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core: integrity.CoreChecksums | None = None) -> FileScan:
+def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core: integrity.CoreChecksums | None = None,
+               yara: yarax.Adapter | None = None) -> FileScan:
     """Statusy pominiętych wpisów obniżają pokrycie na podstawie rejestru sesji; tutaj trafiają tylko ich opisy.
 
     Wyjątek w regule (``rules.guarded``) jest luką tego źródła, a nie przerwaniem analizy; limit czasu sesji przerywa
@@ -62,7 +63,11 @@ def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core:
                     f"Limit czasu analizy {session.limits.max_seconds:g} s przekroczony w trakcie reguł treści: plik {redact.neutralise(item.rel)} "
                     f"przeanalizowany do reguły {found.applied} z {found.applied + len(found.skipped)}; "
                     f"niezastosowane: {', '.join(found.skipped)}")
+            if yara is not None:
+                scan.detections.extend(cap.admit(guard(yarax.RULE_ID, yara.scan, item, session.expired, default=[])))
     where = None
+    if yara is not None:
+        guard(yarax.RULE_ID, yara.finish, scan.cover, scan_limit)
     cap.finish(scan.cover)
     site = guard("wpdetect", detector.core_identity)  # None (niewiadoma) po wyjątku: manifest nie jest wtedy odrzucany
     scan.detections.extend(guard("integrity", comparison.finish, session, scan.cover, site, default=[]))
