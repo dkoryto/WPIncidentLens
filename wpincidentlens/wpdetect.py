@@ -19,8 +19,10 @@ MAX_PARSE_BYTES = 256 * 1024  # prawdziwe version.php i wp-config.php mają kilk
 MAX_LANGUAGE_FILES = 16
 
 LOCALE_KIND = "WP_LOCALE_CANDIDATE"
-_LOCALE = r"[A-Za-z]{2,3}(?:_[A-Za-z0-9]{2,8}){0,2}"  # pl_PL, de_DE_formal, pt_PT_ao90
-_LANGUAGE_FILE = re.compile(rf"wp-content/languages/({_LOCALE})\.mo")
+LOCAL_PACKAGE = "WP_LOCAL_PACKAGE_ASSIGNMENT"
+DEFAULT_PACKAGE_LOCALE = "en_US"  # dystrybucja z wordpress.org nie przypisuje $wp_local_package
+LOCALE = r"[A-Za-z]{2,3}(?:_[A-Za-z0-9]{2,8}){0,2}"  # pl_PL, de_DE_formal, pt_PT_ao90
+_LANGUAGE_FILE = re.compile(rf"wp-content/languages/({LOCALE})\.mo")
 _PLAIN = re.compile(rb"[A-Za-z0-9_.+\-]*")
 
 # Każda alternatywa zawsze się dopasowuje i zużywa znaki (niedomknięty napis lub komentarz sięga końca pliku),
@@ -56,15 +58,26 @@ _SETTINGS: dict[str, tuple[_Setting, ...]] = {
         _variable("WP_VERSION_CANDIDATE", "WP_VERSION_ASSIGNMENT", "$wp_version", r"[0-9][0-9A-Za-z.+\-]{0,31}",
                   "wersja WordPressa nieustalona"),
         _variable("WP_DB_VERSION_CANDIDATE", "WP_DB_VERSION_ASSIGNMENT", "$wp_db_version", r"[0-9]{1,10}"),
-        _variable(LOCALE_KIND, "WP_LOCAL_PACKAGE_ASSIGNMENT", "$wp_local_package", _LOCALE),
+        _variable(LOCALE_KIND, LOCAL_PACKAGE, "$wp_local_package", LOCALE),
     ),
     CONFIG_FILE: (
         _variable("WP_TABLE_PREFIX_CANDIDATE", "TABLE_PREFIX_ASSIGNMENT", "$table_prefix", r"[A-Za-z0-9_]{1,64}",
                   "prefiks tabel nieustalony"),
         _Setting(LOCALE_KIND, "WPLANG_DEFINE", "define('WPLANG')", b"'WPLANG'", (b"define", b"(", b"'WPLANG'", b","), b")",
-                 re.compile(_LOCALE.encode())),
+                 re.compile(LOCALE.encode())),
     ),
 }
+
+
+@dataclass(frozen=True)
+class CoreIdentity:
+    """Wersja i locale pakietu WordPressa według plików witryny; ``None`` — nieustalone albo niejednoznaczne.
+
+    Locale pakietu to ``$wp_local_package`` z ``version.php``; plik odczytany bez tego przypisania oznacza pakiet
+    ``en_US``. Język witryny (``WPLANG``, pliki ``.mo``) nie zmienia plików rdzenia, więc nie jest tu brany pod uwagę.
+    """
+    version: str | None = None
+    locale: str | None = None
 
 
 @dataclass
@@ -117,6 +130,7 @@ class WPDetector:
         self._notes: list[str] = []
         self._language_files = 0
         self._any_read = False
+        self._no_local_package = False  # version.php przeanalizowany i bez żadnego użycia $wp_local_package
 
     def feed(self, item: ingest.Evidence) -> None:
         """Przyjmuje każdy wpis drzewa, także pominięty: nieodczytany plik to nota, nie zgadywanie."""
@@ -144,6 +158,8 @@ class WPDetector:
     def _read(self, item: ingest.Evidence, setting: _Setting, tokens: list[bytes]) -> None:
         literals, other = _literals(tokens, setting)
         uses = len(literals) + other
+        if setting.origin == LOCAL_PACKAGE and not uses:
+            self._no_local_package = True
         values = sorted({value.decode("ascii") for value in literals if setting.pattern.fullmatch(value)})
         if not values:
             if setting.unknown:  # wartości spoza wzorca nie cytujemy: to nieufne bajty
@@ -167,6 +183,17 @@ class WPDetector:
         if expected == item.sha256:
             return "high", "plik zgodny z baseline"
         return "low", "plik różni się od baseline; wartość jest tylko wskazówką"
+
+    def core_identity(self) -> CoreIdentity:
+        """Jedyny kandydat wersji i locale pakietu; kilka różnych wartości albo brak wartości to ``None``."""
+        def single(origin: str) -> str | None:
+            values = {found.value for found in self._found if found.origin == origin}
+            return values.pop() if len(values) == 1 else None
+
+        locale = single(LOCAL_PACKAGE)
+        if locale is None and self._no_local_package:
+            locale = DEFAULT_PACKAGE_LOCALE
+        return CoreIdentity(single("WP_VERSION_ASSIGNMENT"), locale)
 
     def finish(self, cover: SourceCoverage) -> list[models.Observation]:
         """Kandydaci jako obserwacje; wszystko, czego nie ustalono albo co jest niejednoznaczne, trafia do jednej noty pokrycia."""

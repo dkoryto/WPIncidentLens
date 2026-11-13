@@ -28,6 +28,7 @@ def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core:
     scan = FileScan()
     comparison = integrity.ReferenceComparison(baseline, core)
     detector = wpdetect.WPDetector(baseline)
+    cap = filerules.FindingCap()  # limit ustaleń reguł ścieżki i treści; integralność liczy swoje w ``comparison``
     scan_limit = session.limits.max_scan_bytes
 
     where: str | None = None  # wpis, którego dotyczy bieżąca ocena reguły (pierwsze miejsce w luce po wyjątku)
@@ -42,7 +43,7 @@ def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core:
         if checked is None:  # wpis nie trafił do porównania: jego „brak” względem referencji byłby fałszywym ustaleniem
             comparison.complete = False
         scan.detections.extend(checked or [])
-        scan.detections.extend(guard("filerules.path_rules", filerules.path_rules, item, default=[]))
+        scan.detections.extend(cap.admit(guard("filerules.path_rules", filerules.path_rules, item, default=[])))
         guard("wpdetect", detector.feed, item)
         if item.sha256 is None:
             continue
@@ -55,13 +56,15 @@ def scan_files(root: Path, baseline: dict | None, session: ingest.Session, core:
             continue
         if item.content is not None:
             found = filerules.content_rules(item, session.expired, guard)
-            scan.detections.extend(found)
+            scan.detections.extend(cap.admit(found))
             if found.skipped:
                 scan.cover.degrade(
                     f"Limit czasu analizy {session.limits.max_seconds:g} s przekroczony w trakcie reguł treści: plik {redact.neutralise(item.rel)} "
                     f"przeanalizowany do reguły {found.applied} z {found.applied + len(found.skipped)}; "
                     f"niezastosowane: {', '.join(found.skipped)}")
     where = None
-    scan.detections.extend(guard("integrity", comparison.finish, session, scan.cover, default=[]))
+    cap.finish(scan.cover)
+    site = guard("wpdetect", detector.core_identity)  # None (niewiadoma) po wyjątku: manifest nie jest wtedy odrzucany
+    scan.detections.extend(guard("integrity", comparison.finish, session, scan.cover, site, default=[]))
     scan.observations.extend(guard("wpdetect", detector.finish, scan.cover, default=[]))
     return scan

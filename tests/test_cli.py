@@ -50,3 +50,13 @@ def test_report_escapes_html(tmp_path):
     doc=destination.read_text()
     assert '&lt;img' in doc
     assert '<img src=x' not in doc
+
+
+def test_help_names_unverified_code_as_the_usual_cause_of_exit_code_3(capsys):
+    import pytest
+    with pytest.raises(SystemExit) as stopped:
+        main(["--help"])
+    text = " ".join(capsys.readouterr().out.split())  # argparse łamie epilog na wiersze
+    assert stopped.value.code == 0
+    assert "3 — zakres niepełny: najczęściej plik kodu niezweryfikowany względem zaufanej referencji" in text
+    assert "brak --database lub --logs" in text and "4 — podane źródło nieprzetworzone" in text

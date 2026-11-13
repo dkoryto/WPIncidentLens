@@ -9,23 +9,29 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_left
-from collections.abc import Callable, Iterator
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from . import ingest
-from .analysis import Detection, seen_in
+from .analysis import Detection, SourceCoverage, seen_in
 from .fileclass import FileClass, classify
 
 
 CODE_SUFFIXES = frozenset({".php", ".phtml", ".phar", ".inc", ".pht", ".php3", ".php4", ".php5", ".php7", ".php8"})
 CONFIG_NAMES = frozenset({".htaccess", ".user.ini", "php.ini"})
 UPLOADS = "wp-content/uploads/"
-# Katalogi zasobów statycznych core: WordPress nie dostarcza tam kodu PHP.
-STATIC_CORE_DIRS = ("wp-includes/images/", "wp-includes/fonts/", "wp-includes/css/", "wp-admin/images/", "wp-admin/css/")
+# Katalogi zasobów statycznych core: WordPress nie dostarcza tam kodu PHP. Bez ``wp-includes/fonts/``: od WordPressa 6.5
+# są tam klasy biblioteki fontów (pomiar fałszywych alarmów, docs/FP_MEASUREMENT.md).
+STATIC_CORE_DIRS = ("wp-includes/images/", "wp-includes/css/", "wp-admin/images/", "wp-admin/css/")
+# Pliki PHP dystrybucji WordPressa w katalogach zasobów (generowany rejestr stylów, WordPress 7.x). Podmieniony plik
+# o tej nazwie wykrywa porównanie z manifestem sum rdzenia, nie reguła położenia.
+CORE_CODE_IN_STATIC_DIRS = frozenset({"wp-includes/css/dist/registry.php"})
 # Położenia, w których kod jest oczekiwany; tam słabsze heurystyki dostają niższą pewność.
 KNOWN_CODE = frozenset({FileClass.CORE, FileClass.PLUGIN, FileClass.THEME})
 BLOB_MIN_BYTES = 4096
+MAX_FINDINGS_PER_RULE = 200  # na przebieg; ponad limit powstaje luka pokrycia z łączną liczbą wykryć (jak w ``integrity``)
 # Od tego rozmiaru treści limit czasu sesji jest sprawdzany przed każdym przejściem reguły treści. Jedno przejście jest
 # liniowe względem treści (najwyżej ``Limits.max_scan_bytes``); mniejsze pliki dzieli sprawdzenie SecureIngest między wpisami.
 CLOCK_CONTENT_BYTES = 64 * 1024
@@ -139,9 +145,10 @@ RULES: dict[str, Rule] = {rule.id: rule for rule in (
          "Nazwa pliku w uploads ma rozszerzenie kodu przed ostatnim rozszerzeniem (np. .php.jpg); taki plik wykonuje się "
          "tylko przy podatnej konfiguracji serwera. To heurystyka nazwy, nie dowód.",
          "Kopie i eksporty nazwane np. plik.php.txt albo plik.php.bak.", spec="WP-FILE-005"),
-    Rule("CODE_IN_UNEXPECTED_LOCATION", 1, "medium", "low", "CODE_FILE_IN_UNEXPECTED_LOCATION",
+    Rule("CODE_IN_UNEXPECTED_LOCATION", 2, "medium", "low", "CODE_FILE_IN_UNEXPECTED_LOCATION",
          "Plik kodu PHP w katalogu, w którym WordPress nie przechowuje kodu. To heurystyka położenia, nie dowód.",
-         "Starsze paczki językowe z plikiem <locale>.php w wp-content/languages; pliki *.l10n.php są pomijane.",
+         "Starsze paczki językowe z plikiem <locale>.php w wp-content/languages; pliki *.l10n.php, katalog wp-includes/fonts "
+         "i rejestr wp-includes/css/dist/registry.php są pomijane.",
          spec="WP-FILE-005"),
     # --- reguły treści plików kodu ---
     Rule("SUSPICIOUS_PHP_EVAL_DECODE", 2, "high", "medium", "EVAL_BASE64_DECODE_PATTERN",
@@ -228,11 +235,36 @@ def path_rules(item: ingest.Evidence) -> list[Detection]:
     elif is_double_extension_in_uploads(rel):
         found.append(detect("DOUBLE_EXTENSION_IN_UPLOADS"))
     if is_code(rel):
-        if rel.startswith(STATIC_CORE_DIRS):
+        if rel.startswith(STATIC_CORE_DIRS) and rel not in CORE_CODE_IN_STATIC_DIRS:
             found.append(detect("CODE_IN_UNEXPECTED_LOCATION", "medium"))
         elif classify(rel) is FileClass.LANGUAGE and not rel.lower().endswith(".l10n.php"):
             found.append(detect("CODE_IN_UNEXPECTED_LOCATION"))
     return found
+
+
+def cap_exceeded(rule: str, total: int, limit: int) -> str:
+    """Tekst luki pokrycia, gdy reguła wyczerpała limit ustaleń na przebieg."""
+    return f"Limit {limit} ustaleń reguły {rule} wyczerpany: wykryć było {total}, pozostałe nie są wymienione w raporcie"
+
+
+class FindingCap:
+    """Limit ustaleń na regułę w całym przebiegu (reguły ścieżki i treści); nadmiar to luka, nie cisza."""
+
+    def __init__(self) -> None:
+        self.detected: Counter = Counter()  # wykrycia według reguły, także te ponad limit
+
+    def admit(self, found: Iterable[Detection]) -> list[Detection]:
+        kept = []
+        for detection in found:
+            self.detected[detection.rule] += 1
+            if self.detected[detection.rule] <= MAX_FINDINGS_PER_RULE:
+                kept.append(detection)
+        return kept
+
+    def finish(self, cover: SourceCoverage) -> None:
+        for rule, total in sorted(self.detected.items()):
+            if total > MAX_FINDINGS_PER_RULE:
+                cover.degrade(cap_exceeded(rule, total, MAX_FINDINGS_PER_RULE))
 
 
 class ContentDetections(list):
