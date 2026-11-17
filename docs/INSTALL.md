@@ -37,7 +37,7 @@ python -m wpincidentlens --files fixtures/site --database fixtures/database.sql 
 
 Po `pip install --no-deps -e .` to samo udostępnia polecenie `wpincidentlens` (`[project.scripts]` w `pyproject.toml`). Wymagane są tylko `--files` i `--output`; pozostałe źródła są opcjonalne, ale ich brak obniża zakres analizy (kod wyjścia 3, ocena bez ustaleń `INCONCLUSIVE` — [ANALYST_GUIDE.md](ANALYST_GUIDE.md)). Pełny opis wejść, wyjść i kodów wyjścia: [FORMATS.md](FORMATS.md).
 
-Dokumentacja w tym katalogu używa dotychczasowej, płaskiej postaci wywołania (`python -m wpincidentlens --files …`). W M7 dochodzą podkomendy (M7, ADR 0011); ich składnię opisuje README i `--help`.
+Dokumentacja w tym katalogu używa płaskiej postaci wywołania (`python -m wpincidentlens --files …`), równoważnej `wpincidentlens analyze --files …` (ADR 0011). Pozostałe podkomendy: `wpincidentlens report verify KATALOG` (spójność katalogu wyników; kody wyjścia w [FORMATS.md](FORMATS.md#report-verify)) i `wpincidentlens version [--json]`. Katalog `--output` z wynikami poprzedniej analizy jest odrzucany (kod 2), chyba że podano `--force`.
 
 Warunki na ścieżki (sprawdzane przed odczytem czegokolwiek, błąd = kod 2):
 

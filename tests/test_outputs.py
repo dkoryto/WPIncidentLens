@@ -137,7 +137,7 @@ def test_interrupted_publish_leaves_views_that_case_json_marks_as_stale(site, tm
     monkeypatch.setattr(os, "replace", replace)
 
     with pytest.raises(OSError):
-        report.write(out, document, json.loads(previous_case), cli.exit_code(document))
+        report.write(out, document, json.loads(previous_case), cli.exit_code(document), force=True)
 
     recorded = json.loads(previous_case)["outputs"]
     assert (out / "case.json").read_bytes() == previous_case

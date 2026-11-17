@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wpincidentlens"
-# PEP 440 nie dopuszcza "0.1.0-poc"; wersja narzędzia w raporcie pozostaje w wpincidentlens/cli.py (VERSION).
-version = "0.1.0"
+# Ta sama wersja co wpincidentlens.__version__ (tool_version w raporcie; test w tests/test_cli.py, ADR 0011).
+version = "0.2.0rc1"
 description = "WPIncidentLens: offline, statyczna analiza powłamaniowa kopii WordPressa"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

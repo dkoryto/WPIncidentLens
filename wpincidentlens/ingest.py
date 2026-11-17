@@ -259,6 +259,24 @@ def check_source(path: str | os.PathLike[str], expect: str = "any") -> None:
     os.close(fd)
 
 
+def present(dir_fd: int, names: Iterable[str]) -> list[str]:
+    """Które z ``names`` mają wpis (dowolnego rodzaju, dowiązania nie są rozwijane) w katalogu ``dir_fd``.
+
+    Służy Reporterowi do odmowy nadpisania wyników (R-92, ADR 0011); niczego nie otwiera ani nie czyta. Wpis, którego
+    stanu nie da się ustalić (np. brak uprawnień), liczy się jako obecny: odmowa jest bezpieczniejsza niż nadpisanie.
+    """
+    found = []
+    for name in names:
+        try:
+            os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            pass
+        found.append(name)
+    return found
+
+
 def resolve_output(output: str | os.PathLike[str], sources: Iterable[str | os.PathLike[str]]) -> Path:
     """Zwraca rzeczywistą ścieżkę katalogu wyników albo odmawia, gdy pokrywa się on ze źródłem dowodów.
 

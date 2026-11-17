@@ -142,7 +142,21 @@ Kod opisuje **pełność analizy, nie wynik** (`cli.exit_code`, ADR 0003 §7). O
 | `0` | `scope_complete`: `files`, `database`, `logs` mają `ANALYZED`, `baseline` — `ANALYZED` albo `NOT_PROVIDED` |
 | `3` | każda inna niepełność: źródło `PARTIAL`, brak `--database` lub `--logs`, plik kodu bez zaufanej referencji (`NOT_CHECKED`), pominięty lub zmieniony wpis, limit, manifest innej wersji lub locale |
 | `4` | co najmniej jedno **podane** źródło ma `FAILED` (np. logi w innym formacie, pusty katalog, zrzut bez tabel rdzenia) |
-| `2` | błąd wywołania (`argparse`), przed analizą |
-| `1` | nieobsłużony wyjątek Pythona (kod `5` ze specyfikacji nie jest wdrożony) |
+| `2` | błąd wywołania (`argparse`), przed analizą; także katalog `--output` z wynikami poprzedniej analizy bez `--force` (R-92) |
+| `5` | błąd narzędzia: nieobsłużony wyjątek (np. błąd zapisu); na stderr tylko nazwa typu wyjątku (ADR 0011) |
 
-`SUSPICIOUS` może mieć kod 0, 3 albo 4; `INCONCLUSIVE` nigdy nie ma kodu 0.
+`SUSPICIOUS` może mieć kod 0, 3 albo 4; `INCONCLUSIVE` nigdy nie ma kodu 0. Te same kody ma forma bez podkomendy (`python -m wpincidentlens --files …`) i `wpincidentlens analyze`.
+
+### `report verify`
+
+`wpincidentlens report verify KATALOG` (ADR 0011) sprawdza katalog wyników; `--json` wypisuje `status`, `exit_code`, `problems` (plik, kod problemu), `unchecked` (powody statusu `HASHES_ONLY`) i `notes`.
+
+| Kod | `status` | Kiedy |
+|---|---|---|
+| `0` | `VERIFIED` | skróty zgodne z `case.json`, `report.json` spełnia `poc-1`, widoki i `report.html` wyliczone ponownie z `report.json` są identyczne |
+| `1` | `MISMATCH` | plik zmieniony, brakujący, nadmiarowy, dowiązanie lub plik specjalny, zbyt duży (`--max-file-bytes`), widok niezgodny z `report.json` (`INCONSISTENT`), raport niezgodny z kontraktem, `tool_version` spoza PEP 440 albo nowszy niż narzędzie (`INVALID_TOOL_VERSION`), pole `case.json` sprzeczne z raportem |
+| `2` | `UNUSABLE` | brak katalogu albo `case.json`, `case.json` niepoprawny, bez `outputs` albo z nazwą spoza listy plików wyniku, brak pamięci; także błąd wywołania |
+| `3` | `HASHES_ONLY` | brak problemów, ale spójności widoków z `report.json` **nie sprawdzono**: wynik starszej wersji narzędzia (`OLDER_TOOL_VERSION`), raport przeniesiony z 0.1.0 (`MIGRATED_REPORT`), `report.json` większy niż `--max-report-bytes` (`TOO_LARGE_TO_VERIFY`, domyślnie 64 MiB) — wynik nie jest zweryfikowany |
+| `5` | — | błąd narzędzia |
+
+Weryfikacja nie potwierdza autentyczności źródeł ani autorstwa wyniku: spójna podmiana wszystkich plików razem z `case.json` ją przejdzie.

@@ -15,7 +15,19 @@ python -m pip install --no-deps -e .
 python -m ruff check .
 python -m pytest -q
 python -m wpincidentlens --files fixtures/site --database fixtures/database.sql --logs fixtures/logs --baseline fixtures/baseline.json --output results --case-id DEMO-001
+python -m wpincidentlens report verify results
+python -m wpincidentlens version
 ```
+
+### Polecenia (ADR 0011)
+
+| Polecenie | Działanie | Kody wyjścia |
+|---|---|---|
+| `wpincidentlens analyze --files … --output KATALOG …` | analiza; forma bez podkomendy (`wpincidentlens --files …`, `python -m wpincidentlens --files …`) działa tak samo | 0 — zakres pełny (ustalenia możliwe); 2 — błąd wywołania; 3 — zakres niepełny; 4 — podane źródło nieprzetworzone; 5 — błąd narzędzia |
+| `wpincidentlens report verify KATALOG` (albo `--case KATALOG`; `--json`, `--max-file-bytes`, `--max-report-bytes`) | spójność katalogu wyników: SHA-256 plików względem `case.json`, kontrakt `poc-1` `report.json`, widoki i `report.html` wyliczone ponownie z `report.json`, pliki brakujące, nadmiarowe, dowiązania i pliki specjalne (bez podążania), zbyt duże | 0 — spójny (`VERIFIED`); 1 — niezgodność, także `tool_version` spoza PEP 440 albo nowszy niż narzędzie; 2 — wejście nieużyteczne (brak katalogu lub `case.json`, `case.json` niepoprawny, brak pamięci) albo błąd wywołania; 3 — tylko skróty (`HASHES_ONLY`): pliki zgodne z `case.json`, ale widoków **nie** wyliczono ponownie (wynik starszej wersji narzędzia, raport przeniesiony z 0.1.0, `report.json` ponad `--max-report-bytes`) — wynik niezweryfikowany; 5 — błąd narzędzia |
+| `wpincidentlens version [--json]` | wersja narzędzia, schematów `poc-1` i `case-poc-1`, identyfikator, wersja i SHA-256 rejestru reguł, wersja Pythona | 0 |
+
+Kod wyjścia analizy nie jest oceną kompromitacji (ocenę podaje `assessment` w `report.json`). Katalog `--output`, w którym są już pliki wyniku (`report.json`, `case.json`, widoki — także jako dowiązania), jest odrzucany przed analizą i ponownie tuż przed zapisem (kod 2, nic nie zostaje zapisane); `--force` zastępuje je (każdy plik atomowo, `case.json` ostatni, bez archiwizacji poprzedniej wersji). Inne pliki w katalogu nie blokują zapisu. `report verify` nie potwierdza autentyczności źródeł ani autorstwa wyniku: kto podmieni spójnie wszystkie pliki razem z `case.json`, przejdzie weryfikację. Wypisuje tylko nazwy plików (zneutralizowane) i kody problemów, nigdy ich treść.
 
 Silnik nie ma zależności runtime (tylko biblioteka standardowa). Narzędzia testowe i deweloperskie instaluje się z `requirements/dev.lock` — wersje przypięte, każda paczka z hashem SHA-256, więc pip odrzuci pakiet o innej zawartości. Po zmianie extras w `pyproject.toml` lock generuje się ponownie (polecenie jest w nagłówku pliku; test `tests/test_supply_chain.py` wykrywa rozjazd):
 
@@ -134,7 +146,7 @@ install -d -m 0700 results
 cd docker && docker compose run --build --rm --user "$(id -u):$(id -g)" wpincidentlens
 ```
 
-Nie nadawaj katalogowi wyników praw `777`: każdy użytkownik hosta mógłby podmienić lub odczytać wyniki.
+Nie nadawaj katalogowi wyników praw `777`: każdy użytkownik hosta mógłby podmienić lub odczytać wyniki. Ponowne uruchomienie do tego samego `results` jest odrzucane (kod 2, R-92); użyj pustego katalogu albo dopisz `--force` na końcu polecenia, np. `docker compose run --rm wpincidentlens --files /evidence/files … --output /results --force` (argumenty zastępują `command` z compose).
 
 `docker/compose.yaml` ustawia: brak sieci, rootfs tylko do odczytu, dowody zamontowane `:ro`, UID 65532, `--cap-drop ALL`, `no-new-privileges`, limity PID (128), pamięci (1 GiB, bez swap) i CPU (1), `/tmp` jako tmpfs `noexec,nosuid`. Te same ograniczenia, jako argumenty `docker run`, są w `docker/run-flags.txt`; zgodność obu plików i oczekiwań sondy sprawdza `tests/test_container_probe.py`. Zadanie CI `container` (`.github/workflows/container.yml`) buduje obraz i **mierzy** izolację sondą `docker/probe.py` uruchomioną w kontenerze z tymi flagami (UID/GID, odmowa zapisu do `/`, `/app` i dowodów, `noexec` na `/tmp`, capability i `NoNewPrivs` z `/proc/self/status`, tylko interfejs `lo` i nieudane połączenie, limity cgroup v2). Następnie uruchamia `command` z compose w kontenerze i to samo polecenie na hoście i wymaga tej samej oceny, ustaleń i kodu wyjścia. Wynik sondy, porównanie i SBOM obrazu (CycloneDX) są artefaktem `container-measurement`. Pomiar dotyczy runnera `ubuntu-24.04` (cgroup v2); na innym hoście uruchom sondę samodzielnie (polecenie w workflow).
 
