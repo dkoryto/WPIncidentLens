@@ -180,6 +180,8 @@ Raporty w starszym schemacie 0.1.0 przenosi czysta funkcja `wpincidentlens.migra
 
 ## Dokumentacja projektu
 
+Dokumentacja PoC (M7): [instalacja i uruchomienie](docs/INSTALL.md), [architektura](docs/ARCHITECTURE.md), [formaty wejścia i wyjścia](docs/FORMATS.md), [przewodnik analityka](docs/ANALYST_GUIDE.md), [przykładowa sprawa na danych syntetycznych](examples/synthetic-case/README.md). Reguły i fałszywe alarmy: [docs/RULES.md](docs/RULES.md); model zagrożeń: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md); decyzje: [docs/adr/](docs/adr/).
+
 Szczegóły architektury, zagrożeń, warunków akceptacji, roadmapy i przeglądu inżynierskiego znajdują się w `docs/WPIncidentLens_Specyfikacja_Techniczna.md`, `docs/WPIncidentLens_Specyfikacja_Senior_PoC_2026-11-09.md`, `docs/WPIncidentLens_Plan_Realizacji_Kamienie_Milowe_2026-11-11.pdf` i plikach DOCX w katalogu `docs/`.
 
 
