@@ -28,6 +28,8 @@ from .outputs import to_json as _json
 REPORT_JSON = "report.json"
 REPORT_HTML = "report.html"
 CASE_JSON = "case.json"
+# Wszystkie pliki, które zapisuje ``write``; ich obecność w katalogu wyników blokuje zapis bez ``force`` (R-92, ADR 0011).
+RESULT_FILES = (REPORT_JSON, REPORT_HTML, *outputs.VIEWS, CASE_JSON)
 
 
 class OutputRefusal(Exception):
@@ -40,6 +42,9 @@ class OutputRefusal(Exception):
     def __str__(self) -> str:
         if self.reason in ("ELOOP", "ENOTDIR"):  # symlink daje ELOOP (macOS) albo ENOTDIR (Linux)
             return "katalog wyników jest dowiązaniem symbolicznym albo nie jest katalogiem; podaj ścieżkę rzeczywistą"
+        if self.reason == "EXISTS":
+            return ("katalog wyników zawiera już wyniki analizy; podaj nowy katalog albo użyj --force, "
+                    "aby je zastąpić (poprzednia wersja nie jest archiwizowana)")
         return f"nie można przygotować katalogu wyników ({self.reason})"
 
 
@@ -236,9 +241,27 @@ def case_record(case: dict, report: dict, report_sha256: str, exit_code: int, ou
     return record
 
 
-def write(directory: Path, report: dict, case: dict, exit_code: int) -> None:
+def existing_results(directory: Path) -> list[str]:
+    """Nazwy z ``RESULT_FILES``, które już są w katalogu wyników; katalog, którego jeszcze nie ma, nie ma ich wcale."""
+    try:
+        dir_fd = _open_directory(directory, create=False)
+    except OutputRefusal as refusal:
+        if refusal.reason == "ENOENT":
+            return []
+        raise
+    try:
+        return ingest.present(dir_fd, RESULT_FILES)
+    finally:
+        os.close(dir_fd)
+
+
+def write(directory: Path, report: dict, case: dict, exit_code: int, *, force: bool = False) -> None:
     """Tworzy katalog wyników, jeśli go nie ma, i zapisuje w nim ``report.json``, ``report.html``, widoki z ``outputs.VIEWS``
     oraz ``case.json``.
+
+    Bez ``force`` katalog, w którym jest już którykolwiek z ``RESULT_FILES`` (także jako dowiązanie), jest odrzucany
+    (``OutputRefusal("EXISTS")``), zanim powstanie jakikolwiek plik. Sprawdzenie odbywa się na deskryptorze katalogu,
+    tuż przed zapisem, więc obejmuje też wyniki, które pojawiły się w trakcie analizy (R-92, ADR 0011).
 
     Wszystkie pliki przechodzą przez jeden ``_publish``; ``case.json`` jest zamieniany jako ostatni i podaje SHA-256
     każdego pozostałego pliku (``report`` i ``outputs``). Pliki JSON są kodowane i zapisywane porcjami, więc w pamięci
@@ -252,6 +275,8 @@ def write(directory: Path, report: dict, case: dict, exit_code: int) -> None:
 
     dir_fd = _open_directory(directory, create=True)
     try:
+        if not force and ingest.present(dir_fd, RESULT_FILES):
+            raise OutputRefusal("EXISTS")
         _publish(dir_fd, files, seal)
     finally:
         os.close(dir_fd)

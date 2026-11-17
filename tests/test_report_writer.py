@@ -21,12 +21,12 @@ DESCRIBED = {"schema_version": "case-poc-1", "case_id": "T101-SYNTH", "operator_
              "created_at_utc": "2026-11-11T00:00:00+00:00", "sources": {}, "limits": {}, "flags": {}}
 
 
-def run(site: Path, out: Path) -> int:
-    return cli.main(["--files", str(site), "--output", str(out), "--case-id", "T101-SYNTH"])
+def run(site: Path, out: Path, *flags: str) -> int:
+    return cli.main(["--files", str(site), "--output", str(out), "--case-id", "T101-SYNTH", *flags])
 
 
-def publish(directory: Path, document: dict) -> None:
-    report.write(directory, document, DESCRIBED, cli.exit_code(document))
+def publish(directory: Path, document: dict, *, force: bool = False) -> None:
+    report.write(directory, document, DESCRIBED, cli.exit_code(document), force=force)
 
 
 @pytest.fixture
@@ -68,7 +68,7 @@ def test_symlink_named_like_a_result_is_replaced_and_its_target_left_untouched(s
     out.mkdir()
     (out / name).symlink_to(victim)
 
-    run(site, out)
+    run(site, out, "--force")  # bez --force wpis o nazwie wyniku blokuje zapis (R-92)
 
     assert sha256(victim) == before
     assert stat.S_ISREG((out / name).lstat().st_mode)
@@ -78,7 +78,7 @@ def test_dangling_symlink_named_like_a_result_does_not_create_its_target(site, o
     out.mkdir()
     (out / "report.json").symlink_to(tmp_path / "planted.json")
 
-    run(site, out)
+    run(site, out, "--force")
 
     assert not (tmp_path / "planted.json").exists()
 
@@ -165,7 +165,7 @@ def test_failed_write_keeps_the_previous_results_intact(out, document, monkeypat
     _fail(monkeypatch, call)
 
     with pytest.raises(OSError):
-        publish(out, document)
+        publish(out, document, force=True)
 
     assert {name: (out / name).read_bytes() for name in os.listdir(out)} == previous
 
@@ -197,3 +197,84 @@ def test_value_that_cannot_be_encoded_is_neutralised_instead_of_losing_the_html_
     publish(out, document)
 
     assert "synthetic � gap" in (out / "report.html").read_text(encoding="utf-8")
+
+
+# --- bez nadpisania wyników bez --force (R-92, ADR 0011) ----------------------------------------------
+
+@pytest.mark.parametrize("name", ["report.json", "case.json", "run.log"])
+def test_directory_with_a_result_file_is_refused_without_force_and_nothing_is_written(site, out, name, capsys, monkeypatch):
+    previous = write(out / name, "previous synthetic result").read_bytes()
+    write(out / "notes.txt", "operator notes")
+    monkeypatch.setattr(cli, "compose_report", lambda *args, **kwargs: pytest.fail("analiza nie powinna się zacząć"))
+
+    with pytest.raises(SystemExit) as refusal:
+        run(site, out)
+
+    assert refusal.value.code == 2
+    assert "--force" in capsys.readouterr().err
+    assert sorted(os.listdir(out)) == sorted([name, "notes.txt"])  # bez plików tymczasowych
+    assert (out / name).read_bytes() == previous
+
+
+def test_symlink_named_like_a_result_also_blocks_writing_without_force(site, out):
+    victim = site / "index.php"
+    before = sha256(victim)
+    out.mkdir()
+    (out / "report.html").symlink_to(victim)
+
+    with pytest.raises(SystemExit):
+        run(site, out)
+
+    assert sha256(victim) == before
+    assert (out / "report.html").is_symlink() and os.listdir(out) == ["report.html"]
+
+
+def test_unrelated_files_in_the_output_directory_do_not_block_writing(site, out):
+    write(out / "notes.txt", "operator notes")
+
+    assert run(site, out) in (0, 3)
+    assert sorted(os.listdir(out)) == sorted([*OUTPUTS, "notes.txt"])
+
+
+def test_force_replaces_every_previous_result(site, out):
+    previous = {name: write(out / name, "previous synthetic result").read_bytes() for name in OUTPUTS}
+
+    assert run(site, out, "--force") in (0, 3)
+
+    assert sorted(os.listdir(out)) == sorted(OUTPUTS)
+    assert all((out / name).read_bytes() != previous[name] for name in OUTPUTS)
+
+
+def test_result_that_appears_during_analysis_blocks_the_write(site, out, monkeypatch, capsys):
+    """Sprawdzenie przed analizą nie wystarcza: Reporter powtarza je na deskryptorze katalogu tuż przed zapisem."""
+    tamper_before_reverification(monkeypatch, lambda: write(out / "case.json", "concurrent synthetic run"))
+
+    with pytest.raises(SystemExit) as refusal:
+        run(site, out)
+
+    assert refusal.value.code == 2
+    assert "--force" in capsys.readouterr().err
+    assert os.listdir(out) == ["case.json"] and (out / "case.json").read_text() == "concurrent synthetic run"
+
+
+def test_writer_refuses_existing_results_unless_forced(out, document):
+    write(out / "findings.json", "previous synthetic result")
+
+    with pytest.raises(report.OutputRefusal) as refusal:
+        publish(out, document)
+
+    assert refusal.value.reason == "EXISTS"
+    assert os.listdir(out) == ["findings.json"]
+    publish(out, document, force=True)
+    assert sorted(os.listdir(out)) == sorted(OUTPUTS)
+
+
+def test_unexpected_write_error_ends_with_tool_error_code_without_its_message(site, out, monkeypatch, capsys):
+    def broken(*args, **kwargs):
+        raise OSError(28, "synthetic secret-bearing message")
+    monkeypatch.setattr(report, "write", broken)
+
+    assert run(site, out) == cli.EXIT_TOOL_ERROR
+
+    err = capsys.readouterr().err
+    assert "OSError" in err and "synthetic secret-bearing message" not in err

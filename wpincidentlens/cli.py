@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import sys
 from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import case, files, ingest, integrity, models, privacy, report, rules, yarax
+from . import __version__, case, files, ingest, integrity, models, privacy, report, rules, yarax
 from . import database as database_scan
 from .analysis import Detection, SourceCoverage
 from .correlate import DEFAULT_WINDOW_SECONDS, Correlation, check_window, correlate, focus as _focus, timeline as _timeline  # noqa: F401  (testy wołają _timeline przez cli)
@@ -17,10 +18,11 @@ from .httplog import FORMATS as FORMATS_OF_LOGS, LogConfig, scan_logs
 from .sqldump import iter_insert_rows  # noqa: F401  (ADR 0001: testy wołają go przez cli)
 from .analysis import evidence_of as _evidence
 
-VERSION = "0.1.0-poc"
+VERSION = __version__
 DISCLAIMER = "Brak alertów nie dowodzi braku włamania. PoC, nie certyfikacja śledcza."
-# Kody wyjścia (specyfikacja §11, ADR 0003): 2 zgłasza argparse przy błędzie wywołania; ustalenia nie zmieniają kodu.
-EXIT_COMPLETE, EXIT_PARTIAL, EXIT_UNPROCESSED = 0, 3, 4
+# Kody wyjścia (specyfikacja §11, ADR 0003, ADR 0011): 2 zgłasza argparse przy błędzie wywołania; ustalenia nie zmieniają kodu;
+# 5 to błąd narzędzia (nieobsłużony wyjątek, np. błąd zapisu). ``report verify`` ma własne kody (``verify.EXIT_*``).
+EXIT_COMPLETE, EXIT_USAGE, EXIT_PARTIAL, EXIT_UNPROCESSED, EXIT_TOOL_ERROR = 0, 2, 3, 4, 5
 # Materiał dowodowy otwiera wyłącznie wpincidentlens.ingest (ADR 0002 D4); ten moduł dostaje już przeczytane bajty.
 MAX_FILES = ingest.Limits().max_files
 MAX_SCAN_BYTES = ingest.Limits().max_scan_bytes
@@ -231,14 +233,22 @@ def _timeout_seconds(value: str) -> int:
     return seconds
 
 
-def main(argv: list[str] | None = None) -> int:
+SUBCOMMANDS = ("analyze", "report", "version")
+TOOL_ERROR = ("wpincidentlens: błąd narzędzia ({name}); wynik mógł nie zostać zapisany w całości — "
+              "sprawdź katalog wyników poleceniem „wpincidentlens report verify KATALOG”")
+
+
+def _analysis_parser(prog: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="WPIncidentLens PoC — statyczna analiza kopii WordPressa, bazy SQL i logów",
+        prog=prog,
+        description="WPIncidentLens PoC — statyczna analiza kopii WordPressa, bazy SQL i logów. Podkomendy: analyze "
+                    "(to samo co forma bez podkomendy), report verify KATALOG, version; pomoc: wpincidentlens "
+                    "PODKOMENDA --help.",
         epilog="Kody wyjścia: 0 — zakres analizy pełny (ustalenia możliwe); 2 — błąd wywołania; 3 — zakres niepełny: "
                "najczęściej plik kodu niezweryfikowany względem zaufanej referencji (bez --baseline i --core-checksums "
                "dotyczy to każdego pliku kodu) albo brak --database lub --logs; także pominięte lub zmienione wpisy, "
                "limit, manifest sum innej wersji lub locale; 4 — podane źródło nieprzetworzone. "
-               "Kod nie jest oceną kompromitacji: ocenę podaje pole assessment w report.json.")
+               "5 — błąd narzędzia. Kod nie jest oceną kompromitacji: ocenę podaje pole assessment w report.json.")
     parser.add_argument("--files", type=Path, required=True)
     parser.add_argument("--database", type=Path)
     parser.add_argument("--database-format", choices=database_scan.FORMATS, default="sql",
@@ -278,6 +288,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--yara-timeout", type=_timeout_seconds, default=yarax.FILE_TIMEOUT_SECONDS, metavar="SECONDS",
                         help="Limit czasu skanu YARA jednego pliku w sekundach (%(default)s)")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--force", action="store_true",
+                        help="Zastąp wyniki poprzedniej analizy w katalogu --output (każdy plik zamieniany atomowo, case.json "
+                             "ostatni; poprzednia wersja nie jest archiwizowana). Bez flagi katalog z wynikami jest odrzucany (kod 2)")
     defaults = ingest.Limits()
     parser.add_argument("--allow-hardlinks", action="store_true",
                         help="Czytaj pliki z wieloma dowiązaniami twardymi (domyślnie pomijane z luką pokrycia)")
@@ -292,6 +305,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-depth", type=int, default=defaults.max_depth, help="Limit głębokości katalogów (%(default)s)")
     parser.add_argument("--max-path-bytes", type=int, default=defaults.max_path_bytes,
                         help="Limit długości ścieżki względnej do źródła w bajtach (%(default)s)")
+    return parser
+
+
+def _analyze(argv: list[str], prog: str) -> int:
+    parser = _analysis_parser(prog)
     args = parser.parse_args(argv)
     try:
         context = case.build(
@@ -305,6 +323,12 @@ def main(argv: list[str] | None = None) -> int:
                     "max_depth": args.max_depth, "max_path_bytes": args.max_path_bytes})
     except case.CaseError as invalid:
         parser.error(str(invalid))
+    try:  # R-92: odmowa przed analizą; Reporter sprawdza to jeszcze raz tuż przed zapisem
+        existing = [] if args.force else report.existing_results(context.output)
+    except report.OutputRefusal as refusal:
+        parser.error(f"--output: {refusal}")
+    if existing:
+        parser.error(f"--output: {report.OutputRefusal('EXISTS')} (obecne m.in.: {', '.join(existing[:3])})")
     session = ingest.Session(context.limits, allow_hardlinks=context.allow_hardlinks, reverify=context.reverify)
     baseline = None
     if context.baseline:
@@ -343,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
         described["yara"] = yara.describe()
     code = exit_code(output)
     try:
-        report.write(context.output, output, described, code)
+        report.write(context.output, output, described, code, force=args.force)
     except report.OutputRefusal as refusal:
         parser.error(f"--output: {refusal}")
     if not context.pseudonymize and privacy.personal_data(output):
@@ -351,6 +375,97 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps({"assessment": output["assessment"], "scope_complete": output["scope_complete"], "findings":len(output["findings"]),
                       "coverage_gaps":len(output["coverage_gaps"]), "exit_code": code, "report":str(context.output / "report.html")}, ensure_ascii=False))
     return code
+
+
+def _version_info() -> dict:
+    return {"tool": "WPIncidentLens PoC", "tool_version": VERSION, "report_schema": models.SCHEMA_VERSION,
+            "case_schema": case.SCHEMA_VERSION, "ruleset": rules.descriptor(), "python": platform.python_version()}
+
+
+def _version(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="wpincidentlens version",
+                                     description="Wersja narzędzia, schematów raportu i case.json, rejestru reguł oraz Pythona.")
+    parser.add_argument("--json", action="store_true", help="Wypisz jeden obiekt JSON zamiast tekstu")
+    args = parser.parse_args(argv)
+    info = _version_info()
+    if args.json:
+        print(json.dumps(info, ensure_ascii=True))
+        return EXIT_COMPLETE
+    ruleset = info["ruleset"]
+    print(f"{info['tool']} {info['tool_version']}\n"
+          f"schemat raportu: {info['report_schema']}\n"
+          f"schemat case.json: {info['case_schema']}\n"
+          f"reguły: {ruleset['id']} {ruleset['version']} (sha256 {ruleset['sha256']})\n"
+          f"Python: {info['python']}")
+    return EXIT_COMPLETE
+
+
+def _report_command(argv: list[str]) -> int:
+    from . import verify  # import leniwy: verify korzysta z cli.exit_code
+
+    parser = argparse.ArgumentParser(prog="wpincidentlens report", description="Operacje na zapisanym katalogu wyników.")
+    commands = parser.add_subparsers(dest="command", required=True, metavar="verify")
+    checking = commands.add_parser(
+        "verify", prog="wpincidentlens report verify",
+        description="Sprawdza spójność katalogu wyników: SHA-256 plików względem case.json, kontrakt poc-1 report.json, "
+                    "zgodność widoków i report.html z report.json, brakujące i nadmiarowe pliki. Nie potwierdza "
+                    "autentyczności źródeł ani autorstwa wyniku (brak podpisu).",
+        epilog=f"Kody wyjścia: {verify.EXIT_VERIFIED} — wynik spójny; {verify.EXIT_MISMATCH} — niezgodność (plik zmieniony, "
+               f"brakujący, nadmiarowy, nieaktualny, niebędący zwykłym plikiem albo zbyt duży); {verify.EXIT_UNUSABLE} — "
+               f"wejście nieużyteczne (brak katalogu albo case.json, case.json niepoprawny) lub błąd wywołania; "
+               f"{EXIT_TOOL_ERROR} — błąd narzędzia.")
+    checking.add_argument("directory", type=Path, nargs="?", metavar="KATALOG", help="Katalog wyników (--output analizy)")
+    checking.add_argument("--case", type=Path, metavar="KATALOG", help="To samo co KATALOG (zapis ze specyfikacji §11)")
+    checking.add_argument("--max-file-bytes", type=int, default=verify.MAX_FILE_BYTES,
+                          help="Limit rozmiaru jednego pliku wyniku; większy plik jest odrzucany bez odczytu (%(default)s)")
+    checking.add_argument("--json", action="store_true", help="Wypisz jeden obiekt JSON (ASCII) zamiast tekstu")
+    args = parser.parse_args(argv)
+    if (args.directory is None) == (args.case is None):
+        checking.error("podaj dokładnie jeden katalog: KATALOG albo --case KATALOG")
+    if args.max_file_bytes <= 0:
+        checking.error("--max-file-bytes: wymagana liczba dodatnia")
+    try:
+        result = verify.verify(args.directory or args.case, max_file_bytes=args.max_file_bytes)
+    except verify.Unusable as unusable:
+        problem = str(unusable)
+        if args.json:
+            print(json.dumps({"status": "UNUSABLE", "exit_code": verify.EXIT_UNUSABLE, "error": problem}, ensure_ascii=True))
+        else:
+            print(f"report verify: NIE MOŻNA ZWERYFIKOWAĆ — {problem}", file=sys.stderr)
+        return verify.EXIT_UNUSABLE
+    status = "VERIFIED" if result.exit_code == verify.EXIT_VERIFIED else "MISMATCH"
+    if args.json:
+        print(json.dumps({"status": status, "exit_code": result.exit_code, "case_id": result.case_id, "files_checked": result.checked,
+                          "problems": [{"file": name, "problem": code, "detail": detail} for name, code, detail in result.problems],
+                          "notes": result.notes}, ensure_ascii=True))
+        return result.exit_code
+    if status == "VERIFIED":
+        print(f"report verify: ZGODNY — sprawa {result.case_id}, sprawdzono plików: {result.checked}")
+    else:
+        print(f"report verify: NIEZGODNY — sprawa {result.case_id}, problemów: {len(result.problems)}")
+        for name, code, detail in result.problems:
+            print(f"  {code} {name}: {verify.PROBLEMS[code]}{f' ({detail})' if detail else ''}")
+    for note in result.notes:
+        print(f"  uwaga: {note}")
+    print("Weryfikacja sprawdza spójność plików wyniku ze skrótami w case.json i z report.json; nie potwierdza "
+          "autentyczności źródeł ani autorstwa wyniku.")
+    return result.exit_code
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Podkomendy ``analyze``, ``report verify``, ``version``; argumenty bez podkomendy to ``analyze`` (ADR 0011)."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        if argv[:1] == ["version"]:
+            return _version(argv[1:])
+        if argv[:1] == ["report"]:
+            return _report_command(argv[1:])
+        if argv[:1] == ["analyze"]:
+            return _analyze(argv[1:], "wpincidentlens analyze")
+        return _analyze(argv, "wpincidentlens")
+    except Exception as failure:  # noqa: BLE001 — kod 5; komunikat wyjątku mógłby nieść treść dowodów, więc tylko jego typ
+        print(TOOL_ERROR.format(name=type(failure).__name__), file=sys.stderr)
+        return EXIT_TOOL_ERROR
 
 if __name__ == "__main__":
     raise SystemExit(main())
