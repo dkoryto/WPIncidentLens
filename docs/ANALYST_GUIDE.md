@@ -175,7 +175,7 @@ Niezależnie od flagi teksty swobodne przechodzą redakcję sekretów (`redact`)
 4. Ustalenia od najwyższej wagi; dla każdego: obserwacja, położenie, odczyt fragmentu z kopii po `offset`, zestawienie ze znanymi fałszywymi alarmami (RULES.md).
 5. Ustalenia korelacyjne i oś czasu — z zastrzeżeniami z rozdziału 8.
 6. Inwentarz bazy (administratorzy, cron, aktywne wtyczki) — przegląd ręczny.
-7. `case.json`: `ruleset.version`, limity, flagi, zgodność skrótów `outputs` z plikami.
+7. `case.json`: `ruleset.version`, limity, flagi; spójność plików z `outputs` i z `report.json` sprawdza `wpincidentlens report verify KATALOG` — za zweryfikowany uznaj tylko kod 0 (`VERIFIED`); kod 3 (`HASHES_ONLY`) znaczy, że widoków nie porównano z raportem (np. wynik starszej wersji narzędzia).
 8. Notatka z analizy: ocena, luki jako ograniczenia wniosku, ustalenia potwierdzone i odrzucone z uzasadnieniem.
 9. Przed przekazaniem raportu: dane osobowe (rozdział 9).
 

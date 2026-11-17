@@ -59,7 +59,8 @@ def test_fresh_results_verify(results, capsys):
     code, outcome = check(results, capsys)
 
     assert code == verify.EXIT_VERIFIED == 0
-    assert outcome == {"status": "VERIFIED", "exit_code": 0, "case_id": "T701-SYNTH", "files_checked": 9, "problems": [], "notes": []}
+    assert outcome == {"status": "VERIFIED", "exit_code": 0, "case_id": "T701-SYNTH", "files_checked": 9, "problems": [],
+                       "unchecked": [], "notes": []}
 
 
 def test_text_output_names_the_verdict_and_the_limits_of_verification(results, capsys):
@@ -78,7 +79,7 @@ def test_pseudonymized_results_verify(demo_case, tmp_path, capsys):
     assert check(out, capsys)[0] == 0
 
 
-def test_migrated_report_from_another_tool_version_verifies_by_digests_with_a_note(tmp_path, capsys):
+def test_migrated_report_is_checked_by_digests_only_and_never_reported_as_verified(tmp_path, capsys):
     document = migrate_0_1_0(json.loads(LEGACY_REPORT_PATH.read_text(encoding="utf-8")))
     described = {"schema_version": "case-poc-1", "case_id": document["case_id"], "operator_id": None,
                  "created_at_utc": "2026-11-11T00:00:00+00:00", "sources": {}, "limits": {}, "flags": {}}
@@ -86,8 +87,97 @@ def test_migrated_report_from_another_tool_version_verifies_by_digests_with_a_no
 
     code, outcome = check(tmp_path / "migrated", capsys)
 
-    assert code == 0 and outcome["problems"] == []
-    assert len(outcome["notes"]) == 1 and "innej wersji narzędzia" in outcome["notes"][0]
+    assert code == verify.EXIT_HASHES_ONLY == 3
+    assert (outcome["status"], outcome["problems"], outcome["unchecked"]) == ("HASHES_ONLY", [], ["MIGRATED_REPORT"])
+
+
+# --- wersja narzędzia w wyniku (przegląd bezpieczeństwa T-701) -----------------------------------------------
+
+def downgrade(directory: Path, version: str) -> None:
+    """Podmiana z przeglądu: starsza ``tool_version`` w report.json i case.json, fałszywy report.html, skróty odświeżone."""
+    edit_json(directory / "report.json", lambda document: document.update(tool_version=version))
+    edit_json(directory / "case.json", lambda case: case.update(tool_version=version))
+    write(directory / "report.html", "<html>No findings. Site CLEAN.</html>")
+    reseal(directory)
+
+
+def test_older_tool_version_skips_recompute_but_is_not_verified(results, capsys):
+    downgrade(results, "0.1.0")
+
+    code, outcome = check(results, capsys)
+
+    assert code == verify.EXIT_HASHES_ONLY and outcome["status"] == "HASHES_ONLY"
+    assert outcome["unchecked"] == ["OLDER_TOOL_VERSION"]
+    capsys.readouterr()
+    assert cli.main(["report", "verify", str(results)]) == 3
+    text = capsys.readouterr().out
+    assert "TYLKO SKRÓTY" in text and "NIE sprawdzono" in text and "ZGODNY" not in text
+
+
+@pytest.mark.parametrize("version", ["0.0.0-old", "0.1.0-poc", "9.9.9", "0.2.0", "0.2.0rc2", "1.0+local"])
+def test_tool_version_outside_pep440_or_newer_than_the_tool_is_a_mismatch(results, capsys, version):
+    downgrade(results, version)
+
+    code, outcome = check(results, capsys)
+
+    assert code == 1 and ("report.json", "INVALID_TOOL_VERSION") in problems(outcome)
+
+
+def test_same_tool_version_with_a_forged_html_is_inconsistent(results, capsys):
+    downgrade(results, cli.VERSION)
+
+    assert problems(check(results, capsys)[1]) == {("report.html", "INCONSISTENT")}
+
+
+@pytest.mark.parametrize("older, newer", [("0.1.0", "0.2.0rc1"), ("0.2.0.dev1", "0.2.0a1"), ("0.2.0a1", "0.2.0b1"), ("0.2.0b2", "0.2.0rc1"),
+                                          ("0.2.0rc1", "0.2"), ("0.2.0", "0.2.0.post1"), ("0.2.0rc1.dev1", "0.2.0rc1"), ("0.9", "0.10")])
+def test_version_order_follows_pep440(older, newer):
+    assert verify.version_key(older) < verify.version_key(newer)
+
+
+def test_version_key_rejects_strings_outside_the_supported_subset():
+    assert [verify.version_key(text) for text in ("0.1.0-poc", "v1", "1..2", "1.0 ", "", None, 1)] == [None] * 7
+    assert verify.version_key("0.2") == verify.version_key("0.2.0")
+
+
+# --- limity i dane wrogie dla ponownego wyliczenia ----------------------------------------------------------
+
+def test_report_json_above_the_parse_limit_is_hashed_but_not_verified(results, capsys):
+    limit = (results / "report.json").stat().st_size - 1
+
+    code, outcome = check(results, capsys, "--max-report-bytes", str(limit))
+
+    assert code == 3 and outcome["problems"] == [] and outcome["unchecked"] == ["TOO_LARGE_TO_VERIFY"]
+
+
+def test_report_json_above_the_parse_limit_is_still_compared_by_digest(results, capsys):
+    with (results / "report.json").open("a", encoding="utf-8") as handle:
+        handle.write(" ")
+
+    code, outcome = check(results, capsys, "--max-report-bytes", "16")
+
+    assert code == 1 and problems(outcome) == {("report.json", "MODIFIED")}
+
+
+def test_exception_while_recomputing_views_is_a_report_problem_not_a_tool_error(results, capsys, monkeypatch):
+    def broken(*args, **kwargs):
+        raise ZeroDivisionError("synthetic value from report")
+    monkeypatch.setattr(report, "render_html", broken)
+
+    code, outcome = check(results, capsys)
+
+    assert code == 1 and problems(outcome) == {("report.json", "INVALID_REPORT")}
+    assert "synthetic value" not in json.dumps(outcome)
+
+
+def test_memory_error_is_unusable_input_not_a_tool_error(results, capsys, monkeypatch):
+    def exhausted(*args, **kwargs):
+        raise MemoryError
+    monkeypatch.setattr(verify.models.Report, "from_dict", exhausted)
+
+    code, outcome = check(results, capsys)
+
+    assert code == 2 and "pamięci" in outcome["error"]
 
 
 # --- podmiany i braki ---------------------------------------------------------------------------------------
@@ -259,6 +349,13 @@ def test_case_json_listing_a_name_outside_the_result_files_is_unusable(results, 
                                      '{"schema_version": "case-poc-2"}'])
 def test_unreadable_case_json_is_unusable(results, capsys, content):
     write(results / "case.json", content)
+
+    assert check(results, capsys)[0] == 2
+
+
+@pytest.mark.parametrize("value", [True, 3.0, "3", None])
+def test_case_json_exit_code_that_is_not_an_integer_is_unusable(results, capsys, value):
+    edit_json(results / "case.json", lambda case: case.update(exit_code=value))
 
     assert check(results, capsys)[0] == 2
 

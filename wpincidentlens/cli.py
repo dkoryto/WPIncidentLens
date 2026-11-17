@@ -412,20 +412,25 @@ def _report_command(argv: list[str]) -> int:
                     "autentyczności źródeł ani autorstwa wyniku (brak podpisu).",
         epilog=f"Kody wyjścia: {verify.EXIT_VERIFIED} — wynik spójny; {verify.EXIT_MISMATCH} — niezgodność (plik zmieniony, "
                f"brakujący, nadmiarowy, nieaktualny, niebędący zwykłym plikiem albo zbyt duży); {verify.EXIT_UNUSABLE} — "
-               f"wejście nieużyteczne (brak katalogu albo case.json, case.json niepoprawny) lub błąd wywołania; "
+               f"wejście nieużyteczne (brak katalogu albo case.json, case.json niepoprawny, brak pamięci) lub błąd wywołania; "
+               f"{verify.EXIT_HASHES_ONLY} — tylko skróty: pliki zgodne z case.json, ale spójności widoków z report.json NIE "
+               f"sprawdzono (wynik starszej wersji narzędzia, raport przeniesiony, report.json ponad --max-report-bytes); "
                f"{EXIT_TOOL_ERROR} — błąd narzędzia.")
     checking.add_argument("directory", type=Path, nargs="?", metavar="KATALOG", help="Katalog wyników (--output analizy)")
     checking.add_argument("--case", type=Path, metavar="KATALOG", help="To samo co KATALOG (zapis ze specyfikacji §11)")
     checking.add_argument("--max-file-bytes", type=int, default=verify.MAX_FILE_BYTES,
                           help="Limit rozmiaru jednego pliku wyniku; większy plik jest odrzucany bez odczytu (%(default)s)")
+    checking.add_argument("--max-report-bytes", type=int, default=verify.MAX_REPORT_BYTES,
+                          help="Limit rozmiaru report.json, który jest parsowany i porównywany z widokami; większy jest tylko "
+                               "haszowany, a wynik ma status HASHES_ONLY (%(default)s)")
     checking.add_argument("--json", action="store_true", help="Wypisz jeden obiekt JSON (ASCII) zamiast tekstu")
     args = parser.parse_args(argv)
     if (args.directory is None) == (args.case is None):
         checking.error("podaj dokładnie jeden katalog: KATALOG albo --case KATALOG")
-    if args.max_file_bytes <= 0:
-        checking.error("--max-file-bytes: wymagana liczba dodatnia")
+    if args.max_file_bytes <= 0 or args.max_report_bytes <= 0:
+        checking.error("--max-file-bytes, --max-report-bytes: wymagana liczba dodatnia")
     try:
-        result = verify.verify(args.directory or args.case, max_file_bytes=args.max_file_bytes)
+        result = verify.verify(args.directory or args.case, max_file_bytes=args.max_file_bytes, max_report_bytes=args.max_report_bytes)
     except verify.Unusable as unusable:
         problem = str(unusable)
         if args.json:
@@ -433,18 +438,22 @@ def _report_command(argv: list[str]) -> int:
         else:
             print(f"report verify: NIE MOŻNA ZWERYFIKOWAĆ — {problem}", file=sys.stderr)
         return verify.EXIT_UNUSABLE
-    status = "VERIFIED" if result.exit_code == verify.EXIT_VERIFIED else "MISMATCH"
     if args.json:
-        print(json.dumps({"status": status, "exit_code": result.exit_code, "case_id": result.case_id, "files_checked": result.checked,
+        print(json.dumps({"status": result.status, "exit_code": result.exit_code, "case_id": result.case_id, "files_checked": result.checked,
                           "problems": [{"file": name, "problem": code, "detail": detail} for name, code, detail in result.problems],
-                          "notes": result.notes}, ensure_ascii=True))
+                          "unchecked": result.unchecked, "notes": result.notes}, ensure_ascii=True))
         return result.exit_code
-    if status == "VERIFIED":
+    if result.status == "VERIFIED":
         print(f"report verify: ZGODNY — sprawa {result.case_id}, sprawdzono plików: {result.checked}")
+    elif result.status == "HASHES_ONLY":
+        print(f"report verify: TYLKO SKRÓTY — sprawa {result.case_id}: pliki ({result.checked}) zgodne ze skrótami w case.json, "
+              "ale spójności widoków i report.html z report.json NIE sprawdzono; wynik nie jest zweryfikowany")
     else:
         print(f"report verify: NIEZGODNY — sprawa {result.case_id}, problemów: {len(result.problems)}")
         for name, code, detail in result.problems:
             print(f"  {code} {name}: {verify.PROBLEMS[code]}{f' ({detail})' if detail else ''}")
+    for code in result.unchecked:
+        print(f"  {code}: {verify.UNCHECKED[code]}")
     for note in result.notes:
         print(f"  uwaga: {note}")
     print("Weryfikacja sprawdza spójność plików wyniku ze skrótami w case.json i z report.json; nie potwierdza "

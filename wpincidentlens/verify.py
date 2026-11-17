@@ -2,8 +2,8 @@
 
 Katalog wyników jest tu **nieufnym wejściem**: mógł zostać podmieniony, uzupełniony albo przerwany w trakcie zapisu.
 Odczyt idzie wyłącznie przez ``ingest.Session`` (ADR 0002 D4): katalog i pliki bez podążania za dowiązaniami, pliki
-specjalne pomijane, rozmiar pliku i liczba wpisów ograniczone. Treść zatrzymują tylko ``case.json`` i ``report.json``;
-pozostałe pliki są jedynie haszowane strumieniowo.
+specjalne pomijane, rozmiar pliku i liczba wpisów ograniczone. Treść zatrzymują tylko ``case.json`` (do 1 MiB) i
+``report.json`` (do ``--max-report-bytes``), zbierane porcjami z własnym limitem; pozostałe pliki są jedynie haszowane.
 
 Co jest sprawdzane:
 
@@ -15,8 +15,11 @@ Co jest sprawdzane:
    kanoniczna (słownik równy ``to_dict()`` zbudowanego raportu); pola ``case.json`` zgodne z raportem, a ``exit_code``
    równy kodowi wynikającemu z pokrycia.
 5. Widoki i ``report.html``: wyliczone ponownie z ``report.json`` (``outputs.streams``, ``report.render_html``) i
-   porównane skrótem z plikami — tylko gdy ``case.json`` pochodzi z tej samej wersji narzędzia (inna wersja może
-   legalnie renderować inaczej; wtedy zostaje nota, a pliki są sprawdzane wyłącznie skrótami z ``case.json``).
+   porównane skrótem z plikami — tylko dla wyniku tej samej wersji narzędzia. Wynik starszej wersji (``tool_version``
+   w podzbiorze PEP 440, nie nowszy niż bieżąca), raport przeniesiony (``migrated_from``) i ``report.json`` ponad limit
+   parsowania dostają status ``HASHES_ONLY`` (kod 3), **nigdy** ``VERIFIED``: zgodność widoków z raportem nie została
+   sprawdzona, więc podmiana ``tool_version`` na starszą nie wyłącza tego sprawdzenia po cichu. ``tool_version`` spoza
+   tego podzbioru albo nowszy niż bieżąca wersja to niezgodność (``INVALID_TOOL_VERSION``).
 
 Weryfikacja nie certyfikuje autentyczności źródeł ani autorstwa wyniku: kto podmieni wszystkie pliki spójnie
 (łącznie z ``case.json``), przejdzie ją. Wynik nie powtarza treści plików; nazwy spoza listy wyników są pokazywane
@@ -27,15 +30,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import __version__, cli, ingest, models, outputs, report
 from .case import SCHEMA_VERSION as CASE_SCHEMA_VERSION
 
-EXIT_VERIFIED, EXIT_MISMATCH, EXIT_UNUSABLE = 0, 1, 2
+EXIT_VERIFIED, EXIT_MISMATCH, EXIT_UNUSABLE, EXIT_HASHES_ONLY = 0, 1, 2, 3
 MAX_FILE_BYTES = 512 * 1024**2  # domyślny limit jednego pliku wyniku (``--max-file-bytes``)
+MAX_REPORT_BYTES = 64 * 1024**2  # domyślny limit parsowania report.json (``--max-report-bytes``); większy jest tylko haszowany
 MAX_CASE_BYTES = 1024**2
 MAX_ENTRIES = 256  # wyników jest 9; więcej wpisów to już na pewno nadmiar
 MAX_SHOWN = 120
@@ -56,9 +60,19 @@ PROBLEMS = {
     "INVALID_JSON": "niepoprawny JSON (wymagany UTF-8, bez powtórzonych kluczy)",
     "INVALID_REPORT": "raport niezgodny z kontraktem poc-1",
     "NOT_CANONICAL": "raport nie jest w postaci zapisywanej przez narzędzie",
+    "INVALID_TOOL_VERSION": "tool_version nie jest wersją PEP 440 albo jest nowszy niż bieżące narzędzie",
     "INCONSISTENT": "treść niezgodna z widokiem wyliczonym ponownie z report.json",
     "CASE_MISMATCH": "pole case.json niezgodne z report.json",
 }
+# Powody statusu HASHES_ONLY: skróty zgodne z case.json, ale spójności widoków z report.json nie sprawdzono.
+UNCHECKED = {
+    "OLDER_TOOL_VERSION": "wynik starszej wersji narzędzia: widoków nie wyliczono ponownie z report.json",
+    "MIGRATED_REPORT": "raport przeniesiony ze starszego schematu (migrated_from): widoków nie wyliczono ponownie",
+    "TOO_LARGE_TO_VERIFY": "report.json większy niż limit --max-report-bytes: nie sparsowano go, sprawdzono tylko skrót",
+}
+# Podzbiór PEP 440 (wersje publiczne bez epoki i części lokalnej) — tyle wystarcza do porównania z ``__version__``.
+_PEP440 = re.compile(r"(\d{1,9}(?:\.\d{1,9}){0,9})(?:(a|b|rc)(\d{1,9}))?(?:\.post(\d{1,9}))?(?:\.dev(\d{1,9}))?")
+_PRE = {"a": 0, "b": 1, "rc": 2}
 
 
 class Unusable(Exception):
@@ -68,6 +82,7 @@ class Unusable(Exception):
 @dataclass
 class Result:
     problems: list[tuple[str, str, str]] = field(default_factory=list)  # (plik, kod problemu, szczegół z kodu)
+    unchecked: list[str] = field(default_factory=list)  # kody z ``UNCHECKED``
     notes: list[str] = field(default_factory=list)
     checked: int = 0
     case_id: str = ""
@@ -76,8 +91,12 @@ class Result:
         self.problems.append((shown(name), problem, detail))
 
     @property
+    def status(self) -> str:
+        return "MISMATCH" if self.problems else "HASHES_ONLY" if self.unchecked else "VERIFIED"
+
+    @property
     def exit_code(self) -> int:
-        return EXIT_MISMATCH if self.problems else EXIT_VERIFIED
+        return {"MISMATCH": EXIT_MISMATCH, "HASHES_ONLY": EXIT_HASHES_ONLY, "VERIFIED": EXIT_VERIFIED}[self.status]
 
 
 def shown(name: str) -> str:
@@ -85,6 +104,24 @@ def shown(name: str) -> str:
     text = "".join(char if char in _SAFE else (f"\\x{ord(char):02x}" if ord(char) < 0x100 else f"\\u{ord(char):04x}"
                                                   if ord(char) < 0x10000 else f"\\U{ord(char):08x}") for char in name[:MAX_SHOWN])
     return text + ("…" if len(name) > MAX_SHOWN else "")
+
+
+def version_key(text: object) -> tuple | None:
+    """Klucz porządku wersji z podzbioru PEP 440 (``1.2``, ``0.2.0rc1``, ``1.0.post1``, ``1.0.dev3``); ``None`` poza nim."""
+    found = _PEP440.fullmatch(text) if isinstance(text, str) else None
+    if found is None:
+        return None
+    release, pre, pre_number, post, dev = found.groups()
+    numbers = [int(part) for part in release.split(".")]
+    while len(numbers) > 1 and numbers[-1] == 0:
+        numbers.pop()
+    if pre:
+        stage = (0, _PRE[pre], int(pre_number))
+    elif dev is not None and post is None:
+        stage = (-1, 0, 0)  # 1.0.dev1 < 1.0a1
+    else:
+        stage = (1, 0, 0)
+    return tuple(numbers), stage, int(post) if post is not None else -1, (0, int(dev)) if dev is not None else (1, 0)
 
 
 class _DuplicateKey(ValueError):
@@ -109,14 +146,38 @@ def _digest(chunks: Iterable[bytes]) -> str:
     return digest.hexdigest()
 
 
-def _read(directory: Path, max_file_bytes: int) -> tuple[dict[str, ingest.Evidence], Result]:
-    """Wpisy katalogu po nazwie; nieczytelny katalog (dowiązanie, brak, nie katalog) to ``Unusable``."""
+class _Kept:
+    """Porcje jednego pliku zbierane do ``limit`` bajtów; po przekroczeniu treść jest porzucana, a plik dalej haszowany."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit, self.size, self.chunks, self.overflow = limit, 0, [], False
+
+    def __call__(self, chunk: bytes) -> None:
+        self.size += len(chunk)
+        if self.size > self.limit:
+            self.overflow, self.chunks = True, []
+        elif not self.overflow:
+            self.chunks.append(chunk)
+
+    def content(self) -> bytes | None:
+        return None if self.overflow else b"".join(self.chunks)
+
+
+def _read(directory: Path, max_file_bytes: int, max_report_bytes: int) -> tuple[dict[str, ingest.Evidence], dict[str, _Kept], Result]:
+    """Wpisy katalogu po nazwie i zebrana treść ``case.json`` i ``report.json``; nieczytelny katalog to ``Unusable``."""
     limits = ingest.Limits(max_files=MAX_ENTRIES, max_entries=MAX_ENTRIES, max_file_bytes=max_file_bytes,
                            max_total_bytes=max_file_bytes * (len(report.RESULT_FILES) + 1), max_depth=1, max_seconds=600)
     session = ingest.Session(limits, allow_hardlinks=True, reverify=False)
-    result, entries = Result(), {}
-    for item in session.read(directory, SOURCE, expect="dir", keep_limit=max_file_bytes,
-                             wanted=lambda rel: rel in (report.CASE_JSON, report.REPORT_JSON)):
+    result, entries, kept = Result(), {}, {}
+    caps = {report.CASE_JSON: MAX_CASE_BYTES, report.REPORT_JSON: max_report_bytes}
+
+    def collect(rel: str) -> Callable[[bytes], None]:
+        if rel not in caps:
+            return lambda chunk: None
+        kept[rel] = _Kept(caps[rel])
+        return kept[rel]
+
+    for item in session.read(directory, SOURCE, expect="dir", keep_limit=0, wanted=lambda rel: False, sink_factory=collect):
         if item.rel == ingest.ROOT:
             if item.reason == "MAX_ENTRIES":
                 result.add(".", "TOO_MANY_ENTRIES")
@@ -126,7 +187,7 @@ def _read(directory: Path, max_file_bytes: int) -> tuple[dict[str, ingest.Eviden
             result.add(item.rel, "TOO_MANY_ENTRIES")
             continue
         entries[item.rel] = item
-    return entries, result
+    return entries, kept, result
 
 
 def _problem_of(item: ingest.Evidence) -> str | None:
@@ -142,7 +203,7 @@ def _problem_of(item: ingest.Evidence) -> str | None:
     return "UNREADABLE"
 
 
-def _case(entries: dict[str, ingest.Evidence], result: Result) -> dict:
+def _case(entries: dict[str, ingest.Evidence], kept: dict[str, _Kept], result: Result) -> dict:
     """``case.json`` jako odniesienie; każdy błąd jego odczytu albo kształtu to ``Unusable``."""
     item = entries.get(report.CASE_JSON)
     if item is None:
@@ -150,10 +211,11 @@ def _case(entries: dict[str, ingest.Evidence], result: Result) -> dict:
     problem = _problem_of(item)
     if problem is not None:
         raise Unusable(f"case.json: {PROBLEMS[problem]}")
-    if item.size > MAX_CASE_BYTES or item.content is None:
+    content = kept[report.CASE_JSON].content() if report.CASE_JSON in kept else None
+    if content is None:
         raise Unusable(f"case.json większy niż {MAX_CASE_BYTES} B")
     try:
-        case = _json(item.content)
+        case = _json(content)
     except (ValueError, RecursionError):
         raise Unusable(f"case.json: {PROBLEMS['INVALID_JSON']}") from None
     if not isinstance(case, dict) or case.get("schema_version") != CASE_SCHEMA_VERSION:
@@ -168,7 +230,7 @@ def _case(entries: dict[str, ingest.Evidence], result: Result) -> dict:
         raise Unusable("case.json: outputs musi być obiektem {nazwa pliku: SHA-256}")
     if not set(listed) <= set(report.RESULT_FILES) - {report.CASE_JSON}:
         raise Unusable("case.json: outputs wymienia plik spoza listy plików wyniku (np. ścieżkę z „/” albo „..”)")
-    if not (isinstance(case.get("flags"), dict) and isinstance(case.get("exit_code"), int)
+    if not (isinstance(case.get("flags"), dict) and type(case.get("exit_code")) is int  # bool to podklasa int
             and all(isinstance(case.get(name), str) for name in ("case_id", "tool", "tool_version", "assessment"))):
         raise Unusable("case.json: brak wymaganych pól case_id, tool, tool_version, assessment, exit_code lub flags")
     if listed.get(report.REPORT_JSON, reference["sha256"]) != reference["sha256"]:
@@ -177,10 +239,10 @@ def _case(entries: dict[str, ingest.Evidence], result: Result) -> dict:
     return case
 
 
-def _report(item: ingest.Evidence, result: Result) -> dict | None:
+def _report(content: bytes, result: Result) -> dict | None:
     """Treść ``report.json`` po walidacji kontraktu ``poc-1``; ``None`` (z problemem), gdy jej nie da się użyć."""
     try:
-        document = _json(item.content)
+        document = _json(content)
     except (ValueError, RecursionError):
         result.add(report.REPORT_JSON, "INVALID_JSON")
         return None
@@ -203,6 +265,21 @@ def _compare_case(case: dict, document: dict, result: Result) -> None:
             result.add(report.CASE_JSON, "CASE_MISMATCH", name)
 
 
+def _recomputable(document: dict, result: Result) -> bool:
+    """Czy widoki można wyliczyć ponownie tą wersją narzędzia; inaczej powód ``HASHES_ONLY`` albo problem wersji."""
+    if document.get("migrated_from") is not None:  # tool_version to wersja dawnego narzędzia, często spoza PEP 440 (0.1.0-poc)
+        result.unchecked.append("MIGRATED_REPORT")
+        return False
+    if document["tool_version"] == __version__:
+        return True
+    given = version_key(document["tool_version"])
+    if given is None or given > version_key(__version__):
+        result.add(report.REPORT_JSON, "INVALID_TOOL_VERSION")
+    else:
+        result.unchecked.append("OLDER_TOOL_VERSION")
+    return False
+
+
 def _recomputed(case: dict, document: dict) -> dict[str, str]:
     """SHA-256 plików, które narzędzie tej wersji zapisałoby z tego ``report.json`` i ``case.json``."""
     pseudonymized = case["flags"].get("pseudonymize", False) is True
@@ -212,10 +289,17 @@ def _recomputed(case: dict, document: dict) -> dict[str, str]:
     return {name: _digest(chunks) for name, chunks in files.items()}
 
 
-def verify(directory: Path, *, max_file_bytes: int = MAX_FILE_BYTES) -> Result:
-    """Sprawdza katalog wyników; zgłasza ``Unusable``, gdy brak wiarygodnego odniesienia (``case.json``)."""
-    entries, result = _read(Path(directory), max_file_bytes)
-    case = _case(entries, result)
+def verify(directory: Path, *, max_file_bytes: int = MAX_FILE_BYTES, max_report_bytes: int = MAX_REPORT_BYTES) -> Result:
+    """Sprawdza katalog wyników; ``Unusable``, gdy brak wiarygodnego odniesienia (``case.json``) albo pamięci."""
+    try:
+        return _verify(Path(directory), max_file_bytes, max_report_bytes)
+    except MemoryError:  # wejście za duże dla tej maszyny: wejście nieużyteczne, nie błąd narzędzia (kod 5)
+        raise Unusable("za mało pamięci do weryfikacji; obniż --max-report-bytes (większy report.json jest tylko haszowany)") from None
+
+
+def _verify(directory: Path, max_file_bytes: int, max_report_bytes: int) -> Result:
+    entries, kept, result = _read(directory, max_file_bytes, max_report_bytes)
+    case = _case(entries, kept, result)
     listed: dict[str, str] = case["outputs"]
     expected = {report.CASE_JSON, *listed}
     for name in sorted(set(report.RESULT_FILES) - expected):
@@ -236,20 +320,25 @@ def verify(directory: Path, *, max_file_bytes: int = MAX_FILE_BYTES) -> Result:
     result.checked += 1  # case.json
     document = None
     if report.REPORT_JSON in actual:
-        item = entries[report.REPORT_JSON]
-        if item.content is None:
-            result.add(report.REPORT_JSON, "TOO_LARGE")
+        content = kept[report.REPORT_JSON].content()
+        if content is None:
+            result.unchecked.append("TOO_LARGE_TO_VERIFY")
         else:
-            document = _report(item, result)
+            document = _report(content, result)
     if document is None:
         result.notes.append("report.json nie został zwalidowany, więc widoków nie porównano z jego treścią")
         return result
-    _compare_case(case, document, result)
-    if case["tool_version"] != __version__:
-        result.notes.append(f"wynik innej wersji narzędzia ({shown(case['tool_version'])}, bieżąca {__version__}): "
-                            "widoki sprawdzono tylko skrótami z case.json, bez ponownego wyliczenia z report.json")
+    try:  # dane nieufne mimo walidacji: wyjątek w ponownym wyliczeniu to niezgodność raportu, nie błąd narzędzia
+        _compare_case(case, document, result)
+        if not _recomputable(document, result):
+            return result
+        recomputed = _recomputed(case, document)
+    except MemoryError:
+        raise
+    except Exception:  # noqa: BLE001 — komunikat wyjątku mógłby nieść wartości z raportu
+        result.add(report.REPORT_JSON, "INVALID_REPORT", "ponowne wyliczenie widoków nie powiodło się")
         return result
-    for name, digest in _recomputed(case, document).items():
+    for name, digest in recomputed.items():
         if name in actual and actual[name] == listed[name] != digest:  # plik zmieniony względem case.json już zgłoszono
             result.add(name, "INCONSISTENT")
     return result
