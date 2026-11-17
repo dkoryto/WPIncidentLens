@@ -29,3 +29,5 @@ ADR 0005 pkt 5 wydzielił YARA-X z M2; reguły wbudowane mają już kształt wyn
 - Na macOS limit pamięci procesu potomnego nie działa; obowiązuje limit czasu i limity kontenera.
 - Jakość wyniku zależy od pakietu operatora; narzędzie żadnego nie dostarcza.
 - Rollback: revert commitu; bez `--yara-rules` zachowanie i raport są niezmienione (poza `RULESET_VERSION` i skrótem rejestru).
+
+- Poprawka 2026-11-17 (PR po niestabilnym teście `extra-line`): numery żądań do procesu potomnego są losowe (`secrets.randbits(63) + 1`), nie kolejne. Dziecko nie może z góry odpowiedzieć na żądanie, którego nie przeczytało, więc nadmiarowa linia nie zostanie przyjęta jako odpowiedź dla następnego pliku (wcześniej następny plik mógł wyjść „bez trafień” bez luki). Spóźniona linia z numerem poprzedniego żądania wymusza restart i jednorazowe ponowne skanowanie bieżącego pliku.

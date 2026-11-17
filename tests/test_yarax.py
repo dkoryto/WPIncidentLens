@@ -49,8 +49,11 @@ def reply(number, obj):
     out.write(json.dumps({"seq": number, **obj}).encode() + b"\n"); out.flush()
 number, _ = frame()
 reply(number, {"ready": True, "engine": "fake-1.0", "rules": ["Synthetic_Marker"], "limits": {"RLIMIT_DATA": True}})
+late = None
 while (got := frame()) is not None:
     number, data = got
+    if late is not None:
+        reply(late, {"total": 0, "matches": []}); late = None
     hit = {"rule": "Synthetic_Marker", "offset": 0, "length": 1, "count": 1}
     if b"HANG" in data:
         time.sleep(60)
@@ -61,7 +64,9 @@ while (got := frame()) is not None:
     elif b"DEEP" in data:
         out.write(b"[" * 100000 + b"]" * 100000 + b"\n"); out.flush()
     elif b"EXTRA" in data:
-        reply(number, {"total": 0, "matches": []}); reply(number + 1, {"total": 0, "matches": []})
+        reply(number + 1, {"total": 0, "matches": []}); reply(number, {"total": 0, "matches": []})
+    elif b"LATE" in data:  # nadmiarowy wiersz z numerem tego żądania dopiero przy następnym żądaniu
+        reply(number, {"total": 0, "matches": []}); late = number
     elif b"WRONGSEQ" in data:
         reply(number + 7, {"total": 0, "matches": []})
     elif b"BEYOND" in data:
@@ -311,6 +316,16 @@ def test_worker_line_after_its_reply_is_detected_before_the_next_file(tmp_path, 
     assert len(first) == len(second) == 1 and adapter.restarts == 1 and adapter.lost == []
 
 
+def test_worker_line_arriving_only_after_the_next_request_is_never_its_reply_and_that_file_is_rescanned(tmp_path, fake):
+    adapter = _adapter(tmp_path)
+
+    adapter.scan(_item("late.php", b"<?php LATE"), lambda: False)
+    after = adapter.scan(_item("next.php", b"<?php MATCH"), lambda: False)
+    adapter.close()
+
+    assert [item.rule for item in after] == ["YARA_MATCH"] and adapter.restarts == 1 and adapter.lost == []
+
+
 def test_too_many_matching_rules_in_one_file_is_a_gap(tmp_path, fake):
     adapter = _adapter(tmp_path)
     cover = SourceCoverage()
@@ -346,8 +361,8 @@ def test_session_deadline_in_a_full_run_leaves_a_yara_gap(site, analyze, tmp_pat
 
 
 def test_compile_error_reported_by_the_worker_is_a_pack_error(tmp_path, monkeypatch):
-    code = ("import json, sys; sys.stdin.buffer.read(16); "
-            "sys.stdout.write(json.dumps({'seq': 1, 'compile_error': 'error[E001]: syntax error --> pack.yar:1:6'}) + '\\n')")
+    code = ("import json, struct, sys; number = struct.unpack('>QQ', sys.stdin.buffer.read(16))[0]; "
+            "sys.stdout.write(json.dumps({'seq': number, 'compile_error': 'error[E001]: syntax error --> pack.yar:1:6'}) + '\\n')")
     monkeypatch.setattr(yarax, "worker_argv", lambda: [sys.executable, "-I", "-c", code])
 
     with pytest.raises(yarax.PackError, match="E001"):

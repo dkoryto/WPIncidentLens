@@ -23,6 +23,7 @@ import hashlib
 import json
 import math
 import re
+import secrets
 import struct
 import subprocess
 import queue
@@ -260,7 +261,8 @@ class _Worker:
                                         env={}, cwd="/", close_fds=True, start_new_session=True)
         self._replies: queue.Queue[dict | None] = queue.Queue(maxsize=2)
         self._overflow = False
-        self._number = 0
+        self.previous: int | None = None  # numer poprzedniego żądania
+        self.stale = False                # ostatni ``PROTOCOL``: wiersz z numerem poprzedniego żądania
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self) -> None:
@@ -295,8 +297,13 @@ class _Worker:
 
     def request(self, data: bytes, seconds: float) -> dict | None:
         """Wysyła ramkę i czeka na odpowiedź najwyżej ``seconds``; ``None``: brak odpowiedzi albo koniec strumienia,
-        ``PROTOCOL``: odpowiedź z innym numerem żądania albo nadmiarowe wiersze."""
-        number = self._number = self._number + 1
+        ``PROTOCOL``: odpowiedź z innym numerem żądania albo nadmiarowe wiersze.
+
+        Numer żądania jest losowy, więc proces nie przygotuje odpowiedzi na żądanie, którego jeszcze nie przeczytał:
+        nadmiarowy wiersz, który dotrze po przyjęciu odpowiedzi, nigdy nie zostanie wzięty za odpowiedź na następny
+        plik — najwyżej da ``PROTOCOL`` przy następnym pliku (``stale``, gdy niesie numer poprzedniego żądania)."""
+        number = secrets.randbits(63) + 1
+        previous, self.previous, self.stale = self.previous, number, False
         threading.Thread(target=self._write, args=(_FRAME.pack(number, len(data)) + data,), daemon=True).start()
         try:
             reply = self._replies.get(timeout=seconds)
@@ -305,6 +312,7 @@ class _Worker:
         if reply is None:
             return None
         if reply.get("seq") != number or self._overflow or not self._replies.empty():
+            self.stale = previous is not None and reply.get("seq") == previous
             return self.PROTOCOL
         return reply
 
@@ -424,6 +432,14 @@ class Adapter:
             self.unscanned.append(where)
             return []
         reply = self._worker.request(item.content, self.file_timeout + GRACE_SECONDS)
+        if reply is _Worker.PROTOCOL and self._worker.stale:
+            # spóźniony wiersz po odpowiedzi na poprzedni plik: winny jest proces, nie ten plik — jeden ponowny skan
+            # w nowym procesie; drugi błąd to luka tego pliku jak każda inna
+            self._drop()
+            if self.failures > MAX_FAILURES or not self._spawn():
+                self.unscanned.append(where)
+                return []
+            reply = self._worker.request(item.content, self.file_timeout + GRACE_SECONDS)
         if reply is None or reply is _Worker.PROTOCOL:
             self.lost.append(where)
             self._drop()
